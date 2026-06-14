@@ -26,6 +26,16 @@ case "connect":
     }
     exit(connect(kt, args[3], args[4], port, args[6]))
 
+case "agent-keygen":
+    guard args.count == 3 else { die("usage: agent-keygen <keypath>") }
+    do { try agentKeygen(args[2]) } catch { die("agent-keygen failed: \(error)") }
+
+case "agent-connect":
+    guard args.count == 6, let port = UInt16(args[4]) else {
+        die("usage: agent-connect <keypath> <host> <port> <user>")
+    }
+    exit(agentConnect(args[2], args[3], port, args[5]))
+
 default:
     die("unknown command: \(args[1])")
 }
