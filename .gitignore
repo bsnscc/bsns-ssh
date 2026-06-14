@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager
+/.build/
+/.swiftpm/
+/Packages/
+Package.resolved
+
+# Xcode
+DerivedData/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+
+# Generated Xcode project (XcodeGen) — regenerated from project.yml
+# (uncomment once the app target lands and we decide whether to track it)
+# *.xcodeproj/
+
+# Never commit key material or secrets — this is a key-management tool.
+*.pem
+*.key
+*.p12
+*.mobileprovision
+secrets/
