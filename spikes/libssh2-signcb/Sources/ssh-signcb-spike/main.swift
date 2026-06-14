@@ -36,6 +36,12 @@ case "agent-connect":
     }
     exit(agentConnect(args[2], args[3], port, args[5]))
 
+case "agent-exec":
+    guard args.count == 7, let port = UInt16(args[4]) else {
+        die("usage: agent-exec <keypath> <host> <port> <user> <command>")
+    }
+    exit(agentExec(args[2], args[3], port, args[5], args[6]))
+
 default:
     die("unknown command: \(args[1])")
 }

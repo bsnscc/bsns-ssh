@@ -38,8 +38,18 @@ done
 sleep 3
 
 echo "== connecting through the Agent =="
-set +e
 "$BIN" agent-connect "$KEY" 127.0.0.1 2222 spike
+
+echo "== running a command over the agent-authed channel =="
+MARKER="BSNS_SSH_CHANNEL_OK"
+set +e
+OUT="$("$BIN" agent-exec "$KEY" 127.0.0.1 2222 spike "echo $MARKER; uname -s")"
 RC=$?
 set -e
-exit $RC
+echo "$OUT"
+if [ "$RC" -eq 0 ] && echo "$OUT" | grep -q "$MARKER"; then
+    echo "== STEP 3 OK: agent auth + host-key TOFU + channel exec =="
+    exit 0
+fi
+echo "== STEP 3 FAILED (rc=$RC, marker not found) =="
+exit 1
