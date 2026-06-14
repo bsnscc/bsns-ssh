@@ -1,0 +1,52 @@
+import Foundation
+import CryptoKit
+
+/// SSH public-key blob, signature blob, and fingerprint construction. Keeps
+/// the wire-format details in one place so backends just supply key material.
+public enum SSHKeyFormat {
+    /// OpenSSH-style key fingerprint: `SHA256:` + unpadded base64 of the
+    /// SHA-256 of the public-key blob.
+    public static func fingerprint(ofPublicKeyBlob blob: Data) -> String {
+        let digest = SHA256.hash(data: blob)
+        let base64 = Data(digest).base64EncodedString().replacingOccurrences(of: "=", with: "")
+        return "SHA256:\(base64)"
+    }
+
+    /// `ssh-ed25519` public-key blob: `string("ssh-ed25519") || string(A)`.
+    public static func ed25519PublicBlob(rawPublicKey: Data) -> Data {
+        SSHEncoder.build {
+            $0.writeString("ssh-ed25519")
+            $0.writeString(rawPublicKey)
+        }
+    }
+
+    /// `ecdsa-sha2-nistp256` public-key blob:
+    /// `string(type) || string("nistp256") || string(Q)` where `Q` is the
+    /// uncompressed point `0x04 || X || Y` (x9.63).
+    public static func ecdsaP256PublicBlob(x963Point: Data) -> Data {
+        SSHEncoder.build {
+            $0.writeString("ecdsa-sha2-nistp256")
+            $0.writeString("nistp256")
+            $0.writeString(x963Point)
+        }
+    }
+
+    /// A complete SSH signature blob: `string(format) || string(body)`. This
+    /// is the canonical representation (also what the SSH-agent protocol
+    /// returns). The libssh2 publickey callback wants only `body`, which it
+    /// re-frames itself.
+    public static func signatureBlob(format: String, body: Data) -> Data {
+        SSHEncoder.build {
+            $0.writeString(format)
+            $0.writeString(body)
+        }
+    }
+
+    /// ECDSA signature body from a 64-byte `r || s`: `mpint(r) || mpint(s)`.
+    public static func ecdsaSignatureBody(rawRS: Data) -> Data {
+        SSHEncoder.build {
+            $0.writeMPInt(Data(rawRS.prefix(32)))
+            $0.writeMPInt(Data(rawRS.suffix(32)))
+        }
+    }
+}

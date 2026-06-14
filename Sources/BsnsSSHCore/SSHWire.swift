@@ -14,6 +14,11 @@ public struct SSHEncoder {
 
     public init() {}
 
+    /// Append a single byte.
+    public mutating func writeByte(_ value: UInt8) {
+        data.append(value)
+    }
+
     /// Append a 32-bit big-endian integer.
     public mutating func writeUInt32(_ value: UInt32) {
         var be = value.bigEndian
