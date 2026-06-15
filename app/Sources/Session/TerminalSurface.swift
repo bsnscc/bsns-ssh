@@ -82,7 +82,11 @@ final class TerminalSurface: NSObject, TerminalViewDelegate {
     }
 
     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-        guard let url = URL(string: link), UIApplication.shared.canOpenURL(url) else { return }
+        // Only follow http(s) links from terminal output — never arbitrary schemes
+        // (tel:, file:, custom app schemes) that remote output could inject.
+        guard let url = URL(string: link),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              UIApplication.shared.canOpenURL(url) else { return }
         UIApplication.shared.open(url)
     }
 

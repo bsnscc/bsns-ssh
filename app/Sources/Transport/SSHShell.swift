@@ -180,10 +180,15 @@ public final class SSHShell: @unchecked Sendable {
 
     // MARK: setup (blocking)
 
+    /// libssh2's global init is process-wide; do it exactly once (this static is
+    /// initialized lazily + thread-safely) and never call libssh2_exit, since
+    /// other sessions may still be live.
+    private static let libssh2Ready: Bool = (libssh2_init(0) == 0)
+
     private func setup(host: String, port: UInt16, user: String, agent: Agent,
                        identities: [SSHPublicKey], cols: Int32, rows: Int32, knownHosts: KnownHosts,
                        password: String?) throws {
-        guard libssh2_init(0) == 0 else { throw SSHShellError.libssh2Init }
+        guard Self.libssh2Ready else { throw SSHShellError.libssh2Init }
         guard let fd = Self.tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
         self.fd = fd
         guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else { throw SSHShellError.sessionInit }
@@ -301,8 +306,7 @@ public final class SSHShell: @unchecked Sendable {
 
     private static func runExec(host: String, port: UInt16, user: String, password: String,
                                 command: String, knownHosts: KnownHosts) throws {
-        guard libssh2_init(0) == 0 else { throw SSHShellError.libssh2Init }
-        defer { libssh2_exit() }
+        guard libssh2Ready else { throw SSHShellError.libssh2Init }
         guard let fd = tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
         defer { close(fd) }
         guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else { throw SSHShellError.sessionInit }
@@ -573,7 +577,7 @@ public final class SSHShell: @unchecked Sendable {
         if fd >= 0 { close(fd); fd = -1 }
         if wakeRead >= 0 { close(wakeRead); wakeRead = -1 }
         if wakeWrite >= 0 { close(wakeWrite); wakeWrite = -1 }
-        libssh2_exit()
+        // No libssh2_exit() here — the global init is process-wide (see libssh2Ready).
         bridge = nil
     }
 
@@ -596,19 +600,25 @@ public final class SSHShell: @unchecked Sendable {
         return HostKey(keyType: name, blob: blob)
     }
 
+    /// Resolve `host` (DNS name, IPv4, or IPv6) and connect, trying each returned
+    /// address in turn.
     private static func tcpConnect(host: String, port: UInt16) -> Int32? {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return nil }
-        var addr = sockaddr_in()
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = port.bigEndian
-        guard inet_pton(AF_INET, host, &addr.sin_addr) == 1 else { close(fd); return nil }
-        let rc = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC          // IPv4 or IPv6
+        hints.ai_socktype = SOCK_STREAM
+        hints.ai_protocol = IPPROTO_TCP
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, String(port), &hints, &res) == 0 else { return nil }
+        defer { freeaddrinfo(res) }
+        var ai = res
+        while let info = ai {
+            let fd = socket(info.pointee.ai_family, info.pointee.ai_socktype, info.pointee.ai_protocol)
+            if fd >= 0 {
+                if Darwin.connect(fd, info.pointee.ai_addr, info.pointee.ai_addrlen) == 0 { return fd }
+                close(fd)
             }
+            ai = info.pointee.ai_next
         }
-        if rc != 0 { close(fd); return nil }
-        return fd
+        return nil
     }
 }

@@ -47,7 +47,9 @@ enum KeyStore {
         SecItemDelete(base as CFDictionary)
         var add = base
         add[kSecValueData as String] = payload
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        // WhenUnlocked (not AfterFirstUnlock): key material is only readable while
+        // the device is unlocked, never device-locked or from a background launch.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         SecItemAdd(add as CFDictionary, nil)
     }
 

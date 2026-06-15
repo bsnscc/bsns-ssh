@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import CoreNFC
 import CryptoKit
 import YubiKit
@@ -22,7 +23,13 @@ enum YubiKeyError: LocalizedError {
 @Observable
 final class YubiKeyCoordinator {
     static let shared = YubiKeyCoordinator()
-    private init() {}
+    private init() {
+        // Forget the cached PIN whenever the app leaves the foreground.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.lock() }
+            }
+    }
 
     /// PIV authentication slot (9A) — the default for SSH.
     static let slot: UInt8 = 0x9a

@@ -7,7 +7,10 @@ enum ConfigService {
     static func export(hosts: HostStore, knownHosts: KnownHostsStore, agent: AgentStore,
                        includeKeys: Bool, passphrase: String?) throws -> Data {
         var bundle = ConfigBundle(hosts: hosts.hosts, knownHosts: knownHosts.knownHosts, settings: .capture())
-        if includeKeys {
+        // Invariant enforced here (not only in the UI): private keys are NEVER
+        // emitted into a plaintext bundle — only when a passphrase will encrypt it.
+        let encrypting = !(passphrase ?? "").isEmpty
+        if includeKeys && encrypting {
             bundle.keys = agent.exportableKeys().map {
                 ExportedKey(algorithm: $0.algorithm.rawValue,
                             material: $0.exportPrivateKeyMaterial(),

@@ -8,7 +8,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d)"
 PB_VER=3.20.3
-MOSH_REF=master
+MOSH_REF=mosh-1.4.0   # pinned release tag, not a moving branch
 
 echo "==> fetching protobuf $PB_VER (C++ runtime + matching protoc)"
 curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v$PB_VER/protobuf-cpp-$PB_VER.tar.gz" | tar xz -C "$WORK"

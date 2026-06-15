@@ -50,8 +50,10 @@ struct LockGate<Content: View>: View {
         .onChange(of: phase) { _, newPhase in
             switch newPhase {
             case .active: lock.authenticate()
-            case .background: lock.lockIfEnabled()
-            default: break
+            // Engage the cover on .inactive too, so the app-switcher snapshot taken
+            // during the transition shows the lock screen, not the terminal.
+            case .inactive, .background: lock.lockIfEnabled()
+            @unknown default: break
             }
         }
     }
