@@ -69,6 +69,14 @@ struct RootView: View {
             let session = TerminalSession(spec: spec, title: "dev")
             session.adopt(shell)
             sessions.add(session)
+            // Dev hook: BSNS_DEV_FORWARD="listenPort:destHost:destPort" exercises
+            // local (-L) forwarding headlessly (curl the sim's listen port).
+            if let f = env["BSNS_DEV_FORWARD"]?.split(separator: ":"), f.count == 3,
+               let lp = UInt16(f[0]), let dp = UInt16(f[2]) {
+                let err = shell.addLocalForward(id: UUID(), bindAddress: "127.0.0.1",
+                                                listenPort: lp, destHost: String(f[1]), destPort: dp)
+                print("dev forward 127.0.0.1:\(lp) -> \(f[1]):\(dp): \(err ?? "ok")")
+            }
         } catch {
             print("dev autoconnect failed: \(error)")
         }
