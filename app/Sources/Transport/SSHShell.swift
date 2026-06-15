@@ -88,6 +88,25 @@ public final class SSHShell: @unchecked Sendable {
     private var closeReason: String?
     private var pendingWrite = Data()
     private var pendingResize: (cols: Int32, rows: Int32)?
+
+    // Local (-L) port forwarding, multiplexed over this session. All libssh2
+    // channel ops happen on `queue`; listening sockets are added under `lock`.
+    private struct Listener { let id: UUID; let fd: Int32; let destHost: String; let destPort: UInt16 }
+    private struct PendingOpen { let localFd: Int32; let destHost: String; let destPort: UInt16 }
+    private final class ForwardConn {
+        let localFd: Int32
+        let channel: OpaquePointer
+        var toChannel: [UInt8] = []   // buffered local → remote
+        var toLocal: [UInt8] = []     // buffered remote → local
+        var localClosed = false       // local socket hit EOF/error
+        var channelEOF = false        // remote sent EOF
+        var sentChannelEOF = false    // we forwarded local EOF to the channel
+        init(localFd: Int32, channel: OpaquePointer) { self.localFd = localFd; self.channel = channel }
+    }
+    private var listeners: [Listener] = []          // guarded by lock
+    private var removedListenerIDs: [UUID] = []      // guarded by lock
+    private var pendingOpens: [PendingOpen] = []     // queue-only
+    private var forwardConns: [ForwardConn] = []     // queue-only
     private var bridge: AgentSignBridge? // kept alive for the auth call
     // Self-pipe so write/resize wake the poll loop immediately instead of
     // waiting out the poll timeout — keystrokes are sent with no added latency.
@@ -134,6 +153,24 @@ public final class SSHShell: @unchecked Sendable {
 
     public func disconnect() {
         lock.lock(); running = false; userClosed = true; lock.unlock()
+        wake()
+    }
+
+    /// Start a local (-L) forward: listen on `bindAddress:listenPort` on this
+    /// device and tunnel each connection to `destHost:destPort` from the SSH
+    /// server. Returns nil on success, or an error string if the bind failed.
+    public func addLocalForward(id: UUID, bindAddress: String, listenPort: UInt16,
+                                destHost: String, destPort: UInt16) -> String? {
+        guard let fd = Self.listenSocket(bindAddress: bindAddress, port: listenPort) else {
+            return "couldn't bind \(bindAddress):\(listenPort) — port in use?"
+        }
+        lock.lock(); listeners.append(Listener(id: id, fd: fd, destHost: destHost, destPort: destPort)); lock.unlock()
+        wake()
+        return nil
+    }
+
+    public func removeLocalForward(id: UUID) {
+        lock.lock(); removedListenerIDs.append(id); lock.unlock()
         wake()
     }
 
@@ -344,8 +381,11 @@ public final class SSHShell: @unchecked Sendable {
             let ka = libssh2_keepalive_send(session, &secondsToNext)
             if ka < 0 && ka != Int32(LIBSSH2_ERROR_EAGAIN) { fail(session, "connection timed out"); break }
 
+            serviceForwards(session: session)
+
             waitSocket(session: session, timeoutMs: 30)
         }
+        teardownForwards()
         teardown()
         let reason: String? = { lock.lock(); defer { lock.unlock() }; return userClosed ? nil : closeReason }()
         onClosed?(reason)
@@ -372,12 +412,154 @@ public final class SSHShell: @unchecked Sendable {
             pollfd(fd: fd, events: sshEvents, revents: 0),
             pollfd(fd: wakeRead, events: Int16(POLLIN), revents: 0),
         ]
-        let count: nfds_t = wakeRead >= 0 ? 2 : 1
-        poll(&pfds, count, timeoutMs)
+        // Also wake on forward-listener accepts and forwarded-connection I/O.
+        lock.lock(); let ls = listeners; lock.unlock()
+        for l in ls { pfds.append(pollfd(fd: l.fd, events: Int16(POLLIN), revents: 0)) }
+        for c in forwardConns {
+            var ev: Int16 = 0
+            if !c.localClosed { ev |= Int16(POLLIN) }
+            if !c.toLocal.isEmpty { ev |= Int16(POLLOUT) }
+            if ev != 0 { pfds.append(pollfd(fd: c.localFd, events: ev, revents: 0)) }
+        }
+        poll(&pfds, nfds_t(pfds.count), timeoutMs)
         if wakeRead >= 0, pfds[1].revents & Int16(POLLIN) != 0 {
             var trash = [UInt8](repeating: 0, count: 64)
             while Darwin.read(wakeRead, &trash, trash.count) > 0 {}
         }
+    }
+
+    // MARK: local port forwarding (serviced on `queue`)
+
+    private func serviceForwards(session: OpaquePointer) {
+        // Apply pending removals.
+        lock.lock(); let removals = removedListenerIDs; removedListenerIDs.removeAll(); lock.unlock()
+        for id in removals {
+            lock.lock()
+            if let idx = listeners.firstIndex(where: { $0.id == id }) {
+                close(listeners[idx].fd); listeners.remove(at: idx)
+            }
+            lock.unlock()
+        }
+
+        // Accept any waiting local connections.
+        lock.lock(); let current = listeners; lock.unlock()
+        for l in current {
+            while true {
+                let cfd = accept(l.fd, nil, nil)
+                if cfd < 0 { break }
+                _ = fcntl(cfd, F_SETFL, O_NONBLOCK)
+                pendingOpens.append(PendingOpen(localFd: cfd, destHost: l.destHost, destPort: l.destPort))
+            }
+        }
+
+        // Try opening a direct-tcpip channel for each pending connection.
+        if !pendingOpens.isEmpty {
+            var stillPending: [PendingOpen] = []
+            for p in pendingOpens {
+                let channel = p.destHost.withCString {
+                    libssh2_channel_direct_tcpip_ex(session, $0, Int32(p.destPort), "127.0.0.1", 0)
+                }
+                if let channel {
+                    libssh2_channel_set_blocking(channel, 0)
+                    forwardConns.append(ForwardConn(localFd: p.localFd, channel: channel))
+                } else if libssh2_session_last_errno(session) == Int32(LIBSSH2_ERROR_EAGAIN) {
+                    stillPending.append(p)        // not ready yet — retry next tick
+                } else {
+                    close(p.localFd)               // server refused the connection
+                }
+            }
+            pendingOpens = stillPending
+        }
+
+        // Pump each active connection both ways; drop the closed ones.
+        guard !forwardConns.isEmpty else { return }
+        var buf = [UInt8](repeating: 0, count: 32768)
+        forwardConns = forwardConns.filter { pumpForward($0, buf: &buf) }
+    }
+
+    /// Move bytes in both directions for one forwarded connection. Returns false
+    /// once both halves are done (the channel + socket are then closed).
+    private func pumpForward(_ c: ForwardConn, buf: inout [UInt8]) -> Bool {
+        // remote → buffer
+        if !c.channelEOF {
+            while true {
+                let n = buf.withUnsafeMutableBytes {
+                    libssh2_channel_read_ex(c.channel, 0, $0.baseAddress!.assumingMemoryBound(to: CChar.self), $0.count)
+                }
+                if n > 0 { c.toLocal.append(contentsOf: buf[0 ..< Int(n)]) }
+                else if n == LIBSSH2_ERROR_EAGAIN { break }
+                else { c.channelEOF = true; break }   // 0 = EOF, <0 = error
+            }
+        }
+        if libssh2_channel_eof(c.channel) != 0 { c.channelEOF = true }
+
+        // buffer → local socket
+        while !c.toLocal.isEmpty {
+            let w = c.toLocal.withUnsafeBytes { Darwin.write(c.localFd, $0.baseAddress, c.toLocal.count) }
+            if w > 0 { c.toLocal.removeFirst(w) }
+            else { if w < 0 && errno != EAGAIN && errno != EWOULDBLOCK { c.localClosed = true }; break }
+        }
+
+        // local socket → buffer
+        if !c.localClosed {
+            while true {
+                let n = buf.withUnsafeMutableBytes { Darwin.read(c.localFd, $0.baseAddress, $0.count) }
+                if n > 0 { c.toChannel.append(contentsOf: buf[0 ..< n]) }
+                else if n == 0 { c.localClosed = true; break }
+                else { if errno != EAGAIN && errno != EWOULDBLOCK { c.localClosed = true }; break }
+            }
+        }
+
+        // buffer → remote
+        while !c.toChannel.isEmpty {
+            let w = c.toChannel.withUnsafeBytes {
+                libssh2_channel_write_ex(c.channel, 0, $0.baseAddress!.assumingMemoryBound(to: CChar.self), c.toChannel.count)
+            }
+            if w > 0 { c.toChannel.removeFirst(w) } else { break }   // EAGAIN/error: retry next tick
+        }
+
+        // Forward a half-close once our outbound buffer is flushed.
+        if c.localClosed && c.toChannel.isEmpty && !c.sentChannelEOF {
+            libssh2_channel_send_eof(c.channel); c.sentChannelEOF = true
+        }
+
+        let remoteDone = c.channelEOF && c.toLocal.isEmpty
+        let localDone = c.localClosed && c.toChannel.isEmpty
+        if remoteDone && localDone {
+            libssh2_channel_close(c.channel)
+            libssh2_channel_free(c.channel)
+            close(c.localFd)
+            return false
+        }
+        return true
+    }
+
+    private func teardownForwards() {
+        for c in forwardConns { libssh2_channel_free(c.channel); close(c.localFd) }
+        forwardConns.removeAll()
+        for p in pendingOpens { close(p.localFd) }
+        pendingOpens.removeAll()
+        lock.lock(); let ls = listeners; listeners.removeAll(); removedListenerIDs.removeAll(); lock.unlock()
+        for l in ls { close(l.fd) }
+    }
+
+    private static func listenSocket(bindAddress: String, port: UInt16) -> Int32? {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+        var yes: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        guard inet_pton(AF_INET, bindAddress, &addr.sin_addr) == 1 else { close(fd); return nil }
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0, listen(fd, 16) == 0 else { close(fd); return nil }
+        _ = fcntl(fd, F_SETFL, O_NONBLOCK)
+        return fd
     }
 
     private func isRunning() -> Bool { lock.lock(); defer { lock.unlock() }; return running }
