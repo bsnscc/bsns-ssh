@@ -8,6 +8,7 @@ struct ConfigBackupView: View {
     @Environment(HostStore.self) private var hosts
     @Environment(KnownHostsStore.self) private var knownHosts
     @Environment(AgentStore.self) private var agent
+    @Environment(SyncStore.self) private var sync
 
     @State private var passphrase = ""
     @State private var includeKeys = false
@@ -20,6 +21,9 @@ struct ConfigBackupView: View {
     @State private var reviewItem: ReviewItem?
     @State private var status: String?
     @State private var statusIsError = false
+    @State private var syncPass = ""
+    @State private var syncIncludeKeys = false
+    @State private var showFolderPicker = false
 
     var body: some View {
         Form {
@@ -45,6 +49,31 @@ struct ConfigBackupView: View {
                 Text("Review what a bundle contains before merging. Trusted host keys and private keys are opt-in.")
             }
 
+            Section {
+                if sync.isConfigured {
+                    Label(sync.folderName ?? "sync folder", systemImage: "folder")
+                        .font(.callout)
+                }
+                Button(sync.isConfigured ? "Change sync folder…" : "Choose sync folder…") {
+                    showFolderPicker = true
+                }
+                SecureField("Sync passphrase", text: $syncPass)
+                    .textContentType(.password).autocorrectionDisabled().textInputAutocapitalization(.never)
+                    .onChange(of: syncPass) { _, new in sync.savePassphrase(new) }
+                Toggle("Include private keys", isOn: $syncIncludeKeys).disabled(syncPass.isEmpty)
+                Button("Push to sync") { pushSync() }
+                    .disabled(!sync.isConfigured || syncPass.isEmpty)
+                Button("Pull & merge") { pullSync() }
+                    .disabled(!sync.isConfigured)
+                if let s = sync.lastStatus {
+                    Text(s).font(.caption).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Sync")
+            } footer: {
+                Text("Keeps an encrypted copy of your hosts, settings, and trusted hosts in a folder you choose — iCloud Drive, Google Drive, Dropbox, anything in Files. The provider only ever sees ciphertext; no account, no server. The passphrase stays on this device.")
+            }
+
             if let status {
                 Section { Text(status).font(.callout).foregroundStyle(statusIsError ? .red : .green) }
             }
@@ -63,6 +92,10 @@ struct ConfigBackupView: View {
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json, .data]) { result in
             handlePicked(result)
         }
+        .fileImporter(isPresented: $showFolderPicker, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result { sync.setFolder(url) }
+        }
+        .onAppear { if syncPass.isEmpty { syncPass = sync.loadPassphrase() ?? "" } }
         .alert("Encrypted bundle", isPresented: $askImportPassphrase) {
             SecureField("Passphrase", text: $importPassphrase)
             Button("Import") { finishImport() }
@@ -119,6 +152,32 @@ struct ConfigBackupView: View {
             set("Import failed: \(error)", error: true)
         }
         pendingImport = nil; importPassphrase = ""
+    }
+
+    private func pushSync() {
+        do {
+            sync.savePassphrase(syncPass)
+            let data = try ConfigService.export(hosts: hosts, knownHosts: knownHosts, agent: agent,
+                                                includeKeys: syncIncludeKeys && !syncPass.isEmpty,
+                                                passphrase: syncPass)
+            try sync.push(data)
+            sync.lastStatus = "Pushed \(hosts.hosts.count) host(s) just now."
+        } catch {
+            sync.lastStatus = (error as? LocalizedError)?.errorDescription ?? "Push failed."
+        }
+    }
+
+    private func pullSync() {
+        do {
+            let data = try sync.pull()
+            let bundle = try ConfigService.decode(data, passphrase: syncPass.isEmpty ? nil : syncPass)
+            sync.lastStatus = nil
+            reviewItem = ReviewItem(bundle: bundle)   // pulled config goes through the same review
+        } catch ConfigCryptoError.badPassphrase {
+            sync.lastStatus = "Wrong passphrase."
+        } catch {
+            sync.lastStatus = (error as? LocalizedError)?.errorDescription ?? "Pull failed."
+        }
     }
 
     private func applyImport(_ bundle: ConfigBundle, selection: ConfigService.ImportSelection) {

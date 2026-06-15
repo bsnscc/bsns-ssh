@@ -7,6 +7,7 @@ struct BsnsSSHApp: App {
     @State private var knownHosts = KnownHostsStore()
     @State private var sessions = SessionStore()
     @State private var surfaces = TerminalSurfaceCache()
+    @State private var sync = SyncStore()
 
     init() { SettingsKey.registerDefaults() }
 
@@ -19,6 +20,7 @@ struct BsnsSSHApp: App {
                     .environment(knownHosts)
                     .environment(sessions)
                     .environment(surfaces)
+                    .environment(sync)
             }
         }
     }
