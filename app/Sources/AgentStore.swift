@@ -10,8 +10,9 @@ import BsnsSSHCore
 final class AgentStore {
     let agent = Agent()
     private(set) var identities: [SSHPublicKey] = []
-    /// Fingerprints of keys held in hardware (Secure Enclave) — used to badge them.
+    /// Fingerprints of hardware-backed keys, and the subset that are YubiKeys.
     private(set) var hardwareKeyIDs: Set<String> = []
+    private(set) var yubiKeyIDs: Set<String> = []
 
     /// Whether this device can create Secure Enclave keys (false on the simulator).
     var enclaveAvailable: Bool { SecureEnclaveKey.isAvailable }
@@ -21,9 +22,25 @@ final class AgentStore {
             for key in KeyStore.loadAll() {
                 await agent.add(key)
                 if key.requiresUserPresence { hardwareKeyIDs.insert(key.id.rawValue) }
+                if key is YubiKeyPIVKey { yubiKeyIDs.insert(key.id.rawValue) }
             }
             await refresh()
         }
+    }
+
+    /// Enroll a YubiKey: read its PIV public key and add it as an identity.
+    func enrollYubiKey(pin: String) async throws {
+        let blob = try await YubiKeyCoordinator.shared.enroll(pin: pin)
+        let key = YubiKeyPIVKey.make(publicBlob: blob, slot: YubiKeyCoordinator.slot, comment: "YubiKey")
+        KeyStore.saveYubiKey(key)
+        await agent.add(key)
+        hardwareKeyIDs.insert(key.id.rawValue)
+        yubiKeyIDs.insert(key.id.rawValue)
+        await refresh()
+    }
+
+    func isYubiKey(_ identity: SSHPublicKey) -> Bool {
+        yubiKeyIDs.contains(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
     }
 
     func refresh() async {
@@ -69,6 +86,7 @@ final class AgentStore {
         KeyStore.delete(id)
         await agent.remove(id)
         hardwareKeyIDs.remove(id.rawValue)
+        yubiKeyIDs.remove(id.rawValue)
         await refresh()
     }
 }

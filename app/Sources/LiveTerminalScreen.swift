@@ -323,6 +323,8 @@ final class TerminalHandle {
 /// force a full repaint, which fixes the "new text on old text" garbling.
 final class ZoomableTerminalView: TerminalView {
     var onZoomChange: ((CGFloat) -> Void)?
+    /// Send raw bytes to the remote (set by the surface → session.write).
+    var onSendBytes: (([UInt8]) -> Void)?
     private var currentSize: CGFloat = defaultFontSize
     private var pinchStart: CGFloat = defaultFontSize
     private var fontFamily: String = TerminalFont.families[0]
@@ -359,6 +361,10 @@ final class ZoomableTerminalView: TerminalView {
             UIKeyCommand(title: "Scroll Down", action: #selector(scrollPageDown), input: UIKeyCommand.inputDownArrow, modifierFlags: .command),
             UIKeyCommand(title: "Scroll to Top", action: #selector(scrollHome), input: UIKeyCommand.inputUpArrow, modifierFlags: [.command, .shift]),
             UIKeyCommand(title: "Scroll to Bottom", action: #selector(scrollEnd), input: UIKeyCommand.inputDownArrow, modifierFlags: [.command, .shift]),
+            // Option(=Meta)+arrows send Page Up/Down to the remote — for tmux/less
+            // scrollback, where local view-scroll can't reach the remote's history.
+            UIKeyCommand(title: "Page Up", action: #selector(remotePageUp), input: UIKeyCommand.inputUpArrow, modifierFlags: .alternate),
+            UIKeyCommand(title: "Page Down", action: #selector(remotePageDown), input: UIKeyCommand.inputDownArrow, modifierFlags: .alternate),
         ]
         scroll.forEach { $0.wantsPriorityOverSystemBehavior = true }
         return (super.keyCommands ?? []) + [
@@ -375,6 +381,9 @@ final class ZoomableTerminalView: TerminalView {
     // scrollUp/Down clamp to the buffer ends, so a large count = jump to top/bottom.
     @objc private func scrollHome() { scrollUp(lines: 1_000_000) }
     @objc private func scrollEnd() { scrollDown(lines: 1_000_000) }
+
+    @objc private func remotePageUp() { onSendBytes?(EscapeSequences.cmdPageUp) }
+    @objc private func remotePageDown() { onSendBytes?(EscapeSequences.cmdPageDown) }
 
     @objc private func zoomIn() { onZoomChange?(min(maxFontSize, currentSize + 1)) }
     @objc private func zoomOut() { onZoomChange?(max(minFontSize, currentSize - 1)) }

@@ -7,6 +7,7 @@ struct KeysView: View {
     @State private var copied: String?
     @State private var genError: String?
     @State private var installTarget: InstallTarget?
+    @State private var showYubiKey = false
 
     private struct InstallTarget: Identifiable { let id = UUID(); let key: SSHPublicKey }
 
@@ -22,7 +23,9 @@ struct KeysView: View {
                         HStack(spacing: 8) {
                             Text(key.algorithm.rawValue).font(.headline)
                             if store.isHardware(key) {
-                                Label("Secure Enclave", systemImage: "lock.shield.fill")
+                                let isYubi = store.isYubiKey(key)
+                                Label(isYubi ? "YubiKey" : "Secure Enclave",
+                                      systemImage: isYubi ? "key.radiowaves.forward.fill" : "lock.shield.fill")
                                     .font(.caption2.weight(.semibold))
                                     .padding(.horizontal, 7).padding(.vertical, 3)
                                     .background(Color.green.opacity(0.18), in: Capsule())
@@ -83,6 +86,11 @@ struct KeysView: View {
                 if let genError {
                     Text(genError).font(.caption).foregroundStyle(.red)
                 }
+                Button {
+                    showYubiKey = true
+                } label: {
+                    Label("Add YubiKey (NFC / USB-C)", systemImage: "key.radiowaves.forward.fill")
+                }
                 Button("Ed25519 (software key)") {
                     Task { await store.generateKey(.ed25519) }
                 }
@@ -109,5 +117,6 @@ struct KeysView: View {
             InstallKeyView(keyLines: [authorizedKeysLine(target.key)],
                            keyLabel: "\(target.key.algorithm.rawValue)  ·  \(SSHKeyFormat.fingerprint(ofPublicKeyBlob: target.key.blob))")
         }
+        .sheet(isPresented: $showYubiKey) { YubiKeyEnrollView() }
     }
 }

@@ -30,3 +30,4 @@ secrets/
 # mosh: regenerable vendored source trees (fetch-mosh.sh rebuilds them)
 app/vendor/mosh/protobuf/
 app/vendor/mosh/mosh-src/
+app/BsnsSSH.entitlements

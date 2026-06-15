@@ -10,9 +10,10 @@ enum KeyStore {
 
     private struct Stored: Codable {
         let algorithm: String
-        let material: Data        // software: raw private key; enclave: wrapped key data
+        let material: Data        // software: raw private key; enclave: wrapped key data; yubikey: public blob
         let comment: String
-        var kind: String?          // nil/"file" = software; "enclave" = Secure Enclave
+        var kind: String?          // nil/"file" = software; "enclave" = Secure Enclave; "yubikey" = PIV token
+        var slot: UInt8?           // yubikey: PIV slot
     }
 
     static func save(_ key: FileKey) {
@@ -27,6 +28,13 @@ enum KeyStore {
             algorithm: key.algorithm.rawValue,
             material: key.keyData,
             comment: key.publicKey.comment, kind: "enclave"))
+    }
+
+    static func saveYubiKey(_ key: YubiKeyPIVKey) {
+        persist(account: key.id.rawValue, Stored(
+            algorithm: key.algorithm.rawValue,
+            material: key.publicKey.blob,
+            comment: key.publicKey.comment, kind: "yubikey", slot: key.slot))
     }
 
     private static func persist(account: String, _ stored: Stored) {
@@ -61,6 +69,9 @@ enum KeyStore {
                   let stored = try? JSONDecoder().decode(Stored.self, from: data) else { return nil }
             if stored.kind == "enclave" {
                 return try? SecureEnclaveKey.from(keyData: stored.material, comment: stored.comment)
+            }
+            if stored.kind == "yubikey" {
+                return YubiKeyPIVKey.make(publicBlob: stored.material, slot: stored.slot ?? 0x9a, comment: stored.comment)
             }
             guard let algorithm = KeyAlgorithm(rawValue: stored.algorithm) else { return nil }
             return try? FileKey.from(algorithm: algorithm, privateKeyMaterial: stored.material, comment: stored.comment)

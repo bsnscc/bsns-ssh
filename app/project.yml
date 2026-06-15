@@ -15,6 +15,9 @@ packages:
     # downloader stalls on the GitHub release asset in this environment, so we
     # fetch it ourselves (vendor/fetch-cssh.sh) and reference it by path.
     path: vendor/CSSH
+  YubiKit:
+    url: https://github.com/Yubico/yubikit-swift
+    from: "1.3.0"
 targets:
   BsnsSSH:
     type: application
@@ -28,6 +31,8 @@ targets:
         product: SwiftTerm
       - package: CSSH
         product: CSSH
+      - package: YubiKit
+        product: YubiKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cc.bsns.ssh
@@ -36,7 +41,7 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "18"
+        CURRENT_PROJECT_VERSION: "19"
         # App UI layer stays Swift 5 mode for now; the BsnsSSHCore package is
         # already Swift 6 strict-concurrency clean on its own.
         SWIFT_VERSION: "5.0"
@@ -52,3 +57,9 @@ targets:
         # Signing for device + TestFlight (Graham Saathoff's team).
         DEVELOPMENT_TEAM: "4L394FY4WC"
         CODE_SIGN_STYLE: Automatic
+    entitlements:
+      path: BsnsSSH.entitlements
+      properties:
+        # USB-C smart-card access for YubiKey PIV. (NFC adds
+        # com.apple.developer.nfc.readersession.formats in a follow-up.)
+        com.apple.security.smartcard: true
