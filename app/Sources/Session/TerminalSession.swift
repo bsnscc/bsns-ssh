@@ -23,6 +23,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         let user: String
         let agent: Agent
         var knownHosts: KnownHosts
+        var useMosh: Bool = false
         // Note: no password is retained. Reconnect uses the agent (keys); a
         // password-only session must be re-established from the Connect screen.
     }
@@ -47,9 +48,12 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     }
     private(set) var forwards: [Forward] = []
 
-    private var shell: SSHShell?
+    private var transport: TerminalTransport?
     private var cols: Int32 = 80
     private var rows: Int32 = 24
+
+    /// Mosh has no in-session forwarding, so forwards only apply to an SSH shell.
+    private var sshShell: SSHShell? { currentTransport as? SSHShell }
 
     init(spec: Spec, title: String) {
         self.spec = spec
@@ -61,20 +65,20 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     @discardableResult
     func addForward(listenPort: UInt16, destHost: String, destPort: UInt16) -> String? {
         let id = UUID()
-        let err = currentShell?.addLocalForward(id: id, bindAddress: "127.0.0.1",
-                                                listenPort: listenPort, destHost: destHost, destPort: destPort)
+        let err = sshShell?.addLocalForward(id: id, bindAddress: "127.0.0.1",
+                                            listenPort: listenPort, destHost: destHost, destPort: destPort)
         forwards.append(Forward(id: id, listenPort: listenPort, destHost: destHost, destPort: destPort, error: err))
         return err
     }
 
     func removeForward(_ id: UUID) {
-        currentShell?.removeLocalForward(id: id)
+        sshShell?.removeLocalForward(id: id)
         forwards.removeAll { $0.id == id }
     }
 
     /// Re-establish all configured forwards on the current shell (after reconnect).
     private func reapplyForwards() {
-        guard let shell = currentShell else { return }
+        guard let shell = sshShell else { return }
         for i in forwards.indices {
             let f = forwards[i]
             forwards[i].error = shell.addLocalForward(id: f.id, bindAddress: "127.0.0.1",
@@ -82,39 +86,52 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         }
     }
 
-    /// Adopt an already-connected shell — the initial connect (and its TOFU
+    /// Adopt an already-connected transport — the initial connect (and its TOFU
     /// prompt) is handled by ConnectView before the terminal appears.
-    func adopt(_ shell: SSHShell) {
-        wire(shell)
-        lock.lock(); self.shell = shell; lock.unlock()
+    func adopt(_ transport: TerminalTransport) {
+        wire(transport)
+        lock.lock(); self.transport = transport; lock.unlock()
         setStatus(.connected)
     }
 
-    func write(_ bytes: ArraySlice<UInt8>) { currentShell?.write(bytes) }
+    func write(_ bytes: ArraySlice<UInt8>) { currentTransport?.write(bytes) }
 
     func resize(cols: Int32, rows: Int32) {
-        lock.lock(); self.cols = cols; self.rows = rows; let s = shell; lock.unlock()
-        s?.resize(cols: cols, rows: rows)
+        lock.lock(); self.cols = cols; self.rows = rows; let t = transport; lock.unlock()
+        t?.resize(cols: cols, rows: rows)
     }
 
-    func disconnect() { currentShell?.disconnect() }
+    func disconnect() { currentTransport?.disconnect() }
 
     var isDisconnected: Bool { if case .disconnected = status { return true } else { return false } }
 
-    /// Rebuild the shell and reconnect with the stored spec + last known size.
+    /// Rebuild the transport and reconnect with the stored spec + last known size.
+    /// SSH rebuilds the shell directly; mosh re-runs the SSH bootstrap (a fresh
+    /// `mosh-server`), since a hard drop means the old UDP session is gone.
     func reconnect() {
         guard isDisconnected else { return }
         setStatus(.connecting)
-        let shell = SSHShell()
-        wire(shell)
-        lock.lock(); self.shell = shell; let cols = self.cols, rows = self.rows; lock.unlock()
+        lock.lock(); let cols = self.cols, rows = self.rows; lock.unlock()
         let spec = self.spec
         Task {
             do {
-                try await shell.connect(host: spec.host, port: spec.port, user: spec.user,
-                                        agent: spec.agent, cols: cols, rows: rows,
-                                        knownHosts: spec.knownHosts, password: nil)
-                DispatchQueue.main.async { self.reapplyForwards() }
+                if spec.useMosh {
+                    let connect = try await MoshBootstrap.connect(spec: spec)
+                    let mosh = MoshSession()
+                    self.wire(mosh)
+                    if let err = mosh.open(host: spec.host, port: connect.port, key: connect.key, cols: cols, rows: rows) {
+                        throw MoshBootstrap.Failure.noConnectLine(err)
+                    }
+                    self.lock.lock(); self.transport = mosh; self.lock.unlock()
+                } else {
+                    let shell = SSHShell()
+                    self.wire(shell)
+                    self.lock.lock(); self.transport = shell; self.lock.unlock()
+                    try await shell.connect(host: spec.host, port: spec.port, user: spec.user,
+                                            agent: spec.agent, cols: cols, rows: rows,
+                                            knownHosts: spec.knownHosts, password: nil)
+                    DispatchQueue.main.async { self.reapplyForwards() }
+                }
                 self.setStatus(.connected)
             } catch {
                 self.setStatus(.disconnected(reason: Self.describe(error)))
@@ -124,11 +141,11 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
 
     // MARK: internals
 
-    private var currentShell: SSHShell? { lock.lock(); defer { lock.unlock() }; return shell }
+    private var currentTransport: TerminalTransport? { lock.lock(); defer { lock.unlock() }; return transport }
 
-    private func wire(_ shell: SSHShell) {
-        shell.onOutput = { [weak self] bytes in self?.onOutput?(bytes) }
-        shell.onClosed = { [weak self] reason in
+    private func wire(_ transport: TerminalTransport) {
+        transport.onOutput = { [weak self] bytes in self?.onOutput?(bytes) }
+        transport.onClosed = { [weak self] reason in
             self?.setStatus(.disconnected(reason: reason))
         }
     }
@@ -144,6 +161,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         case SSHShellError.authFailed(let m): return "auth failed: \(m)"
         case SSHShellError.hostKeyMismatch: return "⚠️ host key changed"
         case SSHShellError.unknownHostKey: return "host key no longer trusted"
+        case let e as LocalizedError where e.errorDescription != nil: return e.errorDescription!
         default: return "\(error)"
         }
     }

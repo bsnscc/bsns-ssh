@@ -14,6 +14,7 @@ struct ConnectView: View {
     @State private var port = "22"
     @State private var user = ""
     @State private var password = ""
+    @State private var useMosh = false
     @State private var busy = false
     @State private var error: String?
     @State private var notice: String?
@@ -68,6 +69,11 @@ struct ConnectView: View {
                 TextField("port", text: $port).keyboardType(.numberPad)
                 TextField("user", text: $user)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
+                Toggle("Use mosh (UDP, survives roaming)", isOn: $useMosh)
+                if useMosh {
+                    Text("Connects over SSH to start mosh-server, then runs over UDP. Requires mosh-server on the host and a key (agent) — not a password.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
 
             Section("Password (optional)") {
@@ -82,7 +88,7 @@ struct ConnectView: View {
             Section {
                 Button(busy ? "Working…" : "Connect") { attemptConnect() }
                     .disabled(busy || host.isEmpty || user.isEmpty
-                              || (password.isEmpty && store.identities.isEmpty))
+                              || (useMosh ? store.identities.isEmpty : (password.isEmpty && store.identities.isEmpty)))
                 Button("Install my key (ssh-copy-id)") { attemptInstall() }
                     .disabled(busy || host.isEmpty || user.isEmpty || password.isEmpty || store.identities.isEmpty)
                 Button("Save host") { saveHost() }
@@ -131,6 +137,7 @@ struct ConnectView: View {
 
     private func attemptConnect() {
         guard let portValue = UInt16(port) else { error = "Invalid port."; return }
+        if useMosh { attemptConnectMosh(portValue); return }
         error = nil; notice = nil; busy = true
         let shell = SSHShell()
         let known = knownHostsStore.knownHosts
@@ -153,6 +160,36 @@ struct ConnectView: View {
                 await MainActor.run { busy = false; handle(e, action: .connect) }
             } catch {
                 await MainActor.run { busy = false; self.error = "\(error)" }
+            }
+        }
+    }
+
+    private func attemptConnectMosh(_ portValue: UInt16) {
+        error = nil; notice = nil; busy = true
+        let spec = TerminalSession.Spec(host: host, port: portValue, user: user, agent: store.agent,
+                                        knownHosts: knownHostsStore.knownHosts, useMosh: true)
+        let hostName = host, userName = user
+        Task {
+            do {
+                let connect = try await MoshBootstrap.connect(spec: spec)
+                let mosh = MoshSession()
+                if let err = mosh.open(host: hostName, port: connect.port, key: connect.key, cols: 80, rows: 24) {
+                    throw MoshBootstrap.Failure.noConnectLine(err)
+                }
+                await MainActor.run {
+                    busy = false
+                    let s = TerminalSession(spec: spec, title: "\(userName)@\(hostName) · mosh")
+                    s.adopt(mosh)
+                    sessions.add(s)
+                    password = ""
+                }
+            } catch let e as SSHShellError {
+                await MainActor.run { busy = false; handle(e, action: .connect) }
+            } catch {
+                await MainActor.run {
+                    busy = false
+                    self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                }
             }
         }
     }
