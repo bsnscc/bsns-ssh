@@ -13,12 +13,10 @@ struct RootView: View {
                 }
             } else {
                 TabView {
-                    NavigationStack { KeysView() }
-                        .tabItem { Label("Keys", systemImage: "key.fill") }
                     NavigationStack { ConnectView() }
                         .tabItem { Label("Connect", systemImage: "network") }
-                    NavigationStack { TerminalScreen() }
-                        .tabItem { Label("Demo", systemImage: "terminal.fill") }
+                    NavigationStack { KeysView() }
+                        .tabItem { Label("Keys", systemImage: "key.fill") }
                 }
             }
         }

@@ -17,17 +17,35 @@ struct LiveTerminalScreen: View {
     @AppStorage("terminal.fontFamily") private var fontFamily: String = TerminalFont.families[0]
 
     @State private var handle = TerminalHandle()
+    @State private var keyboardUp = false
+
+    private var theme: TerminalTheme { TerminalTheme.named(themeId) }
 
     var body: some View {
-        LiveTerminalContainer(shell: shell,
-                              fontSize: Binding(get: { CGFloat(fontSize) }, set: { fontSize = Double($0) }),
-                              themeId: themeId,
-                              fontFamily: fontFamily,
-                              handle: handle)
+        VStack(spacing: 0) {
+            LiveTerminalContainer(shell: shell,
+                                  fontSize: Binding(get: { CGFloat(fontSize) }, set: { fontSize = Double($0) }),
+                                  themeId: themeId,
+                                  fontFamily: fontFamily,
+                                  handle: handle)
+            // Our key row is redundant with SwiftTerm's soft-keyboard accessory,
+            // so only show it when the soft keyboard is down (covers iPad +
+            // hardware keyboards, where that accessory never appears).
+            if !keyboardUp {
+                Divider().overlay(Color(theme.ansi[8].uiColor).opacity(0.5))
+                TerminalKeyBar(shell: shell, handle: handle, theme: theme)
+            }
+        }
             .ignoresSafeArea(.container, edges: .bottom)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .onDisappear { shell.disconnect() }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                keyboardUp = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardUp = false
+            }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { setZoom(CGFloat(fontSize) - 1) } label: { Image(systemName: "textformat.size.smaller") }
