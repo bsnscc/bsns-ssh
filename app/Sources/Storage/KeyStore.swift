@@ -10,21 +10,31 @@ enum KeyStore {
 
     private struct Stored: Codable {
         let algorithm: String
-        let material: Data
+        let material: Data        // software: raw private key; enclave: wrapped key data
         let comment: String
+        var kind: String?          // nil/"file" = software; "enclave" = Secure Enclave
     }
 
     static func save(_ key: FileKey) {
-        guard let payload = try? JSONEncoder().encode(Stored(
+        persist(account: key.id.rawValue, Stored(
             algorithm: key.algorithm.rawValue,
             material: key.exportPrivateKeyMaterial(),
-            comment: key.publicKey.comment))
-        else { return }
+            comment: key.publicKey.comment, kind: "file"))
+    }
 
+    static func saveEnclave(_ key: SecureEnclaveKey) {
+        persist(account: key.id.rawValue, Stored(
+            algorithm: key.algorithm.rawValue,
+            material: key.keyData,
+            comment: key.publicKey.comment, kind: "enclave"))
+    }
+
+    private static func persist(account: String, _ stored: Stored) {
+        guard let payload = try? JSONEncoder().encode(stored) else { return }
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key.id.rawValue,
+            kSecAttrAccount as String: account,
         ]
         SecItemDelete(base as CFDictionary)
         var add = base
@@ -33,7 +43,8 @@ enum KeyStore {
         SecItemAdd(add as CFDictionary, nil)
     }
 
-    static func loadAll() -> [FileKey] {
+    /// All persisted keys as their backends (software + enclave).
+    static func loadAll() -> [any KeyBackend] {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -45,14 +56,19 @@ enum KeyStore {
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let items = result as? [[String: Any]] else { return [] }
 
-        return items.compactMap { item in
+        return items.compactMap { item -> (any KeyBackend)? in
             guard let data = item[kSecValueData as String] as? Data,
-                  let stored = try? JSONDecoder().decode(Stored.self, from: data),
-                  let algorithm = KeyAlgorithm(rawValue: stored.algorithm)
-            else { return nil }
+                  let stored = try? JSONDecoder().decode(Stored.self, from: data) else { return nil }
+            if stored.kind == "enclave" {
+                return try? SecureEnclaveKey.from(keyData: stored.material, comment: stored.comment)
+            }
+            guard let algorithm = KeyAlgorithm(rawValue: stored.algorithm) else { return nil }
             return try? FileKey.from(algorithm: algorithm, privateKeyMaterial: stored.material, comment: stored.comment)
         }
     }
+
+    /// Only the exportable software keys.
+    static func loadFileKeys() -> [FileKey] { loadAll().compactMap { $0 as? FileKey } }
 
     static func delete(_ id: KeyID) {
         let query: [String: Any] = [

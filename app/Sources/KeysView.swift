@@ -5,6 +5,7 @@ import BsnsSSHCore
 struct KeysView: View {
     @Environment(AgentStore.self) private var store
     @State private var copied: String?
+    @State private var genError: String?
 
     var body: some View {
         List {
@@ -15,8 +16,16 @@ struct KeysView: View {
                 }
                 ForEach(store.identities, id: \.blob) { key in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(key.algorithm.rawValue)
-                            .font(.headline)
+                        HStack(spacing: 8) {
+                            Text(key.algorithm.rawValue).font(.headline)
+                            if store.isHardware(key) {
+                                Label("Secure Enclave", systemImage: "lock.shield.fill")
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 7).padding(.vertical, 3)
+                                    .background(Color.green.opacity(0.18), in: Capsule())
+                                    .foregroundStyle(.green)
+                            }
+                        }
                         Text(SSHKeyFormat.fingerprint(ofPublicKeyBlob: key.blob))
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
@@ -51,12 +60,31 @@ struct KeysView: View {
                 }
             }
 
-            Section("Generate") {
+            Section {
+                if store.enclaveAvailable {
+                    Button {
+                        Task {
+                            do { try await store.generateEnclaveKey() }
+                            catch { genError = "Couldn't create the key: \(error.localizedDescription)" }
+                        }
+                    } label: {
+                        Label("Secure Enclave key (Face ID)", systemImage: "lock.shield.fill")
+                    }
+                }
+                if let genError {
+                    Text(genError).font(.caption).foregroundStyle(.red)
+                }
                 Button("Ed25519 (software key)") {
                     Task { await store.generateKey(.ed25519) }
                 }
                 Button("ECDSA P-256 (software key)") {
                     Task { await store.generateKey(.ecdsaP256) }
+                }
+            } header: {
+                Text("Generate")
+            } footer: {
+                if store.enclaveAvailable {
+                    Text("A Secure Enclave key never leaves this device and asks for Face ID each time it signs in. It can't be exported or copied off the phone.")
                 }
             }
 

@@ -36,6 +36,12 @@ struct RootView: View {
     /// simulator without UI automation. No effect in normal use.
     private func maybeDevAutoConnect() async {
         let env = ProcessInfo.processInfo.environment
+        // Dev hook: BSNS_DEV_ENCLAVE=1 generates a Secure Enclave key so its
+        // creation, storage, and public-key format can be verified in the sim.
+        if env["BSNS_DEV_ENCLAVE"] == "1" {
+            try? await store.generateEnclaveKey()   // device-only; no-op in the sim
+            return
+        }
         guard env["BSNS_DEV_AUTOCONNECT"] == "1",
               let keyB64 = env["BSNS_DEV_KEY"],
               let material = Data(base64Encoded: keyB64),

@@ -10,10 +10,18 @@ import BsnsSSHCore
 final class AgentStore {
     let agent = Agent()
     private(set) var identities: [SSHPublicKey] = []
+    /// Fingerprints of keys held in hardware (Secure Enclave) — used to badge them.
+    private(set) var hardwareKeyIDs: Set<String> = []
+
+    /// Whether this device can create Secure Enclave keys (false on the simulator).
+    var enclaveAvailable: Bool { SecureEnclaveKey.isAvailable }
 
     init() {
         Task {
-            for key in KeyStore.loadAll() { await agent.add(key) }
+            for key in KeyStore.loadAll() {
+                await agent.add(key)
+                if key.requiresUserPresence { hardwareKeyIDs.insert(key.id.rawValue) }
+            }
             await refresh()
         }
     }
@@ -31,8 +39,21 @@ final class AgentStore {
         await refresh()
     }
 
+    /// Create a non-extractable P-256 key in the Secure Enclave (Face ID per use).
+    func generateEnclaveKey() async throws {
+        let key = try SecureEnclaveKey.generate(comment: "Secure Enclave key")
+        KeyStore.saveEnclave(key)
+        await agent.add(key)
+        hardwareKeyIDs.insert(key.id.rawValue)
+        await refresh()
+    }
+
+    func isHardware(_ identity: SSHPublicKey) -> Bool {
+        hardwareKeyIDs.contains(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
+    }
+
     /// Software keys currently held (for export).
-    func exportableKeys() -> [FileKey] { KeyStore.loadAll() }
+    func exportableKeys() -> [FileKey] { KeyStore.loadFileKeys() }
 
     /// Import a software key from a config bundle, skipping duplicates.
     func importKey(_ key: FileKey) async {
@@ -47,6 +68,7 @@ final class AgentStore {
         let id = KeyID(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
         KeyStore.delete(id)
         await agent.remove(id)
+        hardwareKeyIDs.remove(id.rawValue)
         await refresh()
     }
 }
