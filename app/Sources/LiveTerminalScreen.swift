@@ -21,6 +21,7 @@ struct LiveTerminalScreen: View {
     @State private var hwKeyboard = HardwareKeyboardMonitor()
     @State private var showFind = false
     @State private var findQuery = ""
+    @State private var showForwards = false
     @FocusState private var findFocused: Bool
 
     private var theme: TerminalTheme { TerminalTheme.named(themeId) }
@@ -59,6 +60,7 @@ struct LiveTerminalScreen: View {
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
                 keyboardUp = false
             }
+            .sheet(isPresented: $showForwards) { PortForwardsView(session: session) }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { toggleFind() } label: { Image(systemName: "magnifyingglass") }
@@ -136,6 +138,12 @@ struct LiveTerminalScreen: View {
             Button { handle.paste() } label: { Label("Paste", systemImage: "doc.on.clipboard") }
             Button { handle.selectAll() } label: { Label("Select All", systemImage: "selection.pin.in.out") }
 
+            let count = session.forwards.count
+            Button { showForwards = true } label: {
+                Label(count == 0 ? "Port Forwarding…" : "Port Forwarding (\(count))…",
+                      systemImage: "arrow.left.arrow.right")
+            }
+
             Picker("Theme", selection: $themeId) {
                 ForEach(TerminalTheme.all) { Text($0.id).tag($0.id) }
             }
@@ -143,7 +151,7 @@ struct LiveTerminalScreen: View {
                 ForEach(TerminalFont.families, id: \.self) { Text($0).tag($0) }
             }
         } label: {
-            Image(systemName: "textformat")
+            Image(systemName: "ellipsis.circle")
         }
     }
 

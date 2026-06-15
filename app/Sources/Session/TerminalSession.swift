@@ -35,6 +35,17 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     var onOutput: (@Sendable (ArraySlice<UInt8>) -> Void)?
 
     private let lock = NSLock()
+    /// A configured local (-L) forward. Survives reconnect (re-applied to the
+    /// new shell). `error` is non-nil if the local bind failed.
+    struct Forward: Identifiable, Equatable {
+        let id: UUID
+        let listenPort: UInt16
+        let destHost: String
+        let destPort: UInt16
+        var error: String?
+    }
+    private(set) var forwards: [Forward] = []
+
     private var shell: SSHShell?
     private var cols: Int32 = 80
     private var rows: Int32 = 24
@@ -42,6 +53,32 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     init(spec: Spec, title: String) {
         self.spec = spec
         self.title = title
+    }
+
+    /// Add a local forward and start it on the current shell. Returns nil on
+    /// success or an error string (e.g. the local port is in use).
+    @discardableResult
+    func addForward(listenPort: UInt16, destHost: String, destPort: UInt16) -> String? {
+        let id = UUID()
+        let err = currentShell?.addLocalForward(id: id, bindAddress: "127.0.0.1",
+                                                listenPort: listenPort, destHost: destHost, destPort: destPort)
+        forwards.append(Forward(id: id, listenPort: listenPort, destHost: destHost, destPort: destPort, error: err))
+        return err
+    }
+
+    func removeForward(_ id: UUID) {
+        currentShell?.removeLocalForward(id: id)
+        forwards.removeAll { $0.id == id }
+    }
+
+    /// Re-establish all configured forwards on the current shell (after reconnect).
+    private func reapplyForwards() {
+        guard let shell = currentShell else { return }
+        for i in forwards.indices {
+            let f = forwards[i]
+            forwards[i].error = shell.addLocalForward(id: f.id, bindAddress: "127.0.0.1",
+                                                      listenPort: f.listenPort, destHost: f.destHost, destPort: f.destPort)
+        }
     }
 
     /// Adopt an already-connected shell — the initial connect (and its TOFU
@@ -76,6 +113,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
                 try await shell.connect(host: spec.host, port: spec.port, user: spec.user,
                                         agent: spec.agent, cols: cols, rows: rows,
                                         knownHosts: spec.knownHosts, password: spec.password)
+                DispatchQueue.main.async { self.reapplyForwards() }
                 self.setStatus(.connected)
             } catch {
                 self.setStatus(.disconnected(reason: Self.describe(error)))
