@@ -48,10 +48,19 @@ struct ConnectView: View {
                     ForEach(hostStore.hosts) { saved in
                         Button {
                             host = saved.host; port = String(saved.port); user = saved.user
+                            useMosh = saved.useMosh ?? false
                         } label: {
                             VStack(alignment: .leading) {
-                                Text(saved.label.isEmpty ? "\(saved.user)@\(saved.host)" : saved.label)
-                                    .foregroundStyle(.primary)
+                                HStack(spacing: 6) {
+                                    Text(saved.label.isEmpty ? "\(saved.user)@\(saved.host)" : saved.label)
+                                        .foregroundStyle(.primary)
+                                    if saved.useMosh == true {
+                                        Text("mosh").font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 6).padding(.vertical, 2)
+                                            .background(Color.green.opacity(0.18), in: Capsule())
+                                            .foregroundStyle(.green)
+                                    }
+                                }
                                 Text("\(saved.user)@\(saved.host):\(saved.port)")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
@@ -132,7 +141,7 @@ struct ConnectView: View {
     }
 
     private func saveHost() {
-        hostStore.add(SavedHost(label: "", host: host, port: Int(port) ?? 22, user: user))
+        hostStore.add(SavedHost(label: "", host: host, port: Int(port) ?? 22, user: user, useMosh: useMosh))
     }
 
     private func attemptConnect() {
@@ -186,10 +195,7 @@ struct ConnectView: View {
             } catch let e as SSHShellError {
                 await MainActor.run { busy = false; handle(e, action: .connect) }
             } catch {
-                await MainActor.run {
-                    busy = false
-                    self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)"
-                }
+                await MainActor.run { busy = false; self.error = TerminalSession.describe(error) }
             }
         }
     }
@@ -211,7 +217,7 @@ struct ConnectView: View {
             } catch let e as SSHShellError {
                 await MainActor.run { busy = false; handle(e, action: .install) }
             } catch {
-                await MainActor.run { busy = false; self.error = "\(error)" }
+                await MainActor.run { busy = false; self.error = TerminalSession.describe(error) }
             }
         }
     }
@@ -223,10 +229,8 @@ struct ConnectView: View {
             pendingAction = action
         case .hostKeyMismatch(let stored, let presented):
             error = "⚠️ HOST KEY CHANGED — possible interception.\nstored: \(stored)\nnow:    \(presented)"
-        case .authFailed(let m):
-            error = "Auth failed: \(m)"
         default:
-            error = "\(e)"
+            error = TerminalSession.describe(e)
         }
     }
 

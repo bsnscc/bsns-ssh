@@ -2,13 +2,15 @@ import Foundation
 import Observation
 import BsnsSSHCore
 
-/// A saved connection target.
+/// A saved connection target. `useMosh` is optional so older `hosts.json` files
+/// (written before per-host mosh) still decode — a missing key reads as nil.
 struct SavedHost: Codable, Identifiable, Hashable {
     var id = UUID()
     var label: String
     var host: String
     var port: Int
     var user: String
+    var useMosh: Bool?
 }
 
 private func appSupportURL(_ name: String) -> URL {

@@ -154,15 +154,35 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         DispatchQueue.main.async { self.status = s }
     }
 
+    /// The single place that turns an error into user-facing text — used by both
+    /// the reconnect banner and the Connect screen so messages stay consistent
+    /// and never leak a raw `Error` description.
     static func describe(_ error: Error) -> String {
         switch error {
-        case SSHShellError.connectFailed: return "couldn't reach the server"
-        case SSHShellError.handshakeFailed: return "handshake failed"
-        case SSHShellError.authFailed(let m): return "auth failed: \(m)"
-        case SSHShellError.hostKeyMismatch: return "⚠️ host key changed"
-        case SSHShellError.unknownHostKey: return "host key no longer trusted"
-        case let e as LocalizedError where e.errorDescription != nil: return e.errorDescription!
-        default: return "\(error)"
+        case SSHShellError.connectFailed:
+            return "Couldn't reach the server. Check the host, port, and your network."
+        case SSHShellError.handshakeFailed:
+            return "SSH handshake failed — the server may not speak SSH, or uses unsupported algorithms."
+        case SSHShellError.authFailed(let m):
+            return "Authentication failed: \(m)"
+        case SSHShellError.hostKeyMismatch:
+            return "⚠️ The host key changed — possible interception. Connection refused."
+        case SSHShellError.unknownHostKey:
+            return "The server's host key isn't trusted yet."
+        case SSHShellError.noIdentities:
+            return "No key available — add or generate a key first."
+        case SSHShellError.noHostKey:
+            return "The server didn't present a host key."
+        case SSHShellError.channelOpenFailed, SSHShellError.ptyFailed, SSHShellError.shellFailed:
+            return "Couldn't open a session on the server."
+        case SSHShellError.execFailed(let m):
+            return "Couldn't run the command on the server: \(m)"
+        case SSHShellError.libssh2Init, SSHShellError.sessionInit:
+            return "Couldn't start the SSH session."
+        case let e as LocalizedError where e.errorDescription != nil:
+            return e.errorDescription!
+        default:
+            return "Something went wrong. Please try again."
         }
     }
 }

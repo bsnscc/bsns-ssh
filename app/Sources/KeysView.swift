@@ -30,6 +30,14 @@ struct KeysView: View {
                                     .padding(.horizontal, 7).padding(.vertical, 3)
                                     .background(Color.green.opacity(0.18), in: Capsule())
                                     .foregroundStyle(.green)
+                            } else {
+                                // Software keys live in the Keychain and can be
+                                // exported — make that legible next to hardware keys.
+                                Label("Software · exportable", systemImage: "externaldrive")
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 7).padding(.vertical, 3)
+                                    .background(Color.orange.opacity(0.18), in: Capsule())
+                                    .foregroundStyle(.orange)
                             }
                         }
                         Text(SSHKeyFormat.fingerprint(ofPublicKeyBlob: key.blob))
