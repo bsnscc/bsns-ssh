@@ -15,6 +15,7 @@ struct ConnectView: View {
     @State private var user = ""
     @State private var password = ""
     @State private var useMosh = false
+    @State private var showSFTP = false
     @State private var busy = false
     @State private var error: String?
     @State private var notice: String?
@@ -100,6 +101,8 @@ struct ConnectView: View {
                               || (useMosh ? store.identities.isEmpty : (password.isEmpty && store.identities.isEmpty)))
                 Button("Install my key (ssh-copy-id)") { attemptInstall() }
                     .disabled(busy || host.isEmpty || user.isEmpty || password.isEmpty || store.identities.isEmpty)
+                Button("Browse files (SFTP)") { if UInt16(port) != nil { showSFTP = true } }
+                    .disabled(busy || host.isEmpty || user.isEmpty || store.identities.isEmpty)
                 Button("Save host") { saveHost() }
                     .disabled(host.isEmpty || user.isEmpty)
             }
@@ -114,6 +117,11 @@ struct ConnectView: View {
         .navigationTitle("Connect")
         .toolbar {
             if !hostStore.hosts.isEmpty { EditButton() }
+        }
+        .sheet(isPresented: $showSFTP) {
+            if let p = UInt16(port) {
+                SFTPBrowserView(host: host, port: p, user: user)
+            }
         }
         .alert("Verify host key", isPresented: Binding(get: { pendingHostKey != nil }, set: { if !$0 { pendingHostKey = nil } })) {
             Button("Trust", role: .destructive) { trustAndContinue() }

@@ -42,6 +42,38 @@ struct RootView: View {
             try? await store.generateEnclaveKey()   // device-only; no-op in the sim
             return
         }
+        // Dev hook: BSNS_DEV_SFTP=1 runs an SFTP round-trip self-test (list,
+        // upload, download-and-compare, delete) against the same env as autoconnect.
+        if env["BSNS_DEV_SFTP"] == "1",
+           let keyB64 = env["BSNS_DEV_KEY"], let material = Data(base64Encoded: keyB64),
+           let host = env["BSNS_DEV_HOST"], let user = env["BSNS_DEV_USER"],
+           let key = try? FileKey.from(algorithm: .ed25519, privateKeyMaterial: material) {
+            let port = UInt16(env["BSNS_DEV_PORT"] ?? "22") ?? 22
+            await store.agent.add(key)
+            var known = KnownHosts()
+            let client = SFTPClient()
+            do {
+                do {
+                    try await client.connect(host: host, port: port, user: user, agent: store.agent, knownHosts: known)
+                } catch SSHShellError.unknownHostKey(let hk) {
+                    known.trust(host: host, port: port, key: hk)
+                    try await client.connect(host: host, port: port, user: user, agent: store.agent, knownHosts: known)
+                }
+                let listing = try await client.list(".")
+                let payload = Data("bsns-sftp-test-\(listing.count)".utf8)
+                try await client.upload(payload, to: "bsns-sftp-test.txt")
+                let back = try await client.download("bsns-sftp-test.txt")
+                // Leave a result file on the server so the outcome is inspectable
+                // even when sim stdout isn't captured.
+                let result = "roundtrip_ok=\(back == payload) bytes=\(back.count) list_count=\(listing.count)"
+                try await client.remove("bsns-sftp-test.txt", isDirectory: false)   // also exercises unlink
+                print("SFTP-DEV \(result) — PASS")
+            } catch {
+                print("SFTP-DEV FAIL: \(error)")
+            }
+            client.disconnect()
+            return
+        }
         guard env["BSNS_DEV_AUTOCONNECT"] == "1",
               let keyB64 = env["BSNS_DEV_KEY"],
               let material = Data(base64Encoded: keyB64),

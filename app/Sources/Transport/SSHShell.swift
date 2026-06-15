@@ -355,6 +355,44 @@ public final class SSHShell: @unchecked Sendable {
         }
     }
 
+    /// Open a socket, handshake, verify the host key, and authenticate — the
+    /// shared prologue for any libssh2 use (shell, exec, SFTP). Returns the
+    /// connected socket + authenticated session; the caller owns teardown
+    /// (`libssh2_session_disconnect`/`_free` + `close`). Throws the same
+    /// host-key / auth errors as the shell, so callers can drive the TOFU prompt.
+    /// Must run off the main thread (the agent biometric prompt blocks here).
+    public static func openAuthenticatedSession(
+        host: String, port: UInt16, user: String, agent: Agent?, identities: [SSHPublicKey],
+        password: String?, knownHosts: KnownHosts
+    ) throws -> (fd: Int32, session: OpaquePointer) {
+        guard libssh2Ready else { throw SSHShellError.libssh2Init }
+        guard let fd = tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
+        guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else {
+            close(fd); throw SSHShellError.sessionInit
+        }
+        libssh2_session_set_blocking(session, 1)
+        applyAlgorithmPolicy(session)
+        do {
+            guard libssh2_session_handshake(session, fd) == 0 else { throw SSHShellError.handshakeFailed }
+            let hostKey = try presentedHostKey(session)
+            switch knownHosts.verify(host: host, port: port, key: hostKey) {
+            case .trusted: break
+            case .unknown: throw SSHShellError.unknownHostKey(hostKey)
+            case let .mismatch(stored, presented): throw SSHShellError.hostKeyMismatch(stored, presented)
+            }
+            if let password, !password.isEmpty {
+                try passwordAuth(session, user: user, password: password)
+            } else if let agent {
+                try authenticatePublicKey(session, user: user, identities: identities, agent: agent, host: host)
+            } else {
+                throw SSHShellError.noIdentities
+            }
+        } catch {
+            libssh2_session_free(session); close(fd); throw error
+        }
+        return (fd, session)
+    }
+
     /// Restrict the SSH handshake to modern algorithms — no SHA-1 host keys,
     /// CBC ciphers, 3DES/arcfour, or HMAC-SHA1. libssh2 keeps its default list
     /// for any category where none of these are supported, so this only ever
