@@ -16,6 +16,11 @@ struct LiveTerminalScreen: View {
     @AppStorage("terminal.fontSize") private var fontSize: Double = Double(defaultFontSize)
     @AppStorage("terminal.themeId") private var themeId: String = TerminalTheme.bsnsDark.id
     @AppStorage("terminal.fontFamily") private var fontFamily: String = TerminalFont.families[0]
+    @AppStorage(SettingsKey.cursorStyle) private var cursorStyle = "block"
+    @AppStorage(SettingsKey.cursorBlink) private var cursorBlink = true
+    @AppStorage(SettingsKey.optionAsMeta) private var optionAsMeta = true
+    @AppStorage(SettingsKey.keepAwake) private var keepAwake = false
+    @AppStorage(SettingsKey.showKeyBar) private var showKeyBar = true
 
     @State private var keyboardUp = false
     @State private var hwKeyboard = HardwareKeyboardMonitor()
@@ -38,11 +43,12 @@ struct LiveTerminalScreen: View {
                                 fontSize: Binding(get: { CGFloat(fontSize) }, set: { fontSize = Double($0) }),
                                 themeId: themeId,
                                 fontFamily: fontFamily,
-                                hardwareKeyboard: hwKeyboard.isConnected)
+                                hardwareKeyboard: hwKeyboard.isConnected,
+                                prefs: "\(cursorStyle)\(cursorBlink)\(optionAsMeta)")
             // Our key row is redundant with SwiftTerm's soft-keyboard accessory,
             // so only show it when the soft keyboard is down. With a physical
             // keyboard it collapses to just Esc (see TerminalKeyBar.minimal).
-            if !keyboardUp {
+            if !keyboardUp && showKeyBar {
                 Divider().overlay(Color(theme.ansi[8].uiColor).opacity(0.5))
                 TerminalKeyBar(session: session, handle: handle, theme: theme, minimal: hwKeyboard.isConnected)
             }
@@ -50,10 +56,11 @@ struct LiveTerminalScreen: View {
             .ignoresSafeArea(.container, edges: .bottom)
             .navigationTitle("")   // the tab bar shows the session name
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear { hwKeyboard.start(); devFindTest() }
+            .onAppear { hwKeyboard.start(); devFindTest(); UIApplication.shared.isIdleTimerDisabled = keepAwake }
             // Leaving the terminal (e.g. switching tabs) must NOT disconnect —
             // the session lives in the store until explicitly closed.
-            .onDisappear { hwKeyboard.stop() }
+            .onDisappear { hwKeyboard.stop(); UIApplication.shared.isIdleTimerDisabled = false }
+            .onChange(of: keepAwake) { _, v in UIApplication.shared.isIdleTimerDisabled = v }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                 keyboardUp = true
             }
@@ -337,6 +344,7 @@ final class ZoomableTerminalView: TerminalView {
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+        guard UserDefaults.standard.bool(forKey: SettingsKey.pinchZoom) else { return }
         switch gesture.state {
         case .began: pinchStart = currentSize
         case .changed, .ended:
@@ -382,6 +390,8 @@ struct TerminalSurfaceView: UIViewRepresentable {
     let themeId: String
     let fontFamily: String
     let hardwareKeyboard: Bool
+    /// Bundles cursor/meta prefs so a change re-triggers updateUIView → applyPrefs.
+    let prefs: String
 
     func makeUIView(context: Context) -> ZoomableTerminalView {
         surface.onZoomChange = { fontSize = $0 }

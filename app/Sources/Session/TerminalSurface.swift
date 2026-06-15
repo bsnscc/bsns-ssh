@@ -1,4 +1,5 @@
 import UIKit
+import AudioToolbox
 import SwiftTerm
 
 /// The persistent UIKit terminal for one session: the `TerminalView`, its
@@ -28,6 +29,10 @@ final class TerminalSurface: NSObject, TerminalViewDelegate {
         handle.terminal = view
         handle.captureAccessory()
 
+        let scrollback = UserDefaults.standard.integer(forKey: SettingsKey.scrollback)
+        if scrollback > 0 { view.getTerminal().changeScrollback(scrollback) }
+        applyPrefs()
+
         // The session forwards output from whichever shell is current, so a
         // reconnect swaps the underlying shell without re-wiring here.
         session.onOutput = { [weak self] bytes in
@@ -50,12 +55,21 @@ final class TerminalSurface: NSObject, TerminalViewDelegate {
     func apply(themeId: String, fontFamily: String, fontSize: CGFloat, hardwareKeyboard: Bool) {
         view.setFont(family: fontFamily, size: fontSize)
         handle.setAccessorySuppressed(hardwareKeyboard)
+        applyPrefs()
         if appliedThemeId != themeId {
             appliedThemeId = themeId
             TerminalTheme.named(themeId).apply(to: view)
             view.getTerminal().updateFullScreen()
             view.setNeedsDisplay(view.bounds)
         }
+    }
+
+    /// Apply the live-changeable preferences (cursor, Option-as-Meta).
+    private func applyPrefs() {
+        let d = UserDefaults.standard
+        let shape = CursorShape(rawValue: d.string(forKey: SettingsKey.cursorStyle) ?? "block") ?? .block
+        view.getTerminal().setCursorStyle(shape.swiftTerm(blink: d.bool(forKey: SettingsKey.cursorBlink)))
+        view.optionAsMetaKey = d.bool(forKey: SettingsKey.optionAsMeta)
     }
 
     // MARK: TerminalViewDelegate
@@ -73,7 +87,13 @@ final class TerminalSurface: NSObject, TerminalViewDelegate {
 
     func setTerminalTitle(source: TerminalView, title: String) {}
     func scrolled(source: TerminalView, position: Double) {}
-    func bell(source: TerminalView) {}
+    func bell(source: TerminalView) {
+        switch UserDefaults.standard.string(forKey: SettingsKey.bellMode) {
+        case "haptic": UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        case "sound": AudioServicesPlaySystemSound(1057)
+        default: break   // silent
+        }
+    }
     func clipboardCopy(source: TerminalView, content: Data) {}
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}

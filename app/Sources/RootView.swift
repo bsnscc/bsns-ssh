@@ -4,6 +4,7 @@ import BsnsSSHCore
 struct RootView: View {
     @Environment(AgentStore.self) private var store
     @Environment(SessionStore.self) private var sessions
+    @State private var homeTab = ProcessInfo.processInfo.environment["BSNS_DEV_TAB"] ?? "connect"
 
     var body: some View {
         Group {
@@ -16,11 +17,13 @@ struct RootView: View {
                     }
                 }
             } else {
-                TabView {
+                TabView(selection: $homeTab) {
                     NavigationStack { ConnectView() }
-                        .tabItem { Label("Connect", systemImage: "network") }
+                        .tabItem { Label("Connect", systemImage: "network") }.tag("connect")
                     NavigationStack { KeysView() }
-                        .tabItem { Label("Keys", systemImage: "key.fill") }
+                        .tabItem { Label("Keys", systemImage: "key.fill") }.tag("keys")
+                    NavigationStack { SettingsView() }
+                        .tabItem { Label("Settings", systemImage: "gearshape") }.tag("settings")
                 }
             }
         }

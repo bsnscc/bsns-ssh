@@ -8,6 +8,8 @@ struct BsnsSSHApp: App {
     @State private var sessions = SessionStore()
     @State private var surfaces = TerminalSurfaceCache()
 
+    init() { SettingsKey.registerDefaults() }
+
     var body: some Scene {
         WindowGroup {
             RootView()
