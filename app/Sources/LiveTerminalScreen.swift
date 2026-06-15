@@ -6,56 +6,90 @@ private let minFontSize: CGFloat = 8
 private let maxFontSize: CGFloat = 30
 private let defaultFontSize: CGFloat = 15
 
-/// A terminal bound to a live `SSHShell`, with zoom (pinch, ⌘+/⌘-/⌘0, buttons).
+/// A terminal bound to a live `SSHShell`: zoom (pinch, ⌘+/⌘-/⌘0, buttons),
+/// theme + font selection, and copy/paste.
 struct LiveTerminalScreen: View {
     let shell: SSHShell
     let title: String
-    @State private var fontSize: CGFloat = defaultFontSize
+
+    @AppStorage("terminal.fontSize") private var fontSize: Double = Double(defaultFontSize)
+    @AppStorage("terminal.themeId") private var themeId: String = TerminalTheme.bsnsDark.id
+    @AppStorage("terminal.fontFamily") private var fontFamily: String = TerminalFont.families[0]
+
+    @State private var handle = TerminalHandle()
 
     var body: some View {
-        LiveTerminalContainer(shell: shell, fontSize: $fontSize)
+        LiveTerminalContainer(shell: shell,
+                              fontSize: Binding(get: { CGFloat(fontSize) }, set: { fontSize = Double($0) }),
+                              themeId: themeId,
+                              fontFamily: fontFamily,
+                              handle: handle)
             .ignoresSafeArea(.container, edges: .bottom)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .onDisappear { shell.disconnect() }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { setZoom(fontSize - 1) } label: { Image(systemName: "textformat.size.smaller") }
-                    Button { setZoom(fontSize + 1) } label: { Image(systemName: "textformat.size.larger") }
+                    Button { setZoom(CGFloat(fontSize) - 1) } label: { Image(systemName: "textformat.size.smaller") }
+                    Button { setZoom(CGFloat(fontSize) + 1) } label: { Image(systemName: "textformat.size.larger") }
+                    settingsMenu
                 }
             }
     }
 
+    private var settingsMenu: some View {
+        Menu {
+            Button { handle.paste() } label: { Label("Paste", systemImage: "doc.on.clipboard") }
+            Button { handle.selectAll() } label: { Label("Select All", systemImage: "selection.pin.in.out") }
+
+            Picker("Theme", selection: $themeId) {
+                ForEach(TerminalTheme.all) { Text($0.id).tag($0.id) }
+            }
+            Picker("Font", selection: $fontFamily) {
+                ForEach(TerminalFont.families, id: \.self) { Text($0).tag($0) }
+            }
+        } label: {
+            Image(systemName: "textformat")
+        }
+    }
+
     private func setZoom(_ size: CGFloat) {
-        fontSize = min(maxFontSize, max(minFontSize, size))
+        fontSize = Double(min(maxFontSize, max(minFontSize, size)))
     }
 }
 
+/// Lets the SwiftUI toolbar reach into the live `TerminalView` for paste/select.
+@Observable
+final class TerminalHandle {
+    weak var terminal: TerminalView?
+    func paste() { terminal?.paste(nil) }
+    func selectAll() { terminal?.selectAll(nil) }
+}
+
 /// SwiftTerm's `TerminalView` with font-size zoom via pinch and ⌘ keys.
+///
+/// We use the default CoreGraphics renderer (its native caret sits in the right
+/// cell — the Metal renderer's own cursor was permanently offset). CoreGraphics
+/// relies on dirty-region tracking and otherwise leaves stale glyphs when the
+/// screen clears; the Coordinator calls `updateFullScreen()` after each feed to
+/// force a full repaint, which fixes the "new text on old text" garbling.
 final class ZoomableTerminalView: TerminalView {
     var onZoomChange: ((CGFloat) -> Void)?
     private var currentSize: CGFloat = defaultFontSize
     private var pinchStart: CGFloat = defaultFontSize
-    private var metalEnabled = false
+    private var fontFamily: String = TerminalFont.families[0]
 
-    // The default CoreGraphics renderer relies on dirty-region tracking and
-    // leaves stale glyphs when the screen is cleared ("new text on old"). The
-    // Metal renderer redraws the full visible buffer each frame, which fixes
-    // it. Must be enabled once the view is in a window.
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        guard window != nil, !metalEnabled else { return }
-        metalEnabled = true
-        try? setUseMetal(true)
-    }
-
-    func setFontSize(_ size: CGFloat) {
+    func setFont(family: String, size: CGFloat) {
         let clamped = min(maxFontSize, max(minFontSize, size))
         currentSize = clamped
-        if abs(font.pointSize - clamped) > 0.1 {
-            font = UIFont.monospacedSystemFont(ofSize: clamped, weight: .regular)
+        let changed = family != fontFamily || abs(font.pointSize - clamped) > 0.1
+        fontFamily = family
+        if changed {
+            font = TerminalFont.font(family: family, size: clamped)
         }
     }
+
+    func setFontSize(_ size: CGFloat) { setFont(family: fontFamily, size: size) }
 
     func installZoomGestures() {
         addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:))))
@@ -87,6 +121,9 @@ final class ZoomableTerminalView: TerminalView {
 struct LiveTerminalContainer: UIViewRepresentable {
     let shell: SSHShell
     @Binding var fontSize: CGFloat
+    let themeId: String
+    let fontFamily: String
+    let handle: TerminalHandle
 
     func makeCoordinator() -> Coordinator { Coordinator(shell: shell, fontSize: $fontSize) }
 
@@ -95,18 +132,27 @@ struct LiveTerminalContainer: UIViewRepresentable {
         terminal.terminalDelegate = context.coordinator
         terminal.onZoomChange = { newSize in context.coordinator.fontSize.wrappedValue = newSize }
         terminal.installZoomGestures()
-        terminal.setFontSize(fontSize)
+        terminal.setFont(family: fontFamily, size: fontSize)
+        TerminalTheme.named(themeId).apply(to: terminal)
+        handle.terminal = terminal
         context.coordinator.attach(terminal)
         return terminal
     }
 
     func updateUIView(_ terminal: ZoomableTerminalView, context: Context) {
-        terminal.setFontSize(fontSize)
+        terminal.setFont(family: fontFamily, size: fontSize)
+        if context.coordinator.appliedThemeId != themeId {
+            context.coordinator.appliedThemeId = themeId
+            TerminalTheme.named(themeId).apply(to: terminal)
+            terminal.getTerminal().updateFullScreen()
+            terminal.setNeedsDisplay(terminal.bounds)
+        }
     }
 
     final class Coordinator: NSObject, TerminalViewDelegate {
         let shell: SSHShell
         let fontSize: Binding<CGFloat>
+        var appliedThemeId: String?
 
         init(shell: SSHShell, fontSize: Binding<CGFloat>) {
             self.shell = shell
@@ -116,10 +162,20 @@ struct LiveTerminalContainer: UIViewRepresentable {
 
         func attach(_ terminal: ZoomableTerminalView) {
             shell.onOutput = { [weak terminal] bytes in
-                DispatchQueue.main.async { terminal?.feed(byteArray: bytes) }
+                DispatchQueue.main.async {
+                    guard let terminal else { return }
+                    terminal.feed(byteArray: bytes)
+                    terminal.getTerminal().updateFullScreen()
+                    terminal.setNeedsDisplay(terminal.bounds)
+                }
             }
             shell.onClosed = { [weak terminal] in
-                DispatchQueue.main.async { terminal?.feed(text: "\r\n[connection closed]\r\n") }
+                DispatchQueue.main.async {
+                    guard let terminal else { return }
+                    terminal.feed(text: "\r\n[connection closed]\r\n")
+                    terminal.getTerminal().updateFullScreen()
+                    terminal.setNeedsDisplay(terminal.bounds)
+                }
             }
         }
 
