@@ -11,11 +11,12 @@ private let defaultFontSize: CGFloat = 15
 struct LiveTerminalScreen: View {
     let session: TerminalSession
 
+    @Environment(TerminalSurfaceCache.self) private var surfaceCache
+
     @AppStorage("terminal.fontSize") private var fontSize: Double = Double(defaultFontSize)
     @AppStorage("terminal.themeId") private var themeId: String = TerminalTheme.bsnsDark.id
     @AppStorage("terminal.fontFamily") private var fontFamily: String = TerminalFont.families[0]
 
-    @State private var handle = TerminalHandle()
     @State private var keyboardUp = false
     @State private var hwKeyboard = HardwareKeyboardMonitor()
     @State private var showFind = false
@@ -23,17 +24,20 @@ struct LiveTerminalScreen: View {
     @FocusState private var findFocused: Bool
 
     private var theme: TerminalTheme { TerminalTheme.named(themeId) }
+    private var surface: TerminalSurface {
+        surfaceCache.surface(for: session, themeId: themeId, fontFamily: fontFamily, fontSize: CGFloat(fontSize))
+    }
+    private var handle: TerminalHandle { surface.handle }
 
     var body: some View {
         VStack(spacing: 0) {
             if showFind { findBar }
             statusBanner
-            LiveTerminalContainer(session: session,
-                                  fontSize: Binding(get: { CGFloat(fontSize) }, set: { fontSize = Double($0) }),
-                                  themeId: themeId,
-                                  fontFamily: fontFamily,
-                                  hardwareKeyboard: hwKeyboard.isConnected,
-                                  handle: handle)
+            TerminalSurfaceView(surface: surface,
+                                fontSize: Binding(get: { CGFloat(fontSize) }, set: { fontSize = Double($0) }),
+                                themeId: themeId,
+                                fontFamily: fontFamily,
+                                hardwareKeyboard: hwKeyboard.isConnected)
             // Our key row is redundant with SwiftTerm's soft-keyboard accessory,
             // so only show it when the soft keyboard is down. With a physical
             // keyboard it collapses to just Esc (see TerminalKeyBar.minimal).
@@ -46,7 +50,9 @@ struct LiveTerminalScreen: View {
             .navigationTitle(session.title)
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { hwKeyboard.start() }
-            .onDisappear { hwKeyboard.stop(); session.disconnect() }
+            // Leaving the terminal (e.g. switching tabs) must NOT disconnect —
+            // the session lives in the store until explicitly closed.
+            .onDisappear { hwKeyboard.stop() }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                 keyboardUp = true
             }
@@ -301,83 +307,25 @@ final class ZoomableTerminalView: TerminalView {
     @objc private func zoomReset() { onZoomChange?(defaultFontSize) }
 }
 
-struct LiveTerminalContainer: UIViewRepresentable {
-    let session: TerminalSession
+/// Embeds a session's persistent `TerminalSurface.view`. The view is owned by
+/// the surface cache, not this representable, so switching tabs re-embeds the
+/// same view (buffer intact) rather than building a new one.
+struct TerminalSurfaceView: UIViewRepresentable {
+    let surface: TerminalSurface
     @Binding var fontSize: CGFloat
     let themeId: String
     let fontFamily: String
     let hardwareKeyboard: Bool
-    let handle: TerminalHandle
-
-    func makeCoordinator() -> Coordinator { Coordinator(session: session, fontSize: $fontSize) }
 
     func makeUIView(context: Context) -> ZoomableTerminalView {
-        let terminal = ZoomableTerminalView(frame: .zero, font: nil)
-        terminal.terminalDelegate = context.coordinator
-        terminal.onZoomChange = { newSize in context.coordinator.fontSize.wrappedValue = newSize }
-        terminal.installZoomGestures()
-        terminal.setFont(family: fontFamily, size: fontSize)
-        TerminalTheme.named(themeId).apply(to: terminal)
-        handle.terminal = terminal
-        handle.captureAccessory()
-        handle.setAccessorySuppressed(hardwareKeyboard)
-        context.coordinator.attach(terminal)
-        return terminal
+        surface.onZoomChange = { fontSize = $0 }
+        surface.apply(themeId: themeId, fontFamily: fontFamily, fontSize: fontSize, hardwareKeyboard: hardwareKeyboard)
+        surface.refresh()   // re-embed after a tab switch: redraw the kept buffer
+        return surface.view
     }
 
     func updateUIView(_ terminal: ZoomableTerminalView, context: Context) {
-        terminal.setFont(family: fontFamily, size: fontSize)
-        handle.setAccessorySuppressed(hardwareKeyboard)
-        if context.coordinator.appliedThemeId != themeId {
-            context.coordinator.appliedThemeId = themeId
-            TerminalTheme.named(themeId).apply(to: terminal)
-            terminal.getTerminal().updateFullScreen()
-            terminal.setNeedsDisplay(terminal.bounds)
-        }
-    }
-
-    final class Coordinator: NSObject, TerminalViewDelegate {
-        let session: TerminalSession
-        let fontSize: Binding<CGFloat>
-        var appliedThemeId: String?
-
-        init(session: TerminalSession, fontSize: Binding<CGFloat>) {
-            self.session = session
-            self.fontSize = fontSize
-            super.init()
-        }
-
-        func attach(_ terminal: ZoomableTerminalView) {
-            // The session forwards output from whichever shell is current, so a
-            // reconnect swaps the underlying shell without re-attaching here.
-            session.onOutput = { [weak terminal] bytes in
-                DispatchQueue.main.async {
-                    guard let terminal else { return }
-                    terminal.feed(byteArray: bytes)
-                    terminal.getTerminal().updateFullScreen()
-                    terminal.setNeedsDisplay(terminal.bounds)
-                }
-            }
-        }
-
-        func send(source: TerminalView, data: ArraySlice<UInt8>) {
-            session.write(data)
-        }
-
-        func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-            session.resize(cols: Int32(newCols), rows: Int32(newRows))
-        }
-
-        func setTerminalTitle(source: TerminalView, title: String) {}
-        func scrolled(source: TerminalView, position: Double) {}
-        func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-            guard let url = URL(string: link), UIApplication.shared.canOpenURL(url) else { return }
-            UIApplication.shared.open(url)
-        }
-        func bell(source: TerminalView) {}
-        func clipboardCopy(source: TerminalView, content: Data) {}
-        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-        func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
-        func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+        surface.onZoomChange = { fontSize = $0 }
+        surface.apply(themeId: themeId, fontFamily: fontFamily, fontSize: fontSize, hardwareKeyboard: hardwareKeyboard)
     }
 }

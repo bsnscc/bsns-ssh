@@ -3,13 +3,19 @@ import BsnsSSHCore
 
 struct RootView: View {
     @Environment(AgentStore.self) private var store
-    @State private var devSession: TerminalSession?
+    @Environment(SessionStore.self) private var sessions
 
     var body: some View {
         Group {
-            if let devSession {
+            if let active = sessions.active {
                 NavigationStack {
-                    LiveTerminalScreen(session: devSession)
+                    LiveTerminalScreen(session: active)
+                        .id(active.id)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                SessionSwitcher(active: active)
+                            }
+                        }
                 }
             } else {
                 TabView {
@@ -64,9 +70,42 @@ struct RootView: View {
                                             knownHosts: known)
             let session = TerminalSession(spec: spec, title: "dev")
             session.adopt(shell)
-            devSession = session
+            sessions.add(session)
         } catch {
             print("dev autoconnect failed: \(error)")
+        }
+    }
+}
+
+/// Leading toolbar control: shows the live-session count and a menu to switch
+/// between them, start a new connection, or close the current one.
+struct SessionSwitcher: View {
+    @Environment(SessionStore.self) private var sessions
+    @Environment(TerminalSurfaceCache.self) private var surfaces
+    let active: TerminalSession
+
+    var body: some View {
+        Menu {
+            if sessions.sessions.count > 1 {
+                Section("Sessions") {
+                    ForEach(sessions.sessions) { s in
+                        Button { sessions.activate(s) } label: {
+                            Label(s.title, systemImage: s.id == active.id ? "checkmark" : "terminal")
+                        }
+                    }
+                }
+            }
+            Button { sessions.goHome() } label: { Label("New Connection", systemImage: "plus") }
+            Button(role: .destructive) {
+                surfaces.drop(active.id); sessions.close(active)
+            } label: {
+                Label("Close “\(active.title)”", systemImage: "xmark")
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "square.on.square")
+                if sessions.sessions.count > 1 { Text("\(sessions.sessions.count)") }
+            }
         }
     }
 }

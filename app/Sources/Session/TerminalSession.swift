@@ -7,7 +7,9 @@ import BsnsSSHCore
 /// one-tap reconnect. The terminal view talks to the session, not the shell, so
 /// a reconnect swaps the underlying shell without the view knowing.
 @Observable
-final class TerminalSession: @unchecked Sendable {
+final class TerminalSession: Identifiable, @unchecked Sendable {
+    let id = UUID()
+
     enum Status: Equatable {
         case connecting
         case connected

@@ -5,6 +5,8 @@ struct ConnectView: View {
     @Environment(AgentStore.self) private var store
     @Environment(HostStore.self) private var hostStore
     @Environment(KnownHostsStore.self) private var knownHostsStore
+    @Environment(SessionStore.self) private var sessions
+    @Environment(TerminalSurfaceCache.self) private var surfaces
 
     private enum PendingAction { case connect, install }
 
@@ -15,13 +17,31 @@ struct ConnectView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var notice: String?
-    @State private var activeSession: TerminalSession?
-    @State private var showTerminal = false
     @State private var pendingHostKey: HostKey?
     @State private var pendingAction: PendingAction = .connect
 
     var body: some View {
         Form {
+            if !sessions.sessions.isEmpty {
+                Section("Active") {
+                    ForEach(sessions.sessions) { s in
+                        Button { sessions.activate(s) } label: {
+                            HStack {
+                                Image(systemName: "terminal").foregroundStyle(.secondary)
+                                Text(s.title).foregroundStyle(.primary)
+                                Spacer()
+                                statusDot(for: s)
+                            }
+                        }
+                    }
+                    .onDelete { offsets in
+                        offsets.map { sessions.sessions[$0] }.forEach { s in
+                            surfaces.drop(s.id); sessions.close(s)
+                        }
+                    }
+                }
+            }
+
             if !hostStore.hosts.isEmpty {
                 Section("Saved") {
                     ForEach(hostStore.hosts) { saved in
@@ -80,11 +100,6 @@ struct ConnectView: View {
         .toolbar {
             if !hostStore.hosts.isEmpty { EditButton() }
         }
-        .navigationDestination(isPresented: $showTerminal) {
-            if let activeSession {
-                LiveTerminalScreen(session: activeSession)
-            }
-        }
         .alert("Unknown host key", isPresented: Binding(get: { pendingHostKey != nil }, set: { if !$0 { pendingHostKey = nil } })) {
             Button("Trust & continue") { trustAndContinue() }
             Button("Cancel", role: .cancel) { pendingHostKey = nil }
@@ -92,6 +107,14 @@ struct ConnectView: View {
             if let key = pendingHostKey {
                 Text("First connection to \(host). Verify the fingerprint:\n\n\(key.keyType)\n\(key.fingerprint)")
             }
+        }
+    }
+
+    @ViewBuilder private func statusDot(for s: TerminalSession) -> some View {
+        switch s.status {
+        case .connected: Circle().fill(.green).frame(width: 8, height: 8)
+        case .connecting: ProgressView().controlSize(.mini)
+        case .disconnected: Circle().fill(.orange).frame(width: 8, height: 8)
         }
     }
 
@@ -116,8 +139,8 @@ struct ConnectView: View {
                                                     knownHosts: knownHostsStore.knownHosts)
                     let s = TerminalSession(spec: spec, title: "\(user)@\(host)")
                     s.adopt(shell)
-                    activeSession = s
-                    showTerminal = true
+                    sessions.add(s)
+                    password = ""
                 }
             } catch let e as SSHShellError {
                 await MainActor.run { busy = false; handle(e, action: .connect) }
