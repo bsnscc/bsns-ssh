@@ -15,7 +15,7 @@ private let BLOCK_OUTBOUND: Int32 = 0x0002
 
 public enum SSHShellError: Error {
     case libssh2Init, connectFailed, sessionInit, handshakeFailed
-    case noHostKey, hostKeyMismatch(String, String)
+    case noHostKey, unknownHostKey(HostKey), hostKeyMismatch(String, String)
     case noIdentities, authFailed(String)
     case channelOpenFailed, ptyFailed, shellFailed
 }
@@ -135,9 +135,15 @@ public final class SSHShell: @unchecked Sendable {
         libssh2_session_set_blocking(session, 1)
         guard libssh2_session_handshake(session, fd) == 0 else { throw SSHShellError.handshakeFailed }
 
-        // Host key (TOFU): refuse a mismatch; proceed on trusted/unknown.
+        // Host key (TOFU): proceed only if trusted; surface unknown (prompt) and
+        // mismatch (danger) to the caller, which decides whether to trust + retry.
         let hostKey = try Self.presentedHostKey(session)
-        if case let .mismatch(stored, presented) = knownHosts.verify(host: host, port: port, key: hostKey) {
+        switch knownHosts.verify(host: host, port: port, key: hostKey) {
+        case .trusted:
+            break
+        case .unknown:
+            throw SSHShellError.unknownHostKey(hostKey)
+        case let .mismatch(stored, presented):
             throw SSHShellError.hostKeyMismatch(stored, presented)
         }
 

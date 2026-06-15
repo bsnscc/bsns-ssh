@@ -1,7 +1,7 @@
 import Foundation
 
 /// A server's host key as presented during the handshake.
-public struct HostKey: Sendable, Equatable {
+public struct HostKey: Sendable, Equatable, Codable {
     /// SSH key-type name, e.g. "ssh-ed25519" / "ecdsa-sha2-nistp256".
     public let keyType: String
     /// Raw host-key blob (as returned by the transport).
@@ -29,7 +29,7 @@ public enum HostVerification: Sendable, Equatable {
 
 /// Trust-on-first-use host-key store. Pure + serializable; the prompt UI and
 /// persistence (sync blob / disk) live above it.
-public struct KnownHosts: Sendable, Equatable {
+public struct KnownHosts: Sendable, Equatable, Codable {
     private var entries: [String: HostKey]
 
     public init(entries: [String: HostKey] = [:]) {

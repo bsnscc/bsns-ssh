@@ -27,6 +27,10 @@ struct KeysView: View {
                     }
                     .padding(.vertical, 2)
                 }
+                .onDelete { offsets in
+                    let targets = offsets.map { store.identities[$0] }
+                    Task { for identity in targets { await store.deleteKey(identity) } }
+                }
             }
 
             Section("Generate") {

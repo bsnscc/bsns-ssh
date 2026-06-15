@@ -25,10 +25,10 @@ struct RootView: View {
         .task { await maybeDevAutoConnect() }
     }
 
-    /// Headless integration hook: when launched with BSNS_DEV_AUTOCONNECT=1 and
-    /// a base64 Ed25519 key + host/user in the environment, connect straight to
-    /// a live shell. Used to verify the SSH path in the simulator without UI
-    /// automation. No effect in normal use.
+    /// Headless integration hook: BSNS_DEV_AUTOCONNECT=1 + a base64 Ed25519 key
+    /// + host/user in the environment connects straight to a live shell
+    /// (auto-trusting the host key). Used to verify the SSH path in the
+    /// simulator without UI automation. No effect in normal use.
     private func maybeDevAutoConnect() async {
         let env = ProcessInfo.processInfo.environment
         guard env["BSNS_DEV_AUTOCONNECT"] == "1",
@@ -41,8 +41,14 @@ struct RootView: View {
         let port = UInt16(env["BSNS_DEV_PORT"] ?? "22") ?? 22
         await store.agent.add(key)
         let shell = SSHShell()
+        var known = KnownHosts()
         do {
-            try await shell.connect(host: host, port: port, user: user, agent: store.agent)
+            do {
+                try await shell.connect(host: host, port: port, user: user, agent: store.agent, knownHosts: known)
+            } catch SSHShellError.unknownHostKey(let hostKey) {
+                known.trust(host: host, port: port, key: hostKey) // dev: auto-trust
+                try await shell.connect(host: host, port: port, user: user, agent: store.agent, knownHosts: known)
+            }
             devShell = shell
         } catch {
             print("dev autoconnect failed: \(error)")
