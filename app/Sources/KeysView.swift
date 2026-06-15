@@ -6,6 +6,9 @@ struct KeysView: View {
     @Environment(AgentStore.self) private var store
     @State private var copied: String?
     @State private var genError: String?
+    @State private var installTarget: InstallTarget?
+
+    private struct InstallTarget: Identifiable { let id = UUID(); let key: SSHPublicKey }
 
     var body: some View {
         List {
@@ -46,6 +49,12 @@ struct KeysView: View {
                             .buttonStyle(.borderless)
                             ShareLink(item: authorizedKeysLine(key)) {
                                 Label("Share", systemImage: "square.and.arrow.up")
+                            }
+                            .buttonStyle(.borderless)
+                            Button {
+                                installTarget = InstallTarget(key: key)
+                            } label: {
+                                Label("Install on a host…", systemImage: "key.horizontal")
                             }
                             .buttonStyle(.borderless)
                         }
@@ -96,5 +105,9 @@ struct KeysView: View {
         }
         .navigationTitle("Keys")
         .task { await store.refresh() }
+        .sheet(item: $installTarget) { target in
+            InstallKeyView(keyLines: [authorizedKeysLine(target.key)],
+                           keyLabel: "\(target.key.algorithm.rawValue)  ·  \(SSHKeyFormat.fingerprint(ofPublicKeyBlob: target.key.blob))")
+        }
     }
 }
