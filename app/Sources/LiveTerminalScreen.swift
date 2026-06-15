@@ -19,11 +19,15 @@ struct LiveTerminalScreen: View {
     @State private var handle = TerminalHandle()
     @State private var keyboardUp = false
     @State private var hwKeyboard = HardwareKeyboardMonitor()
+    @State private var showFind = false
+    @State private var findQuery = ""
+    @FocusState private var findFocused: Bool
 
     private var theme: TerminalTheme { TerminalTheme.named(themeId) }
 
     var body: some View {
         VStack(spacing: 0) {
+            if showFind { findBar }
             LiveTerminalContainer(shell: shell,
                                   fontSize: Binding(get: { CGFloat(fontSize) }, set: { fontSize = Double($0) }),
                                   themeId: themeId,
@@ -51,11 +55,48 @@ struct LiveTerminalScreen: View {
             }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { toggleFind() } label: { Image(systemName: "magnifyingglass") }
                     Button { setZoom(CGFloat(fontSize) - 1) } label: { Image(systemName: "textformat.size.smaller") }
                     Button { setZoom(CGFloat(fontSize) + 1) } label: { Image(systemName: "textformat.size.larger") }
                     settingsMenu
                 }
             }
+    }
+
+    private var findBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Find in output", text: $findQuery)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .focused($findFocused)
+                .submitLabel(.search)
+                .onSubmit { handle.find(findQuery) }
+                .onChange(of: findQuery) { _, q in handle.find(q) }
+            if !findQuery.isEmpty {
+                Text(handle.matchCount == 0 ? "none" : "\(handle.currentMatchOrdinal)/\(handle.matchCount)")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            Button { handle.findPrev() } label: { Image(systemName: "chevron.up") }
+                .disabled(handle.matchCount == 0)
+            Button { handle.findNext() } label: { Image(systemName: "chevron.down") }
+                .disabled(handle.matchCount == 0)
+            Button { closeFind() } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    private func toggleFind() {
+        if showFind { closeFind() } else { showFind = true; findFocused = true }
+    }
+
+    private func closeFind() {
+        showFind = false
+        findQuery = ""
+        handle.clearFind()
     }
 
     private var settingsMenu: some View {
@@ -99,6 +140,73 @@ final class TerminalHandle {
 
     func paste() { terminal?.paste(nil) }
     func selectAll() { terminal?.selectAll(nil) }
+
+    // MARK: Find in scrollback
+
+    private var matches: [Int] = []      // scroll-invariant rows containing the query
+    private var matchIndex = 0
+    private var linesTop = 0
+    private var maxYDisp = 0
+
+    /// Search the whole scrollback for `query`; scrolls to the last (most recent)
+    /// match and returns the total count. `getScrollInvariantLine` reads any line
+    /// regardless of the current scroll position, so this never disturbs the view.
+    @discardableResult
+    func find(_ query: String) -> Int {
+        matches = []
+        guard let t = terminal?.getTerminal(), !query.isEmpty else { return 0 }
+        let needle = query.lowercased()
+
+        var rows: [(row: Int, text: String)] = []
+        var started = false
+        var r = 0
+        let cap = 50_000
+        while r < cap {
+            if let line = t.getScrollInvariantLine(row: r) {
+                started = true
+                rows.append((r, line.translateToString(trimRight: true)))
+            } else if started {
+                break
+            }
+            r += 1
+        }
+        guard let first = rows.first, let last = rows.last else { return 0 }
+        linesTop = first.row
+        let lineCount = last.row - first.row + 1
+        maxYDisp = max(0, lineCount - t.rows)
+
+        matches = rows.filter { $0.text.lowercased().contains(needle) }.map(\.row)
+        matchIndex = matches.count - 1   // start at the most recent match
+        scrollToMatch()
+        return matches.count
+    }
+
+    /// 1-based position of the current match, or 0 if none.
+    var currentMatchOrdinal: Int { matches.isEmpty ? 0 : matchIndex + 1 }
+    var matchCount: Int { matches.count }
+
+    func findNext() { advance(by: 1) }
+    func findPrev() { advance(by: -1) }
+
+    private func advance(by delta: Int) {
+        guard !matches.isEmpty else { return }
+        matchIndex = (matchIndex + delta + matches.count) % matches.count
+        scrollToMatch()
+    }
+
+    private func scrollToMatch() {
+        guard !matches.isEmpty, let tv = terminal else { return }
+        let rows = tv.getTerminal().rows
+        // Land the match about a third from the top so context above is visible.
+        let target = min(max(0, matches[matchIndex] - linesTop - rows / 3), maxYDisp)
+        tv.scrollTo(row: target)
+        tv.setNeedsDisplay(tv.bounds)
+    }
+
+    func clearFind() {
+        matches = []
+        terminal?.scrollTo(row: maxYDisp)   // back to the live tail
+    }
 }
 
 /// SwiftTerm's `TerminalView` with font-size zoom via pinch and ⌘ keys.
