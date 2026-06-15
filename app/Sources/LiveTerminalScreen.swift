@@ -50,7 +50,7 @@ struct LiveTerminalScreen: View {
             .ignoresSafeArea(.container, edges: .bottom)
             .navigationTitle("")   // the tab bar shows the session name
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear { hwKeyboard.start() }
+            .onAppear { hwKeyboard.start(); devFindTest() }
             // Leaving the terminal (e.g. switching tabs) must NOT disconnect —
             // the session lives in the store until explicitly closed.
             .onDisappear { hwKeyboard.stop() }
@@ -158,6 +158,21 @@ struct LiveTerminalScreen: View {
     private func setZoom(_ size: CGFloat) {
         fontSize = Double(min(maxFontSize, max(minFontSize, size)))
     }
+
+    /// Dev hook: BSNS_DEV_FINDTEST=<term> auto-opens find on that term after
+    /// output arrives, so the match highlight can be screenshotted headlessly.
+    private func devFindTest() {
+        guard let term = ProcessInfo.processInfo.environment["BSNS_DEV_FINDTEST"], !term.isEmpty else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_800_000_000)   // let the shell prompt appear
+            let gen = "for i in $(seq 1 80); do echo \"line $i \(term)-$i marker\"; done\n"
+            session.write(Array(gen.utf8)[...])
+            try? await Task.sleep(nanoseconds: 2_500_000_000)   // let output arrive
+            showFind = true
+            findQuery = term
+            _ = handle.find(term)
+        }
+    }
 }
 
 /// Lets the SwiftUI toolbar reach into the live `TerminalView` for paste/select,
@@ -183,10 +198,19 @@ final class TerminalHandle {
 
     // MARK: Find in scrollback
 
-    private var matches: [Int] = []      // scroll-invariant rows containing the query
+    private struct FindMatch { let row: Int; let col: Int; let length: Int }
+    private var matches: [FindMatch] = []
     private var matchIndex = 0
     private var linesTop = 0
     private var maxYDisp = 0
+    @ObservationIgnored private var highlightView: UIView = {
+        let v = UIView()
+        v.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.42)
+        v.layer.cornerRadius = 2
+        v.isUserInteractionEnabled = false
+        v.isHidden = true
+        return v
+    }()
 
     /// Search the whole scrollback for `query`; scrolls to the last (most recent)
     /// match and returns the total count. `getScrollInvariantLine` reads any line
@@ -194,7 +218,7 @@ final class TerminalHandle {
     @discardableResult
     func find(_ query: String) -> Int {
         matches = []
-        guard let t = terminal?.getTerminal(), !query.isEmpty else { return 0 }
+        guard let t = terminal?.getTerminal(), !query.isEmpty else { hideHighlight(); return 0 }
         let needle = query.lowercased()
 
         var rows: [(row: Int, text: String)] = []
@@ -210,12 +234,16 @@ final class TerminalHandle {
             }
             r += 1
         }
-        guard let first = rows.first, let last = rows.last else { return 0 }
+        guard let first = rows.first, let last = rows.last else { hideHighlight(); return 0 }
         linesTop = first.row
         let lineCount = last.row - first.row + 1
         maxYDisp = max(0, lineCount - t.rows)
 
-        matches = rows.filter { $0.text.lowercased().contains(needle) }.map(\.row)
+        matches = rows.compactMap { row -> FindMatch? in
+            guard let range = row.text.lowercased().range(of: needle) else { return nil }
+            let col = row.text.distance(from: row.text.startIndex, to: range.lowerBound)
+            return FindMatch(row: row.row, col: col, length: needle.count)
+        }
         matchIndex = matches.count - 1   // start at the most recent match
         scrollToMatch()
         return matches.count
@@ -235,16 +263,46 @@ final class TerminalHandle {
     }
 
     private func scrollToMatch() {
-        guard !matches.isEmpty, let tv = terminal else { return }
+        guard !matches.isEmpty, let tv = terminal else { hideHighlight(); return }
         let rows = tv.getTerminal().rows
+        let match = matches[matchIndex]
         // Land the match about a third from the top so context above is visible.
-        let target = min(max(0, matches[matchIndex] - linesTop - rows / 3), maxYDisp)
+        let target = min(max(0, match.row - linesTop - rows / 3), maxYDisp)
         tv.scrollTo(row: target)
         tv.setNeedsDisplay(tv.bounds)
+        positionHighlight(match: match)
     }
+
+    /// Box the current match. The TerminalView is a UIScrollView, so the overlay
+    /// lives in CONTENT space (it scrolls with the text): content y = the match's
+    /// absolute buffer-line index × cell height. Cell metrics are computed exactly
+    /// as SwiftTerm's `computeFontDimensions`, so the box lines up with the cells.
+    private func positionHighlight(match: FindMatch) {
+        guard let tv = terminal else { hideHighlight(); return }
+        let cell = cellSize(font: tv.font)
+        let contentRow = match.row - linesTop
+        highlightView.frame = CGRect(
+            x: CGFloat(match.col) * cell.width,
+            y: CGFloat(contentRow) * cell.height,
+            width: CGFloat(match.length) * cell.width,
+            height: cell.height)
+        if highlightView.superview !== tv { tv.addSubview(highlightView) }
+        tv.bringSubviewToFront(highlightView)
+        highlightView.isHidden = false
+    }
+
+    private func cellSize(font: UIFont) -> CGSize {
+        let h = ceil(CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font))
+        let w = ("W" as NSString).size(withAttributes: [.font: font]).width
+        let scale = terminal?.window?.screen.scale ?? UIScreen.main.scale
+        return CGSize(width: ceil(w * scale) / scale, height: ceil(h * scale) / scale)
+    }
+
+    private func hideHighlight() { highlightView.isHidden = true }
 
     func clearFind() {
         matches = []
+        hideHighlight()
         terminal?.scrollTo(row: maxYDisp)   // back to the live tail
     }
 }
