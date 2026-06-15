@@ -16,7 +16,17 @@ class SshSession(
     private val pubBlob: ByteArray,
     private val signer: Any,
 ) {
+    // Output that arrives before a consumer attaches `onOutput` is buffered and
+    // flushed when it's set, so the initial banner/prompt is never dropped (the
+    // loop starts at open(), which may be before the UI wires up).
+    private val preBuffer = ArrayList<ByteArray>()
     var onOutput: ((ByteArray) -> Unit)? = null
+        set(value) {
+            synchronized(lock) {
+                field = value
+                if (value != null) { preBuffer.forEach(value); preBuffer.clear() }
+            }
+        }
     var onClosed: ((String?) -> Unit)? = null
 
     private val bridge = SshBridge()
@@ -63,7 +73,13 @@ class SshSession(
             resize?.let { bridge.nativeResize(handle, it.first, it.second) }
 
             when (val n = bridge.nativeRead(handle, buf)) {
-                in 1..Int.MAX_VALUE -> onOutput?.invoke(buf.copyOf(n))
+                in 1..Int.MAX_VALUE -> {
+                    val chunk = buf.copyOf(n)
+                    synchronized(lock) {
+                        val cb = onOutput
+                        if (cb != null) cb(chunk) else preBuffer.add(chunk)
+                    }
+                }
                 -1 -> { running.set(false) }
                 else -> Thread.sleep(10)   // no data right now
             }
