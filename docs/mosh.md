@@ -8,9 +8,25 @@ bridge it to our terminal.
 
 ## Status
 
-Foundation **proven** (build path de-risked), integration **not yet built**.
+**The entire mosh + protobuf C++ layer compiles for iOS arm64** (54 files: 30
+protobuf-lite + 24 mosh) — crypto (OCB/AES via CommonCrypto), the SSP network,
+state-sync, the terminal framebuffer model, the generated protobufs, and our own
+framebuffer→ANSI `Display`. The C++ port is de-risked end to end; what remains is
+the C++ wrapper, SwiftPM packaging, and the Swift session bridge.
 
-Verified so far:
+**Proven build recipe** (per-file clang, what the `CMosh` SPM target must mirror):
+`-std=c++17 -Imosh-src -Imosh-src/src/include -Iprotobuf -DHAVE_PTHREAD=1 -D_DARWIN_C_SOURCE=1`.
+- `config-ios.h` (→ `mosh-src/src/include/config.h`) hand-defines the autotools
+  HAVE_* macros for iOS + selects `USE_APPLE_COMMON_CRYPTO_AES=1`. Key gotchas: iOS
+  has no `<sys/random.h>`/getentropy → use `HAVE_URANDOM` (reads /dev/urandom);
+  `_DARWIN_C_SOURCE` is needed for `IP_TOS`/`NI_MAXHOST` in network.cc.
+- mosh's terminfo/curses `Display` is replaced by `display-ansi.cc` (full-repaint
+  framebuffer→ANSI via `Cell::get_renditions().sgr()` + `print_grapheme`); its
+  private `put_row`/`can_use_erase` are left undefined (never odr-used).
+- `terminaldisplay.h` is kept (clean header); `terminaldisplay.cc`,
+  `terminaldisplayinit.cc`, `pty_compat.*`, `ocb_openssl.cc` are dropped.
+
+Earlier groundwork (still true):
 - **Crypto needs no OpenSSL.** mosh builds with `--with-crypto-library=apple-common-crypto`
   and ships its own AES-OCB (`ocb_internal.cc`). We use Apple CommonCrypto + the
   internal OCB. `ocb_openssl.cc` is dropped.
@@ -61,13 +77,21 @@ gets roaming + resilience over UDP); fold in `terminaloverlay` afterwards.
 
 ## Remaining work (sequenced)
 
-1. Assemble `CMosh` SwiftPM target from `fetch-mosh.sh`; get protobuf-lite +
-   mosh `crypto`/`network`/`statesync`/`terminal`/`util` to compile for iOS.
-2. Write the `MoshClient` C++ wrapper around `Transport<UserStream, CompleteTerminal>`.
-3. Swift `MoshSession`: SSH bootstrap → parse `MOSH CONNECT` → UDP transport →
-   tick loop → framebuffer-diff ANSI → SwiftTerm; input → `pushInput`.
-4. UI: a "mosh" toggle on the connect form / a session badge.
-5. Predictive echo (`terminaloverlay`) as a follow-up.
+1. ✅ Sources compile for iOS (see Status — recipe + config-ios.h + display-ansi.cc).
+2. Write the `MoshClient` C++ wrapper around `Transport<UserStream, CompleteTerminal>`
+   (non-template, Swift-callable): create(ip,port,key) / tick / recv / pushInput /
+   currentFrameANSI (calls our Display::new_frame on `CompleteTerminal::get_fb()`).
+3. Assemble the `CMosh` SwiftPM target (all sources + the recipe flags as
+   cSettings/cxxSettings + a module map / `-cxx-interoperability-mode`). Confirm it
+   LINKS (Display symbols resolved; protobuf-lite arena/etc.).
+4. Swift `MoshSession`: SSH bootstrap (`SSHShell.runExec "mosh-server new -s -l ..."`)
+   → parse `MOSH CONNECT <port> <key>` → UDP transport → tick loop → ANSI → SwiftTerm;
+   input → `pushInput`. Parallel to `TerminalSession`.
+5. UI: a "mosh" toggle on the connect form / a session badge.
+6. Predictive echo (`terminaloverlay`) as a follow-up.
+
+Only steps 1 (done) and 3 (link) are verifiable off-device; the live session needs
+a real `mosh-server` + network, so 4–5 validate on Graham's device.
 
 Testing needs a real server running `mosh-server` and network roaming, so this
 lands and is validated on-device, not in the simulator.

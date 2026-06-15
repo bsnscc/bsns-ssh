@@ -31,13 +31,26 @@ grep -oE 'src/google/protobuf/[a-z_/]+\.cc' "$WORK/protobuf-$PB_VER/cmake/libpro
   cp "$WORK/protobuf-$PB_VER/$f" "$HERE/protobuf/${f#src/}"
 done
 
-echo "==> copying mosh sources (crypto/network/statesync/terminal/util) into mosh-src/"
-mkdir -p "$HERE/mosh-src"
+echo "==> copying mosh sources, preserving the src/ tree (includes are \"src/...\")"
+rm -rf "$HERE/mosh-src"
 for d in crypto network statesync terminal util; do
-  cp "$WORK/mosh/src/$d"/*.cc "$WORK/mosh/src/$d"/*.h "$HERE/mosh-src/" 2>/dev/null || true
+  mkdir -p "$HERE/mosh-src/src/$d"
+  cp "$WORK/mosh/src/$d"/*.cc "$WORK/mosh/src/$d"/*.h "$HERE/mosh-src/src/$d/" 2>/dev/null || true
 done
-# Drop the OpenSSL OCB variant + frontend-only/terminfo bits; keep internal OCB.
-rm -f "$HERE/mosh-src/ocb_openssl.cc"
+# Generated protobufs live under src/protobufs (mosh includes them that way).
+mkdir -p "$HERE/mosh-src/src/protobufs"
+cp "$HERE"/*.pb.cc "$HERE"/*.pb.h "$HERE/mosh-src/src/protobufs/" 2>/dev/null || true
+# Drop the OpenSSL OCB variant; drop mosh's terminfo/curses Display IMPLEMENTATION
+# and server PTY bits. We keep terminaldisplay.h (a clean header) and ship our own
+# terminaldisplay.cc (framebuffer→ANSI, no terminfo) from display-ansi.cc.
+rm -f "$HERE/mosh-src/src/crypto/ocb_openssl.cc"
+rm -f "$HERE/mosh-src/src/terminal/terminaldisplay.cc"
+rm -f "$HERE/mosh-src/src/terminal/terminaldisplayinit.cc"
+rm -f "$HERE/mosh-src/src/util/pty_compat.cc" "$HERE/mosh-src/src/util/pty_compat.h"
+cp "$HERE/display-ansi.cc" "$HERE/mosh-src/src/terminal/terminaldisplay.cc"
+# Hand-written iOS config.h (no autotools ./configure) goes at src/include/config.h.
+mkdir -p "$HERE/mosh-src/src/include"
+cp "$HERE/config-ios.h" "$HERE/mosh-src/src/include/config.h"
 
 echo "==> done. Source tree assembled under $HERE"
 rm -rf "$WORK"
