@@ -45,14 +45,28 @@ enum ConfigService {
         return bundle
     }
 
-    static func apply(_ bundle: ConfigBundle, hosts: HostStore, knownHosts: KnownHostsStore, agent: AgentStore) async {
-        hosts.merge(bundle.hosts)
-        knownHosts.merge(bundle.knownHosts)
-        bundle.settings.apply()
-        for k in bundle.keys ?? [] {
-            if let algo = KeyAlgorithm(rawValue: k.algorithm),
-               let key = try? FileKey.from(algorithm: algo, privateKeyMaterial: k.material, comment: k.comment) {
-                await agent.importKey(key)
+    /// What the user chose to import. Hosts and settings are low-risk and on by
+    /// default; the two security-sensitive categories are opt-in: importing
+    /// trusted host keys pre-trusts servers (bypassing the TOFU prompt), and
+    /// importing private keys loads extractable key material into the agent.
+    struct ImportSelection {
+        var hosts = true
+        var settings = true
+        var knownHosts = false
+        var keys = false
+    }
+
+    static func apply(_ bundle: ConfigBundle, selection: ImportSelection,
+                      hosts: HostStore, knownHosts: KnownHostsStore, agent: AgentStore) async {
+        if selection.hosts { hosts.merge(bundle.hosts) }
+        if selection.settings { bundle.settings.apply() }
+        if selection.knownHosts { knownHosts.merge(bundle.knownHosts) }
+        if selection.keys {
+            for k in bundle.keys ?? [] {
+                if let algo = KeyAlgorithm(rawValue: k.algorithm),
+                   let key = try? FileKey.from(algorithm: algo, privateKeyMaterial: k.material, comment: k.comment) {
+                    await agent.importKey(key)
+                }
             }
         }
     }

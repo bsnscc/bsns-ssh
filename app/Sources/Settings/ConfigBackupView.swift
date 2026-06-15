@@ -17,6 +17,7 @@ struct ConfigBackupView: View {
     @State private var pendingImport: Data?
     @State private var importPassphrase = ""
     @State private var askImportPassphrase = false
+    @State private var reviewItem: ReviewItem?
     @State private var status: String?
     @State private var statusIsError = false
 
@@ -41,7 +42,7 @@ struct ConfigBackupView: View {
             } header: {
                 Text("Import")
             } footer: {
-                Text("Merges hosts, settings, and trusted hosts from a bundle. Existing entries are kept.")
+                Text("Review what a bundle contains before merging. Trusted host keys and private keys are opt-in.")
             }
 
             if let status {
@@ -69,7 +70,16 @@ struct ConfigBackupView: View {
         } message: {
             Text("Enter the passphrase used to encrypt this file.")
         }
+        .sheet(item: $reviewItem) { item in
+            ImportReviewView(bundle: item.bundle) { selection in
+                applyImport(item.bundle, selection: selection)
+            }
+        }
     }
+
+    /// Identifiable wrapper so a decoded bundle can drive `.sheet(item:)` without
+    /// adding an `id` to the Codable wire format.
+    private struct ReviewItem: Identifiable { let id = UUID(); let bundle: ConfigBundle }
 
     private func startExport() {
         do {
@@ -95,25 +105,77 @@ struct ConfigBackupView: View {
         }
     }
 
+    /// Decode the picked file and present the review sheet — nothing is applied
+    /// until the user confirms a selection there.
     private func finishImport() {
         guard let data = pendingImport else { return }
         let pass = importPassphrase
+        do {
+            let bundle = try ConfigService.decode(data, passphrase: pass.isEmpty ? nil : pass)
+            reviewItem = ReviewItem(bundle: bundle)
+        } catch ConfigCryptoError.badPassphrase {
+            set("Wrong passphrase.", error: true)
+        } catch {
+            set("Import failed: \(error)", error: true)
+        }
+        pendingImport = nil; importPassphrase = ""
+    }
+
+    private func applyImport(_ bundle: ConfigBundle, selection: ConfigService.ImportSelection) {
         Task {
-            do {
-                let bundle = try ConfigService.decode(data, passphrase: pass.isEmpty ? nil : pass)
-                await ConfigService.apply(bundle, hosts: hosts, knownHosts: knownHosts, agent: agent)
-                let n = bundle.keys?.count ?? 0
-                set("Imported \(bundle.hosts.count) host(s)\(n > 0 ? ", \(n) key(s)" : "").", error: false)
-            } catch ConfigCryptoError.badPassphrase {
-                set("Wrong passphrase.", error: true)
-            } catch {
-                set("Import failed: \(error)", error: true)
-            }
-            pendingImport = nil; importPassphrase = ""
+            await ConfigService.apply(bundle, selection: selection, hosts: hosts, knownHosts: knownHosts, agent: agent)
+            var parts: [String] = []
+            if selection.hosts { parts.append("\(bundle.hosts.count) host(s)") }
+            if selection.knownHosts { parts.append("\(bundle.knownHosts.allEntries.count) trusted host(s)") }
+            if selection.keys { parts.append("\(bundle.keys?.count ?? 0) key(s)") }
+            set("Imported \(parts.isEmpty ? "settings" : parts.joined(separator: ", ")).", error: false)
         }
     }
 
     private func set(_ message: String, error: Bool) { status = message; statusIsError = error }
+}
+
+/// Shows what an import bundle contains and lets the user choose what to apply.
+/// Hosts + settings default on; trusted host keys and private keys are opt-in
+/// because each weakens a security guarantee (TOFU; key custody).
+struct ImportReviewView: View {
+    let bundle: ConfigBundle
+    let onImport: (ConfigService.ImportSelection) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var selection = ConfigService.ImportSelection()
+
+    private var trustedCount: Int { bundle.knownHosts.allEntries.count }
+    private var keyCount: Int { bundle.keys?.count ?? 0 }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Contents") {
+                    Toggle("\(bundle.hosts.count) saved host(s)", isOn: $selection.hosts)
+                        .disabled(bundle.hosts.isEmpty)
+                    Toggle("App settings", isOn: $selection.settings)
+                }
+                Section {
+                    Toggle("\(trustedCount) trusted host key(s)", isOn: $selection.knownHosts)
+                        .disabled(trustedCount == 0)
+                    Toggle("\(keyCount) private key(s)", isOn: $selection.keys)
+                        .disabled(keyCount == 0)
+                } header: {
+                    Text("Security-sensitive")
+                } footer: {
+                    Text("Trusted host keys pre-trust those servers, skipping the first-connection verification prompt. Private keys are added to your agent and can sign on your behalf. Only enable these for a bundle you created and trust.")
+                }
+            }
+            .navigationTitle("Review import")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Import") { onImport(selection); dismiss() }
+                }
+            }
+        }
+    }
 }
 
 /// A minimal Data-backed document for `fileExporter`.
