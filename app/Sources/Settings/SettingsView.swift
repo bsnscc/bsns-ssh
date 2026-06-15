@@ -12,8 +12,19 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.optionAsMeta) private var optionAsMeta = true
     @AppStorage(SettingsKey.pinchZoom) private var pinchZoom = true
     @AppStorage(SettingsKey.showKeyBar) private var showKeyBar = true
+    @AppStorage(SettingsKey.keepAliveInterval) private var keepAlive = 30
+    @AppStorage(SettingsKey.terminalType) private var terminalType = "xterm-256color"
+    @AppStorage(SettingsKey.appLock) private var appLock = false
 
     private let scrollbackOptions = [500, 1000, 2000, 5000, 10000]
+    private let keepAliveOptions = [15, 30, 60, 120]
+    private let termTypes = ["xterm-256color", "xterm", "vt100"]
+
+    private var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(v) (\(b))"
+    }
 
     var body: some View {
         Form {
@@ -52,6 +63,33 @@ struct SettingsView: View {
                 Text("Input")
             } footer: {
                 Text("Option as Meta sends Esc-prefixed keys for Alt shortcuts (vim, emacs, readline).")
+            }
+
+            Section("Sessions") {
+                Picker("Keep-alive", selection: $keepAlive) {
+                    ForEach(keepAliveOptions, id: \.self) { Text("\($0) sec").tag($0) }
+                }
+                Picker("Terminal type", selection: $terminalType) {
+                    ForEach(termTypes, id: \.self) { Text($0).tag($0) }
+                }
+            }
+
+            Section {
+                Toggle("Require Face ID / passcode to unlock", isOn: $appLock)
+                NavigationLink { KnownHostsView() } label: { Label("Known Hosts", systemImage: "checkmark.shield") }
+            } header: {
+                Text("Security")
+            }
+
+            Section {
+                Label("No accounts. No analytics. No telemetry. No location.", systemImage: "hand.raised.fill")
+                    .font(.callout)
+            } footer: {
+                Text("Nothing leaves this device except your SSH connections. Your keys are stored on-device and the hardware-backed ones can never be exported.")
+            }
+
+            Section("About") {
+                LabeledContent("Version", value: appVersion)
             }
         }
         .navigationTitle("Settings")

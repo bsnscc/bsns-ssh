@@ -58,6 +58,11 @@ public struct KnownHosts: Sendable, Equatable, Codable {
 
     public var allEntries: [String: HostKey] { entries }
 
+    /// Forget a trusted host by its identifier (a key from `allEntries`).
+    public mutating func forget(_ identifier: String) {
+        entries[identifier] = nil
+    }
+
     /// OpenSSH-style host identifier: bare host on port 22, else `[host]:port`.
     static func identifier(_ host: String, _ port: UInt16) -> String {
         port == 22 ? host : "[\(host)]:\(port)"

@@ -58,4 +58,11 @@ final class KnownHostsStore {
         knownHosts = updated
         try? JSONEncoder().encode(knownHosts).write(to: url)
     }
+
+    func forget(_ identifier: String) {
+        var updated = knownHosts
+        updated.forget(identifier)
+        knownHosts = updated
+        try? JSONEncoder().encode(knownHosts).write(to: url)
+    }
 }

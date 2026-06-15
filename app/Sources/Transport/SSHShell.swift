@@ -214,16 +214,18 @@ public final class SSHShell: @unchecked Sendable {
         }
         self.channel = channel
 
-        let pty = "xterm-256color".withCString {
+        let termType = UserDefaults.standard.string(forKey: "session.terminalType") ?? "xterm-256color"
+        let pty = termType.withCString {
             libssh2_channel_request_pty_ex(channel, $0, UInt32(strlen($0)), nil, 0, cols, rows, 0, 0)
         }
         guard pty == 0 else { throw SSHShellError.ptyFailed }
         guard libssh2_channel_process_startup(channel, "shell", 5, nil, 0) == 0 else { throw SSHShellError.shellFailed }
 
         libssh2_session_set_blocking(session, 0) // non-blocking for the I/O loop
-        // Server-replied keepalives every 30s keep NAT/firewall mappings alive
-        // and let us notice a dead peer instead of hanging on a silent socket.
-        libssh2_keepalive_config(session, 1, 30)
+        // Server-replied keepalives keep NAT/firewall mappings alive and let us
+        // notice a dead peer instead of hanging on a silent socket.
+        let keepAlive = UserDefaults.standard.integer(forKey: "session.keepAliveInterval")
+        libssh2_keepalive_config(session, 1, UInt32(keepAlive > 0 ? keepAlive : 30))
 
         var fds: [Int32] = [-1, -1]
         if pipe(&fds) == 0 {

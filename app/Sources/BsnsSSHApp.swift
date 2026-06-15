@@ -12,12 +12,14 @@ struct BsnsSSHApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environment(store)
-                .environment(hosts)
-                .environment(knownHosts)
-                .environment(sessions)
-                .environment(surfaces)
+            LockGate {
+                RootView()
+                    .environment(store)
+                    .environment(hosts)
+                    .environment(knownHosts)
+                    .environment(sessions)
+                    .environment(surfaces)
+            }
         }
     }
 }

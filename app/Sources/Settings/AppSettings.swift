@@ -15,6 +15,9 @@ enum SettingsKey {
     static let optionAsMeta = "input.optionAsMeta"
     static let pinchZoom = "input.pinchZoom"
     static let showKeyBar = "input.showKeyBar"
+    static let keepAliveInterval = "session.keepAliveInterval"
+    static let terminalType = "session.terminalType"
+    static let appLock = "security.appLock"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -29,6 +32,9 @@ enum SettingsKey {
             optionAsMeta: true,
             pinchZoom: true,
             showKeyBar: true,
+            keepAliveInterval: 30,
+            terminalType: "xterm-256color",
+            appLock: false,
         ])
     }
 }
