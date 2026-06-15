@@ -15,7 +15,7 @@ struct ConnectView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var notice: String?
-    @State private var activeShell: SSHShell?
+    @State private var activeSession: TerminalSession?
     @State private var showTerminal = false
     @State private var pendingHostKey: HostKey?
     @State private var pendingAction: PendingAction = .connect
@@ -81,8 +81,8 @@ struct ConnectView: View {
             if !hostStore.hosts.isEmpty { EditButton() }
         }
         .navigationDestination(isPresented: $showTerminal) {
-            if let activeShell {
-                LiveTerminalScreen(shell: activeShell, title: "\(user)@\(host)")
+            if let activeSession {
+                LiveTerminalScreen(session: activeSession)
             }
         }
         .alert("Unknown host key", isPresented: Binding(get: { pendingHostKey != nil }, set: { if !$0 { pendingHostKey = nil } })) {
@@ -109,7 +109,16 @@ struct ConnectView: View {
             do {
                 try await shell.connect(host: host, port: portValue, user: user, agent: store.agent,
                                         knownHosts: known, password: pw)
-                await MainActor.run { busy = false; activeShell = shell; showTerminal = true }
+                await MainActor.run {
+                    busy = false
+                    let spec = TerminalSession.Spec(host: host, port: portValue, user: user,
+                                                    password: pw, agent: store.agent,
+                                                    knownHosts: knownHostsStore.knownHosts)
+                    let s = TerminalSession(spec: spec, title: "\(user)@\(host)")
+                    s.adopt(shell)
+                    activeSession = s
+                    showTerminal = true
+                }
             } catch let e as SSHShellError {
                 await MainActor.run { busy = false; handle(e, action: .connect) }
             } catch {

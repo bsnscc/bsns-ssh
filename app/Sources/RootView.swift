@@ -3,13 +3,13 @@ import BsnsSSHCore
 
 struct RootView: View {
     @Environment(AgentStore.self) private var store
-    @State private var devShell: SSHShell?
+    @State private var devSession: TerminalSession?
 
     var body: some View {
         Group {
-            if let devShell {
+            if let devSession {
                 NavigationStack {
-                    LiveTerminalScreen(shell: devShell, title: "dev")
+                    LiveTerminalScreen(session: devSession)
                 }
             } else {
                 TabView {
@@ -58,7 +58,13 @@ struct RootView: View {
                 known.trust(host: host, port: port, key: hostKey) // dev: auto-trust
                 try await shell.connect(host: host, port: port, user: user, agent: store.agent, knownHosts: known)
             }
-            devShell = shell
+            // Reconnect via the agent key (now installed), not the bootstrap password.
+            let spec = TerminalSession.Spec(host: host, port: port, user: user,
+                                            password: nil, agent: store.agent,
+                                            knownHosts: known)
+            let session = TerminalSession(spec: spec, title: "dev")
+            session.adopt(shell)
+            devSession = session
         } catch {
             print("dev autoconnect failed: \(error)")
         }

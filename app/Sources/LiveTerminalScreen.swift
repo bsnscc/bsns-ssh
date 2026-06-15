@@ -6,11 +6,10 @@ private let minFontSize: CGFloat = 8
 private let maxFontSize: CGFloat = 30
 private let defaultFontSize: CGFloat = 15
 
-/// A terminal bound to a live `SSHShell`: zoom (pinch, ⌘+/⌘-/⌘0, buttons),
-/// theme + font selection, and copy/paste.
+/// A terminal bound to a `TerminalSession`: zoom (pinch, ⌘+/⌘-/⌘0, buttons),
+/// theme + font selection, copy/paste, find, and reconnect-on-drop.
 struct LiveTerminalScreen: View {
-    let shell: SSHShell
-    let title: String
+    let session: TerminalSession
 
     @AppStorage("terminal.fontSize") private var fontSize: Double = Double(defaultFontSize)
     @AppStorage("terminal.themeId") private var themeId: String = TerminalTheme.bsnsDark.id
@@ -28,7 +27,8 @@ struct LiveTerminalScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             if showFind { findBar }
-            LiveTerminalContainer(shell: shell,
+            statusBanner
+            LiveTerminalContainer(session: session,
                                   fontSize: Binding(get: { CGFloat(fontSize) }, set: { fontSize = Double($0) }),
                                   themeId: themeId,
                                   fontFamily: fontFamily,
@@ -39,14 +39,14 @@ struct LiveTerminalScreen: View {
             // keyboard it collapses to just Esc (see TerminalKeyBar.minimal).
             if !keyboardUp {
                 Divider().overlay(Color(theme.ansi[8].uiColor).opacity(0.5))
-                TerminalKeyBar(shell: shell, handle: handle, theme: theme, minimal: hwKeyboard.isConnected)
+                TerminalKeyBar(session: session, handle: handle, theme: theme, minimal: hwKeyboard.isConnected)
             }
         }
             .ignoresSafeArea(.container, edges: .bottom)
-            .navigationTitle(title)
+            .navigationTitle(session.title)
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { hwKeyboard.start() }
-            .onDisappear { hwKeyboard.stop(); shell.disconnect() }
+            .onDisappear { hwKeyboard.stop(); session.disconnect() }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                 keyboardUp = true
             }
@@ -61,6 +61,32 @@ struct LiveTerminalScreen: View {
                     settingsMenu
                 }
             }
+    }
+
+    @ViewBuilder private var statusBanner: some View {
+        switch session.status {
+        case .connected:
+            EmptyView()
+        case .connecting:
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Reconnecting…").font(.callout)
+                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(.bar)
+        case .disconnected(let reason):
+            HStack(spacing: 10) {
+                Image(systemName: "bolt.horizontal.circle.fill").foregroundStyle(.orange)
+                Text(reason.map { "Disconnected — \($0)" } ?? "Disconnected")
+                    .font(.callout).lineLimit(2)
+                Spacer()
+                Button("Reconnect") { session.reconnect() }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(.bar)
+        }
     }
 
     private var findBar: some View {
@@ -276,14 +302,14 @@ final class ZoomableTerminalView: TerminalView {
 }
 
 struct LiveTerminalContainer: UIViewRepresentable {
-    let shell: SSHShell
+    let session: TerminalSession
     @Binding var fontSize: CGFloat
     let themeId: String
     let fontFamily: String
     let hardwareKeyboard: Bool
     let handle: TerminalHandle
 
-    func makeCoordinator() -> Coordinator { Coordinator(shell: shell, fontSize: $fontSize) }
+    func makeCoordinator() -> Coordinator { Coordinator(session: session, fontSize: $fontSize) }
 
     func makeUIView(context: Context) -> ZoomableTerminalView {
         let terminal = ZoomableTerminalView(frame: .zero, font: nil)
@@ -311,18 +337,20 @@ struct LiveTerminalContainer: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, TerminalViewDelegate {
-        let shell: SSHShell
+        let session: TerminalSession
         let fontSize: Binding<CGFloat>
         var appliedThemeId: String?
 
-        init(shell: SSHShell, fontSize: Binding<CGFloat>) {
-            self.shell = shell
+        init(session: TerminalSession, fontSize: Binding<CGFloat>) {
+            self.session = session
             self.fontSize = fontSize
             super.init()
         }
 
         func attach(_ terminal: ZoomableTerminalView) {
-            shell.onOutput = { [weak terminal] bytes in
+            // The session forwards output from whichever shell is current, so a
+            // reconnect swaps the underlying shell without re-attaching here.
+            session.onOutput = { [weak terminal] bytes in
                 DispatchQueue.main.async {
                     guard let terminal else { return }
                     terminal.feed(byteArray: bytes)
@@ -330,22 +358,14 @@ struct LiveTerminalContainer: UIViewRepresentable {
                     terminal.setNeedsDisplay(terminal.bounds)
                 }
             }
-            shell.onClosed = { [weak terminal] in
-                DispatchQueue.main.async {
-                    guard let terminal else { return }
-                    terminal.feed(text: "\r\n[connection closed]\r\n")
-                    terminal.getTerminal().updateFullScreen()
-                    terminal.setNeedsDisplay(terminal.bounds)
-                }
-            }
         }
 
         func send(source: TerminalView, data: ArraySlice<UInt8>) {
-            shell.write(data)
+            session.write(data)
         }
 
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-            shell.resize(cols: Int32(newCols), rows: Int32(newRows))
+            session.resize(cols: Int32(newCols), rows: Int32(newRows))
         }
 
         func setTerminalTitle(source: TerminalView, title: String) {}

@@ -7,7 +7,7 @@ import SwiftTerm
 /// attached (iPad) where the soft-keyboard accessory never appears. On iPhone
 /// it hides while the soft keyboard is up, leaving SwiftTerm's own accessory.
 struct TerminalKeyBar: View {
-    let shell: SSHShell
+    let session: TerminalSession
     let handle: TerminalHandle
     let theme: TerminalTheme
     /// When a physical keyboard is attached, collapse to just Esc — the one key
@@ -96,6 +96,6 @@ struct TerminalKeyBar: View {
         case .text(let s):
             bytes = Array(s.utf8)
         }
-        shell.write(bytes[...])
+        session.write(bytes[...])
     }
 }

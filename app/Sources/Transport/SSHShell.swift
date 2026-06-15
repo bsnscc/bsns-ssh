@@ -74,7 +74,9 @@ private let agentSignCallback: @convention(c) (
 /// via `write` and receives output via `onOutput`.
 public final class SSHShell: @unchecked Sendable {
     public var onOutput: (@Sendable (ArraySlice<UInt8>) -> Void)?
-    public var onClosed: (@Sendable () -> Void)?
+    /// Called once when the loop ends. The argument is the drop reason, or `nil`
+    /// for a clean close (remote EOF or a user-initiated `disconnect`).
+    public var onClosed: (@Sendable (String?) -> Void)?
 
     private let queue = DispatchQueue(label: "cc.bsns.ssh.shell")
     private let lock = NSLock()
@@ -82,6 +84,8 @@ public final class SSHShell: @unchecked Sendable {
     private var channel: OpaquePointer?
     private var fd: Int32 = -1
     private var running = false
+    private var userClosed = false
+    private var closeReason: String?
     private var pendingWrite = Data()
     private var pendingResize: (cols: Int32, rows: Int32)?
     private var bridge: AgentSignBridge? // kept alive for the auth call
@@ -129,7 +133,7 @@ public final class SSHShell: @unchecked Sendable {
     }
 
     public func disconnect() {
-        lock.lock(); running = false; lock.unlock()
+        lock.lock(); running = false; userClosed = true; lock.unlock()
         wake()
     }
 
@@ -180,6 +184,9 @@ public final class SSHShell: @unchecked Sendable {
         guard libssh2_channel_process_startup(channel, "shell", 5, nil, 0) == 0 else { throw SSHShellError.shellFailed }
 
         libssh2_session_set_blocking(session, 0) // non-blocking for the I/O loop
+        // Server-replied keepalives every 30s keep NAT/firewall mappings alive
+        // and let us notice a dead peer instead of hanging on a silent socket.
+        libssh2_keepalive_config(session, 1, 30)
 
         var fds: [Int32] = [-1, -1]
         if pipe(&fds) == 0 {
@@ -303,10 +310,11 @@ public final class SSHShell: @unchecked Sendable {
                 } else if n == LIBSSH2_ERROR_EAGAIN {
                     break
                 } else {
-                    stop(); break
+                    fail(session, "connection lost"); break
                 }
             }
-            if libssh2_channel_eof(channel) != 0 { stop(); break }
+            if !isRunning() { break }
+            if libssh2_channel_eof(channel) != 0 { stop(); break } // clean remote close
 
             // Drain pending writes.
             lock.lock(); let out = pendingWrite; pendingWrite.removeAll(keepingCapacity: true); lock.unlock()
@@ -317,10 +325,11 @@ public final class SSHShell: @unchecked Sendable {
                     while sent < out.count {
                         let w = libssh2_channel_write_ex(channel, 0, base + sent, out.count - sent)
                         if w == LIBSSH2_ERROR_EAGAIN { break }
-                        if w < 0 { stop(); break }
+                        if w < 0 { fail(session, "connection lost (write)"); break }
                         sent += w
                     }
                 }
+                if !isRunning() { break }
                 if sent < out.count { // requeue the unsent tail
                     lock.lock(); pendingWrite = out.suffix(out.count - sent) + pendingWrite; lock.unlock()
                 }
@@ -330,10 +339,27 @@ public final class SSHShell: @unchecked Sendable {
             lock.lock(); let resize = pendingResize; pendingResize = nil; lock.unlock()
             if let resize { libssh2_channel_request_pty_size_ex(channel, resize.cols, resize.rows, 0, 0) }
 
+            // Send a keepalive if one is due; a hard failure means a dead peer.
+            var secondsToNext: Int32 = 0
+            let ka = libssh2_keepalive_send(session, &secondsToNext)
+            if ka < 0 && ka != Int32(LIBSSH2_ERROR_EAGAIN) { fail(session, "connection timed out"); break }
+
             waitSocket(session: session, timeoutMs: 30)
         }
         teardown()
-        onClosed?()
+        let reason: String? = { lock.lock(); defer { lock.unlock() }; return userClosed ? nil : closeReason }()
+        onClosed?(reason)
+    }
+
+    /// Record a drop reason (libssh2's last error if available) and stop the loop.
+    private func fail(_ session: OpaquePointer, _ fallback: String) {
+        var message: UnsafeMutablePointer<CChar>?
+        _ = libssh2_session_last_error(session, &message, nil, 0)
+        let detail = message.map { String(cString: $0) }.flatMap { $0.isEmpty ? nil : $0 }
+        lock.lock()
+        if closeReason == nil { closeReason = detail ?? fallback }
+        running = false
+        lock.unlock()
     }
 
     private func waitSocket(session: OpaquePointer, timeoutMs: Int32) {
