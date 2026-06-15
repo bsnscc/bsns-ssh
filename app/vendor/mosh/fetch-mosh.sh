@@ -26,7 +26,7 @@ echo "==> copying protobuf-lite runtime (32 .cc + headers) into protobuf/"
 mkdir -p "$HERE/protobuf"
 rsync -a --include='*/' --include='*.h' --include='*.inc' --exclude='*' \
   "$WORK/protobuf-$PB_VER/src/google" "$HERE/protobuf/"
-grep -oE 'src/google/protobuf/[a-z_/]+\.cc' "$WORK/protobuf-$PB_VER/cmake/libprotobuf-lite.cmake" | sort -u | while read -r f; do
+grep -oE 'src/google/protobuf/[a-z0-9_/]+\.cc' "$WORK/protobuf-$PB_VER/cmake/libprotobuf-lite.cmake" | sort -u | while read -r f; do
   mkdir -p "$HERE/protobuf/$(dirname "${f#src/}")"
   cp "$WORK/protobuf-$PB_VER/$f" "$HERE/protobuf/${f#src/}"
 done

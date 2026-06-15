@@ -1,0 +1,40 @@
+// A plain-C interface over mosh's C++ client transport, so Swift can drive a
+// mosh session without C++ interop. Implemented in moshclient.cpp.
+#ifndef BSNS_MOSHCLIENT_H
+#define BSNS_MOSHCLIENT_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct MoshClient MoshClient;
+
+/// Open a mosh client to ip:port using the base64 session key from
+/// `mosh-server`'s "MOSH CONNECT" line. Returns a handle (check last_error).
+MoshClient* mosh_client_create(const char* ip, const char* port, const char* key, int cols, int rows);
+void mosh_client_free(MoshClient* c);
+
+/// The UDP socket to poll for readability.
+int mosh_client_fd(MoshClient* c);
+/// Suggested poll timeout (ms) before the next tick is due.
+int mosh_client_wait_ms(MoshClient* c);
+
+/// Process an incoming datagram (call when the socket is readable).
+void mosh_client_recv(MoshClient* c);
+/// Send any pending local state / keepalive.
+void mosh_client_tick(MoshClient* c);
+
+/// Queue local input bytes / a terminal resize to send to the server.
+void mosh_client_push(MoshClient* c, const char* bytes, int len);
+void mosh_client_resize(MoshClient* c, int cols, int rows);
+
+/// If the remote terminal state advanced, returns a malloc'd ANSI frame (caller
+/// frees) to feed the terminal; otherwise NULL.
+char* mosh_client_drain_ansi(MoshClient* c);
+
+const char* mosh_client_last_error(MoshClient* c);
+
+#ifdef __cplusplus
+}
+#endif
+#endif
