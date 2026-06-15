@@ -44,6 +44,9 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Connecting to LAN / tailnet SSH hosts trips iOS's local-network gate.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Connect to SSH servers on your local network."
+        # Ships only standard/exempt encryption (SSH via OpenSSL) — declare it
+        # so App Store Connect never re-asks the encryption questionnaire.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         # Signing for device + TestFlight (Graham Saathoff's team).
         DEVELOPMENT_TEAM: "4L394FY4WC"
         CODE_SIGN_STYLE: Automatic
