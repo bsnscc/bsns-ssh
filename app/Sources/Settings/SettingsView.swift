@@ -81,6 +81,12 @@ struct SettingsView: View {
                 Text("Security")
             }
 
+            Section("Backup") {
+                NavigationLink { ConfigBackupView() } label: {
+                    Label("Import / Export", systemImage: "square.and.arrow.up.on.square")
+                }
+            }
+
             Section {
                 Label("No accounts. No analytics. No telemetry. No location.", systemImage: "hand.raised.fill")
                     .font(.callout)

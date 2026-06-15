@@ -34,6 +34,13 @@ final class HostStore {
     func add(_ host: SavedHost) { hosts.append(host); save() }
     func remove(_ host: SavedHost) { hosts.removeAll { $0.id == host.id }; save() }
 
+    /// Add imported hosts, skipping ones that already match by host/port/user.
+    func merge(_ incoming: [SavedHost]) {
+        let existing = Set(hosts.map { "\($0.user)@\($0.host):\($0.port)" })
+        for h in incoming where !existing.contains("\(h.user)@\(h.host):\(h.port)") { hosts.append(h) }
+        save()
+    }
+
     private func save() { try? JSONEncoder().encode(hosts).write(to: url) }
 }
 
@@ -63,6 +70,12 @@ final class KnownHostsStore {
         var updated = knownHosts
         updated.forget(identifier)
         knownHosts = updated
+        try? JSONEncoder().encode(knownHosts).write(to: url)
+    }
+
+    /// Union imported trusted hosts into ours (existing entries win on conflict).
+    func merge(_ incoming: KnownHosts) {
+        knownHosts = KnownHosts(entries: incoming.allEntries.merging(knownHosts.allEntries) { _, mine in mine })
         try? JSONEncoder().encode(knownHosts).write(to: url)
     }
 }

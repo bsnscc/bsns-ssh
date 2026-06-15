@@ -31,6 +31,18 @@ final class AgentStore {
         await refresh()
     }
 
+    /// Software keys currently held (for export).
+    func exportableKeys() -> [FileKey] { KeyStore.loadAll() }
+
+    /// Import a software key from a config bundle, skipping duplicates.
+    func importKey(_ key: FileKey) async {
+        let existing = Set(identities.map { SSHKeyFormat.fingerprint(ofPublicKeyBlob: $0.blob) })
+        guard !existing.contains(SSHKeyFormat.fingerprint(ofPublicKeyBlob: key.publicKey.blob)) else { return }
+        KeyStore.save(key)
+        await agent.add(key)
+        await refresh()
+    }
+
     func deleteKey(_ identity: SSHPublicKey) async {
         let id = KeyID(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
         KeyStore.delete(id)
