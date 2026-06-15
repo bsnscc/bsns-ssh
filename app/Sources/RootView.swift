@@ -1,12 +1,51 @@
 import SwiftUI
+import BsnsSSHCore
 
 struct RootView: View {
+    @Environment(AgentStore.self) private var store
+    @State private var devShell: SSHShell?
+
     var body: some View {
-        TabView {
-            NavigationStack { KeysView() }
-                .tabItem { Label("Keys", systemImage: "key.fill") }
-            NavigationStack { TerminalScreen() }
-                .tabItem { Label("Terminal", systemImage: "terminal.fill") }
+        Group {
+            if let devShell {
+                NavigationStack {
+                    LiveTerminalScreen(shell: devShell, title: "dev")
+                }
+            } else {
+                TabView {
+                    NavigationStack { KeysView() }
+                        .tabItem { Label("Keys", systemImage: "key.fill") }
+                    NavigationStack { ConnectView() }
+                        .tabItem { Label("Connect", systemImage: "network") }
+                    NavigationStack { TerminalScreen() }
+                        .tabItem { Label("Demo", systemImage: "terminal.fill") }
+                }
+            }
+        }
+        .task { await maybeDevAutoConnect() }
+    }
+
+    /// Headless integration hook: when launched with BSNS_DEV_AUTOCONNECT=1 and
+    /// a base64 Ed25519 key + host/user in the environment, connect straight to
+    /// a live shell. Used to verify the SSH path in the simulator without UI
+    /// automation. No effect in normal use.
+    private func maybeDevAutoConnect() async {
+        let env = ProcessInfo.processInfo.environment
+        guard env["BSNS_DEV_AUTOCONNECT"] == "1",
+              let keyB64 = env["BSNS_DEV_KEY"],
+              let material = Data(base64Encoded: keyB64),
+              let host = env["BSNS_DEV_HOST"],
+              let user = env["BSNS_DEV_USER"],
+              let key = try? FileKey.from(algorithm: .ed25519, privateKeyMaterial: material)
+        else { return }
+        let port = UInt16(env["BSNS_DEV_PORT"] ?? "22") ?? 22
+        await store.agent.add(key)
+        let shell = SSHShell()
+        do {
+            try await shell.connect(host: host, port: port, user: user, agent: store.agent)
+            devShell = shell
+        } catch {
+            print("dev autoconnect failed: \(error)")
         }
     }
 }

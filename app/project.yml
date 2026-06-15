@@ -10,6 +10,11 @@ packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     from: "1.13.0"
+  CSSH:
+    # Vendored locally (vendor/CSSH/CSSH.xcframework) — xcodebuild's package
+    # downloader stalls on the GitHub release asset in this environment, so we
+    # fetch it ourselves (vendor/fetch-cssh.sh) and reference it by path.
+    path: vendor/CSSH
 targets:
   BsnsSSH:
     type: application
@@ -21,6 +26,8 @@ targets:
         product: BsnsSSHCore
       - package: SwiftTerm
         product: SwiftTerm
+      - package: CSSH
+        product: CSSH
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cc.bsns.ssh
