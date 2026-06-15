@@ -10,6 +10,9 @@ struct TerminalKeyBar: View {
     let shell: SSHShell
     let handle: TerminalHandle
     let theme: TerminalTheme
+    /// When a physical keyboard is attached, collapse to just Esc — the one key
+    /// most iPad keyboards lack. The rest (Ctrl, Tab, arrows, …) are on the keyboard.
+    var minimal: Bool = false
 
     private enum Key: Hashable {
         case esc, tab
@@ -28,7 +31,9 @@ struct TerminalKeyBar: View {
         let wide: Bool
     }
 
-    private let items: [Item] = [
+    private var items: [Item] { minimal ? [Item(label: "esc", key: .esc, wide: true)] : fullItems }
+
+    private let fullItems: [Item] = [
         Item(label: "esc", key: .esc, wide: true),
         Item(label: "tab", key: .tab, wide: true),
         Item(label: "⌃C", key: .ctrl("c"), wide: false),
