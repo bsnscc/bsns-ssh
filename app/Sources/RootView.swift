@@ -43,6 +43,17 @@ struct RootView: View {
         let shell = SSHShell()
         var known = KnownHosts()
         do {
+            // If a password is supplied, exercise ssh-copy-id first (install the
+            // key via password), then connect with the now-installed key.
+            if let password = env["BSNS_DEV_PASSWORD"], !password.isEmpty {
+                let lines = [authorizedKeysLine(key.publicKey)]
+                do {
+                    try await SSHShell.installPublicKeys(lines, host: host, port: port, user: user, password: password, knownHosts: known)
+                } catch SSHShellError.unknownHostKey(let hostKey) {
+                    known.trust(host: host, port: port, key: hostKey)
+                    try await SSHShell.installPublicKeys(lines, host: host, port: port, user: user, password: password, knownHosts: known)
+                }
+            }
             do {
                 try await shell.connect(host: host, port: port, user: user, agent: store.agent, knownHosts: known)
             } catch SSHShellError.unknownHostKey(let hostKey) {

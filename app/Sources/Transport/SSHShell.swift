@@ -17,7 +17,7 @@ public enum SSHShellError: Error {
     case libssh2Init, connectFailed, sessionInit, handshakeFailed
     case noHostKey, unknownHostKey(HostKey), hostKeyMismatch(String, String)
     case noIdentities, authFailed(String)
-    case channelOpenFailed, ptyFailed, shellFailed
+    case channelOpenFailed, ptyFailed, shellFailed, execFailed(String)
 }
 
 /// Bridges libssh2's synchronous sign-callback to the async Agent: blocks the
@@ -93,14 +93,17 @@ public final class SSHShell: @unchecked Sendable {
     /// `onOutput`). `knownHosts` mismatches are refused.
     public func connect(host: String, port: UInt16, user: String, agent: Agent,
                         cols: Int32 = 80, rows: Int32 = 24,
-                        knownHosts: KnownHosts = KnownHosts()) async throws {
+                        knownHosts: KnownHosts = KnownHosts(),
+                        password: String? = nil) async throws {
+        let usingPassword = !(password ?? "").isEmpty
         let identities = await agent.identities()
-        guard !identities.isEmpty else { throw SSHShellError.noIdentities }
+        guard usingPassword || !identities.isEmpty else { throw SSHShellError.noIdentities }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             queue.async {
                 do {
                     try self.setup(host: host, port: port, user: user, agent: agent,
-                                   identities: identities, cols: cols, rows: rows, knownHosts: knownHosts)
+                                   identities: identities, cols: cols, rows: rows,
+                                   knownHosts: knownHosts, password: password)
                     cont.resume()
                     self.runLoop()
                 } catch {
@@ -126,7 +129,8 @@ public final class SSHShell: @unchecked Sendable {
     // MARK: setup (blocking)
 
     private func setup(host: String, port: UInt16, user: String, agent: Agent,
-                       identities: [SSHPublicKey], cols: Int32, rows: Int32, knownHosts: KnownHosts) throws {
+                       identities: [SSHPublicKey], cols: Int32, rows: Int32, knownHosts: KnownHosts,
+                       password: String?) throws {
         guard libssh2_init(0) == 0 else { throw SSHShellError.libssh2Init }
         guard let fd = Self.tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
         self.fd = fd
@@ -147,7 +151,11 @@ public final class SSHShell: @unchecked Sendable {
             throw SSHShellError.hostKeyMismatch(stored, presented)
         }
 
-        try authenticate(session, user: user, identities: identities, agent: agent, host: host)
+        if let password, !password.isEmpty {
+            try Self.passwordAuth(session, user: user, password: password)
+        } else {
+            try authenticate(session, user: user, identities: identities, agent: agent, host: host)
+        }
 
         guard let channel = libssh2_channel_open_ex(session, "session", 7, 2 * 1024 * 1024, 32768, nil, 0) else {
             throw SSHShellError.channelOpenFailed
@@ -186,6 +194,81 @@ public final class SSHShell: @unchecked Sendable {
             lastError = message.map { String(cString: $0) } ?? "rc=\(rc)"
         }
         throw SSHShellError.authFailed(lastError)
+    }
+
+    static func passwordAuth(_ session: OpaquePointer, user: String, password: String) throws {
+        let rc = user.withCString { cuser in
+            password.withCString { cpass in
+                libssh2_userauth_password_ex(session, cuser, UInt32(strlen(cuser)), cpass, UInt32(strlen(cpass)), nil)
+            }
+        }
+        if rc != 0 {
+            var message: UnsafeMutablePointer<CChar>?
+            _ = libssh2_session_last_error(session, &message, nil, 0)
+            throw SSHShellError.authFailed(message.map { String(cString: $0) } ?? "password rejected")
+        }
+    }
+
+    /// ssh-copy-id: connect with a password and append the given public-key
+    /// lines to the server's ~/.ssh/authorized_keys (deduped). The keys are
+    /// base64-wrapped to keep them clear of shell quoting.
+    public static func installPublicKeys(_ lines: [String], host: String, port: UInt16, user: String,
+                                         password: String, knownHosts: KnownHosts = KnownHosts()) async throws {
+        // Single-quote each line (escaping any embedded quote) so spaces and
+        // base64 are shell-safe without relying on base64 -d (which differs on
+        // macOS/BSD servers). Append each line only if not already present.
+        let quoted = lines
+            .map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+            .joined(separator: " ")
+        let command = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && "
+            + "chmod 600 ~/.ssh/authorized_keys && for line in \(quoted); do "
+            + "grep -qxF -- \"$line\" ~/.ssh/authorized_keys || echo \"$line\" >> ~/.ssh/authorized_keys; done"
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try runExec(host: host, port: port, user: user, password: password, command: command, knownHosts: knownHosts)
+                    cont.resume()
+                } catch {
+                    cont.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private static func runExec(host: String, port: UInt16, user: String, password: String,
+                                command: String, knownHosts: KnownHosts) throws {
+        guard libssh2_init(0) == 0 else { throw SSHShellError.libssh2Init }
+        defer { libssh2_exit() }
+        guard let fd = tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
+        defer { close(fd) }
+        guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else { throw SSHShellError.sessionInit }
+        defer { libssh2_session_free(session) }
+        libssh2_session_set_blocking(session, 1)
+        guard libssh2_session_handshake(session, fd) == 0 else { throw SSHShellError.handshakeFailed }
+
+        let hostKey = try presentedHostKey(session)
+        switch knownHosts.verify(host: host, port: port, key: hostKey) {
+        case .trusted: break
+        case .unknown: throw SSHShellError.unknownHostKey(hostKey)
+        case let .mismatch(stored, presented): throw SSHShellError.hostKeyMismatch(stored, presented)
+        }
+
+        try passwordAuth(session, user: user, password: password)
+
+        guard let channel = libssh2_channel_open_ex(session, "session", 7, 2 * 1024 * 1024, 32768, nil, 0) else {
+            throw SSHShellError.channelOpenFailed
+        }
+        defer { libssh2_channel_free(channel) }
+        let startup = command.withCString {
+            libssh2_channel_process_startup(channel, "exec", 4, $0, UInt32(strlen($0)))
+        }
+        guard startup == 0 else { throw SSHShellError.execFailed("process_startup rc=\(startup)") }
+
+        var buffer = [CChar](repeating: 0, count: 4096)
+        while libssh2_channel_read_ex(channel, 0, &buffer, buffer.count) > 0 {}
+        libssh2_channel_close(channel)
+        let exitStatus = libssh2_channel_get_exit_status(channel)
+        if exitStatus != 0 { throw SSHShellError.execFailed("remote exit \(exitStatus)") }
     }
 
     // MARK: I/O loop (non-blocking)

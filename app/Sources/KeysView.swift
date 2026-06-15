@@ -1,8 +1,10 @@
 import SwiftUI
+import UIKit
 import BsnsSSHCore
 
 struct KeysView: View {
     @Environment(AgentStore.self) private var store
+    @State private var copied: String?
 
     var body: some View {
         List {
@@ -12,18 +14,34 @@ struct KeysView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(store.identities, id: \.blob) { key in
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(key.algorithm.rawValue)
                             .font(.headline)
                         Text(SSHKeyFormat.fingerprint(ofPublicKeyBlob: key.blob))
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
+                        Text(authorizedKeysLine(key))
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
                             .textSelection(.enabled)
-                        if !key.comment.isEmpty {
-                            Text(key.comment)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                        HStack(spacing: 16) {
+                            Button {
+                                UIPasteboard.general.string = authorizedKeysLine(key)
+                                copied = key.blob.base64EncodedString()
+                            } label: {
+                                Label(copied == key.blob.base64EncodedString() ? "Copied!" : "Copy public key",
+                                      systemImage: "doc.on.doc")
+                            }
+                            .buttonStyle(.borderless)
+                            ShareLink(item: authorizedKeysLine(key)) {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                            }
+                            .buttonStyle(.borderless)
                         }
+                        .font(.caption)
+                        .padding(.top, 2)
                     }
                     .padding(.vertical, 2)
                 }
@@ -40,6 +58,12 @@ struct KeysView: View {
                 Button("ECDSA P-256 (software key)") {
                     Task { await store.generateKey(.ecdsaP256) }
                 }
+            }
+
+            Section {
+                Text("Add a key to a server with **ssh-copy-id** on the Connect tab, or copy the line above into the server's `~/.ssh/authorized_keys`.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .navigationTitle("Keys")
