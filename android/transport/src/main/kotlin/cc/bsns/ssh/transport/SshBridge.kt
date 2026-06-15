@@ -13,6 +13,15 @@ class SshBridge {
      *  object exposing `fun sign(data: ByteArray): ByteArray`), then exec `cmd`. */
     external fun nativeAuthAndExec(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cmd: String): String?
 
+    // Interactive PTY session — open returns an opaque handle (0 on failure); the
+    // caller drives it from a single owner thread (libssh2 isn't thread-safe).
+    external fun nativeOpenShell(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cols: Int, rows: Int): Long
+    external fun nativeWrite(handle: Long, data: ByteArray)
+    /** Bytes read (>0), 0 if none available now, or -1 on EOF/error. */
+    external fun nativeRead(handle: Long, buf: ByteArray): Int
+    external fun nativeResize(handle: Long, cols: Int, rows: Int)
+    external fun nativeClose(handle: Long)
+
     companion object {
         init { System.loadLibrary("sshbridge") }
     }
