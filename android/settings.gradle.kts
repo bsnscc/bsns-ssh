@@ -22,3 +22,6 @@ include(":core")
 // Android library: the libssh2 (NDK) SSH transport with the JNI sign-bridge to
 // a non-extractable Keystore key. Built/tested on the arm64 emulator.
 include(":transport")
+
+// The Compose app.
+include(":app")
