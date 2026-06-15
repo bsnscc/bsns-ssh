@@ -5,3 +5,5 @@ local.properties
 # Native libs built from source by jni/build-libssh2.sh — regenerable, not committed.
 jni/prebuilt/
 jni/spike/ssh_spike
+# CMake/ninja externalNativeBuild artifacts
+.cxx/
