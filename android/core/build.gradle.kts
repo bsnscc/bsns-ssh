@@ -3,7 +3,7 @@ plugins {
     kotlin("plugin.serialization") version "2.1.0"
 }
 
-repositories { mavenCentral() }
+// Repositories come from settings.gradle.kts dependencyResolutionManagement.
 
 kotlin { jvmToolchain(17) }
 

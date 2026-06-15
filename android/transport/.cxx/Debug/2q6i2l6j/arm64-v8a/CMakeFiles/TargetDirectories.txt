@@ -1,0 +1,3 @@
+/Users/graham/bsns-ssh/android/transport/.cxx/Debug/2q6i2l6j/arm64-v8a/CMakeFiles/sshbridge.dir
+/Users/graham/bsns-ssh/android/transport/.cxx/Debug/2q6i2l6j/arm64-v8a/CMakeFiles/edit_cache.dir
+/Users/graham/bsns-ssh/android/transport/.cxx/Debug/2q6i2l6j/arm64-v8a/CMakeFiles/rebuild_cache.dir

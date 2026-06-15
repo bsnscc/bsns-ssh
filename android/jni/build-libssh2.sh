@@ -29,7 +29,8 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 
 echo "==> building OpenSSL (android-arm64, API $API)"
 ( cd "openssl-$OSSL_VER"
-  ./Configure android-arm64 -D__ANDROID_API__=$API no-shared no-tests no-apps no-docs no-engine --prefix="$OUT" --libdir=lib >cfg.log 2>&1 \
+  # -fPIC so the static libs can be linked into libsshbridge.so (a shared lib).
+  ./Configure android-arm64 -D__ANDROID_API__=$API no-shared no-tests no-apps no-docs no-engine -fPIC --prefix="$OUT" --libdir=lib >cfg.log 2>&1 \
     || { echo "openssl configure failed"; tail -20 cfg.log; exit 1; }
   make -j8 >mk.log 2>&1 || { echo "openssl build failed"; tail -25 mk.log; exit 1; }
   make install_sw >/dev/null 2>&1 )
@@ -38,6 +39,7 @@ echo "==> building libssh2 (against that OpenSSL)"
 ( cd "libssh2-$SSH2_VER"
   export CC="$TC/bin/aarch64-linux-android$API-clang"
   export AR="$TC/bin/llvm-ar" RANLIB="$TC/bin/llvm-ranlib"
+  export CFLAGS="-fPIC"
   export CPPFLAGS="-I$OUT/include"
   export LDFLAGS="-L$OUT/lib"
   ./configure --host=aarch64-linux-android --prefix="$OUT" --with-crypto=openssl \
