@@ -55,14 +55,32 @@ Kotlin/JCA over JNI for hardware signing.
 - **Cons:** JNI bridging for the sign callback + I/O is real work; slower to a
   first working client; more build complexity.
 
-### Recommendation
+### Decision — libssh2 over the NDK (chosen 2026-06-15)
 
-**sshj for v1**, because it's proven for non-extractable Keystore signing and
-gets us a working, idiomatic client fastest. Revisit libssh2-NDK only if
-cross-platform crypto-stack uniformity becomes a hard requirement — and note
-mosh forces an NDK toolchain regardless, so that door stays open. The
-`TerminalTransport` boundary means we could even swap the SSH transport later
-without touching the UI.
+**libssh2-NDK.** Stack uniformity and verifiability outweigh speed-to-v1 for a
+product whose whole pitch is doing key management right and *verifiably*:
+
+- **One crypto+transport stack across both platforms.** Same OpenSSL 3.5 +
+  libssh2 1.11.0, same explicit algorithm allowlist, same sign-callback model —
+  audited once, not twice. sshj would have meant a second implementation
+  (BouncyCastle), a second CVE surface, and the algorithm policy kept in parity
+  by hand.
+- **The NDK isn't an extra cost here** — mosh's C++ requires the NDK toolchain on
+  Android regardless, so libssh2 rides along; `build-cssh.sh` is already
+  structured to add NDK slices.
+- **The sign-callback ports identically.** libssh2 calls our callback, which calls
+  the platform signer (Keystore P-256 / YubiKey) over JNI — the exact shape of
+  the iOS `AgentSignBridge`, so the "key never touches the transport" guarantee
+  is the same code path conceptually on both platforms.
+
+Cost we're accepting: JNI plumbing for the sign callback + non-blocking I/O, and
+a slower first working client than sshj would have given. The JNI sign-bridge is
+the linchpin — prove it in the spike before anything else.
+
+**Rejected: sshj.** Proven for non-extractable Keystore signing and faster to a
+working client, but it's a second SSH stack (two audit surfaces, parity burden)
+with a fiddly BouncyCastle-vs-AndroidKeyStore provider conflict — and it doesn't
+even save us the NDK, since mosh needs it anyway.
 
 ## Decision 2 — Hardware keys
 
@@ -122,7 +140,7 @@ iOS.
 
 | Layer | Choice |
 |-------|--------|
-| SSH transport | **sshj**, signing via Keystore/YubiKey |
+| SSH transport | **libssh2 + OpenSSL 3.5 over the NDK** (`build-cssh.sh` + NDK slices); sign callback → JNI → Keystore/YubiKey |
 | Hardware keys | Android Keystore/StrongBox (P-256) + yubikit-android (PIV) |
 | Terminal | Termux `terminal-view` (GPLv3-compatible) |
 | Sync | Storage Access Framework + Keystore passphrase, shared bundle format |
@@ -132,11 +150,13 @@ iOS.
 
 ## Phased plan
 
-0. **Spike (do first):** sshj authenticating to a real server with a
-   StrongBox-generated P-256 key — prove non-extractable hardware signing end to
-   end before building on it (the Android analogue of the iOS libssh2 spike).
+0. **Spike (do first):** libssh2 built for one NDK ABI, authenticating to a real
+   server where the sign callback bridges over JNI to a StrongBox-generated P-256
+   key — prove non-extractable hardware signing through the JNI bridge end to end
+   before building on it (the Android analogue of the iOS libssh2 spike, plus the
+   JNI sign-bridge which is the new risk).
 1. Kotlin core + parity test-vectors (wire codec, signature framing, config envelope).
-2. Agent + sshj transport authenticating through it.
+2. Agent + libssh2 (JNI) transport authenticating through it.
 3. Terminal view on a live session.
 4. Keystore/StrongBox key generation + biometric gate.
 5. known_hosts (TOFU) + key install.
@@ -146,8 +166,8 @@ iOS.
 
 ## Open questions for Graham
 
-1. **sshj vs libssh2-NDK** — agree with sshj for speed, or prioritize a single
-   cross-platform crypto stack (libssh2-NDK) despite the heavier start?
+1. ~~sshj vs libssh2-NDK~~ — **decided: libssh2-NDK** (stack uniformity +
+   verifiability; 2026-06-15).
 2. **Minimum Android version / StrongBox** — StrongBox is Pixel 3+/many flagships;
    TEE-backed Keystore covers the rest. Target API level?
 3. **UI parity vs. platform-native** — mirror the iOS layout, or lean into
