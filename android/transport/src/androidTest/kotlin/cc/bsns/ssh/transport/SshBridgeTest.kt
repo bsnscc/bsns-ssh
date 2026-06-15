@@ -66,4 +66,29 @@ class SshBridgeTest {
             bridge.nativeClose(handle)
         }
     }
+
+    @Test
+    fun sshSessionStreamsInteractiveOutput() {
+        val signer = KeystoreSigner("bsns-spike-key")
+        val authLine = "ecdsa-sha2-nistp256 " +
+            Base64.getEncoder().encodeToString(signer.publicKeyBlob) + " bsns-spike"
+        assertTrue("install", SshBridge().nativeInstallKey("10.0.2.2", 2222, "tester", "testpw", authLine))
+
+        val session = SshSession("10.0.2.2", 2222, "tester", signer.publicKeyBlob, signer)
+        val output = StringBuilder()
+        session.onOutput = { bytes -> synchronized(output) { output.append(String(bytes, Charsets.UTF_8)) } }
+        assertTrue("open session", session.open(80, 24))
+        try {
+            session.write("echo SESSION_STREAM_OK\n".toByteArray())
+            var found = false
+            val deadline = System.currentTimeMillis() + 6000
+            while (!found && System.currentTimeMillis() < deadline) {
+                synchronized(output) { found = output.contains("SESSION_STREAM_OK") }
+                if (!found) Thread.sleep(50)
+            }
+            assertTrue("session output: $output", found)
+        } finally {
+            session.close()
+        }
+    }
 }
