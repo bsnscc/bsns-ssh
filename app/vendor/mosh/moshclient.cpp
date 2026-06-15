@@ -23,13 +23,14 @@ struct MoshClient {
   Network::UserStream local;
   Terminal::Complete remote;
   Terminal::Display display;
+  Terminal::Framebuffer lastFb;   // what we last emitted as ANSI; diff target
   ClientTransport* transport;
   uint64_t lastStateNum;
   bool rendered;
   std::string lastError;
 
   MoshClient(int cols, int rows)
-    : local(), remote(cols, rows), display(false),
+    : local(), remote(cols, rows), display(false), lastFb(cols, rows),
       transport(nullptr), lastStateNum(0), rendered(false) {}
 };
 
@@ -98,9 +99,13 @@ char* mosh_client_drain_ansi(MoshClient* c) {
   const uint64_t num = c->transport->get_remote_state_num();
   if (c->rendered && num == c->lastStateNum) return nullptr;
   c->lastStateNum = num;
-  c->rendered = true;
+  // Diff the new remote framebuffer against the one we last emitted so the ANSI
+  // carries only the delta (cursor moves, changed cells). The first frame uses
+  // initialized=false for a full repaint; after that we diff lastFb -> fb.
   const Terminal::Framebuffer& fb = c->transport->get_latest_remote_state().state.get_fb();
-  const std::string ansi = c->display.new_frame(false, fb, fb);
+  const std::string ansi = c->display.new_frame(c->rendered, c->lastFb, fb);
+  c->lastFb = fb;
+  c->rendered = true;
   char* out = static_cast<char*>(malloc(ansi.size() + 1));
   if (!out) return nullptr;
   memcpy(out, ansi.data(), ansi.size());

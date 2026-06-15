@@ -21,6 +21,19 @@ let package = Package(
                 "hostinput.pb.cc", "hostinput.pb.h",
                 "transportinstruction.pb.cc", "transportinstruction.pb.h",
                 "userinput.pb.cc", "userinput.pb.h",
+                // protobuf `.inc` files are #include-only (port macros + gtest
+                // fixtures), not translation units. Excluding them stops the
+                // build from trying to compile them; they stay on disk for
+                // inclusion. (Xcode merely warned; `swift build` errors.)
+                "protobuf/google/protobuf/port_def.inc",
+                "protobuf/google/protobuf/port_undef.inc",
+                "protobuf/google/protobuf/wire_format_unittest.inc",
+                "protobuf/google/protobuf/test_util.inc",
+                "protobuf/google/protobuf/message_unittest.inc",
+                "protobuf/google/protobuf/proto3_lite_unittest.inc",
+                "protobuf/google/protobuf/map_test.inc",
+                "protobuf/google/protobuf/map_test_util.inc",
+                "protobuf/google/protobuf/compiler/cpp/cpp_unittest.inc",
             ],
             sources: [
                 "moshclient.cpp",
