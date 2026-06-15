@@ -85,6 +85,10 @@ public final class SSHShell: @unchecked Sendable {
     private var pendingWrite = Data()
     private var pendingResize: (cols: Int32, rows: Int32)?
     private var bridge: AgentSignBridge? // kept alive for the auth call
+    // Self-pipe so write/resize wake the poll loop immediately instead of
+    // waiting out the poll timeout — keystrokes are sent with no added latency.
+    private var wakeRead: Int32 = -1
+    private var wakeWrite: Int32 = -1
 
     public init() {}
 
@@ -116,14 +120,21 @@ public final class SSHShell: @unchecked Sendable {
 
     public func write(_ bytes: ArraySlice<UInt8>) {
         lock.lock(); pendingWrite.append(contentsOf: bytes); lock.unlock()
+        wake()
     }
 
     public func resize(cols: Int32, rows: Int32) {
         lock.lock(); pendingResize = (cols, rows); lock.unlock()
+        wake()
     }
 
     public func disconnect() {
         lock.lock(); running = false; lock.unlock()
+        wake()
+    }
+
+    private func wake() {
+        if wakeWrite >= 0 { var byte: UInt8 = 1; _ = Darwin.write(wakeWrite, &byte, 1) }
     }
 
     // MARK: setup (blocking)
@@ -169,6 +180,13 @@ public final class SSHShell: @unchecked Sendable {
         guard libssh2_channel_process_startup(channel, "shell", 5, nil, 0) == 0 else { throw SSHShellError.shellFailed }
 
         libssh2_session_set_blocking(session, 0) // non-blocking for the I/O loop
+
+        var fds: [Int32] = [-1, -1]
+        if pipe(&fds) == 0 {
+            wakeRead = fds[0]; wakeWrite = fds[1]
+            _ = fcntl(wakeRead, F_SETFL, O_NONBLOCK)
+            _ = fcntl(wakeWrite, F_SETFL, O_NONBLOCK)
+        }
         lock.lock(); running = true; lock.unlock()
     }
 
@@ -319,12 +337,21 @@ public final class SSHShell: @unchecked Sendable {
     }
 
     private func waitSocket(session: OpaquePointer, timeoutMs: Int32) {
-        var pfd = pollfd(fd: fd, events: 0, revents: 0)
         let dir = libssh2_session_block_directions(session)
-        if dir & BLOCK_INBOUND != 0 { pfd.events |= Int16(POLLIN) }
-        if dir & BLOCK_OUTBOUND != 0 { pfd.events |= Int16(POLLOUT) }
-        if pfd.events == 0 { pfd.events = Int16(POLLIN) }
-        poll(&pfd, 1, timeoutMs)
+        var sshEvents: Int16 = 0
+        if dir & BLOCK_INBOUND != 0 { sshEvents |= Int16(POLLIN) }
+        if dir & BLOCK_OUTBOUND != 0 { sshEvents |= Int16(POLLOUT) }
+        if sshEvents == 0 { sshEvents = Int16(POLLIN) }
+        var pfds = [
+            pollfd(fd: fd, events: sshEvents, revents: 0),
+            pollfd(fd: wakeRead, events: Int16(POLLIN), revents: 0),
+        ]
+        let count: nfds_t = wakeRead >= 0 ? 2 : 1
+        poll(&pfds, count, timeoutMs)
+        if wakeRead >= 0, pfds[1].revents & Int16(POLLIN) != 0 {
+            var trash = [UInt8](repeating: 0, count: 64)
+            while Darwin.read(wakeRead, &trash, trash.count) > 0 {}
+        }
     }
 
     private func isRunning() -> Bool { lock.lock(); defer { lock.unlock() }; return running }
@@ -334,6 +361,8 @@ public final class SSHShell: @unchecked Sendable {
         if let channel { libssh2_channel_free(channel); self.channel = nil }
         if let session { libssh2_session_free(session); self.session = nil }
         if fd >= 0 { close(fd); fd = -1 }
+        if wakeRead >= 0 { close(wakeRead); wakeRead = -1 }
+        if wakeWrite >= 0 { close(wakeWrite); wakeWrite = -1 }
         libssh2_exit()
         bridge = nil
     }
