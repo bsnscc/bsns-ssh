@@ -26,3 +26,7 @@ app/vendor/CSSH/CSSH.xcframework/
 *.p12
 *.mobileprovision
 secrets/
+
+# mosh: regenerable vendored source trees (fetch-mosh.sh rebuilds them)
+app/vendor/mosh/protobuf/
+app/vendor/mosh/mosh-src/
