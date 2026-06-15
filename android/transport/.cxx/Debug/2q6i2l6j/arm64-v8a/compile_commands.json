@@ -1,7 +1,0 @@
-[
-{
-  "directory": "/Users/graham/bsns-ssh/android/transport/.cxx/Debug/2q6i2l6j/arm64-v8a",
-  "command": "/opt/homebrew/share/android-commandlinetools/ndk/27.1.12297006/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang --target=aarch64-none-linux-android26 --sysroot=/opt/homebrew/share/android-commandlinetools/ndk/27.1.12297006/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -Dsshbridge_EXPORTS -I/Users/graham/bsns-ssh/android/transport/src/main/cpp/../../../../jni/prebuilt/arm64-v8a/include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -fno-limit-debug-info  -fPIC -o CMakeFiles/sshbridge.dir/sshbridge.c.o -c /Users/graham/bsns-ssh/android/transport/src/main/cpp/sshbridge.c",
-  "file": "/Users/graham/bsns-ssh/android/transport/src/main/cpp/sshbridge.c"
-}
-]

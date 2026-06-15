@@ -1,4 +1,0 @@
-# ninja log v5
-0	69	1781534316150441621	CMakeFiles/sshbridge.dir/sshbridge.c.o	c361ed9e61139126
-0	37	1781534412527279680	CMakeFiles/sshbridge.dir/sshbridge.c.o	c361ed9e61139126
-38	106	1781534412590459847	/Users/graham/bsns-ssh/android/transport/build/intermediates/cxx/Debug/2q6i2l6j/obj/arm64-v8a/libsshbridge.so	fa5a38f84ad6f5ec
