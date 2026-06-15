@@ -39,3 +39,9 @@ targets:
         # already Swift 6 strict-concurrency clean on its own.
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Connecting to LAN / tailnet SSH hosts trips iOS's local-network gate.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Connect to SSH servers on your local network."
+        # Signing for device + TestFlight (Graham Saathoff's team).
+        DEVELOPMENT_TEAM: "4L394FY4WC"
+        CODE_SIGN_STYLE: Automatic
