@@ -47,7 +47,7 @@ struct LiveTerminalScreen: View {
             }
         }
             .ignoresSafeArea(.container, edges: .bottom)
-            .navigationTitle(session.title)
+            .navigationTitle("")   // the tab bar shows the session name
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { hwKeyboard.start() }
             // Leaving the terminal (e.g. switching tabs) must NOT disconnect —

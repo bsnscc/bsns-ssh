@@ -9,13 +9,11 @@ struct RootView: View {
         Group {
             if let active = sessions.active {
                 NavigationStack {
-                    LiveTerminalScreen(session: active)
-                        .id(active.id)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                SessionSwitcher(active: active)
-                            }
-                        }
+                    VStack(spacing: 0) {
+                        SessionTabBar(activeID: active.id)
+                        LiveTerminalScreen(session: active)
+                            .id(active.id)
+                    }
                 }
             } else {
                 TabView {
@@ -77,35 +75,63 @@ struct RootView: View {
     }
 }
 
-/// Leading toolbar control: shows the live-session count and a menu to switch
-/// between them, start a new connection, or close the current one.
-struct SessionSwitcher: View {
+/// A horizontal strip of one tab per live session, with a trailing button to
+/// start a new connection. Tapping a tab switches to it; the ✕ closes it.
+struct SessionTabBar: View {
     @Environment(SessionStore.self) private var sessions
     @Environment(TerminalSurfaceCache.self) private var surfaces
-    let active: TerminalSession
+    let activeID: TerminalSession.ID
 
     var body: some View {
-        Menu {
-            if sessions.sessions.count > 1 {
-                Section("Sessions") {
-                    ForEach(sessions.sessions) { s in
-                        Button { sessions.activate(s) } label: {
-                            Label(s.title, systemImage: s.id == active.id ? "checkmark" : "terminal")
-                        }
-                    }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(sessions.sessions) { s in tab(s) }
+                Button { sessions.goHome() } label: {
+                    Image(systemName: "plus")
+                        .font(.callout.weight(.medium))
+                        .frame(width: 30, height: 30)
+                        .background(Color.secondary.opacity(0.15), in: Circle())
                 }
+                .buttonStyle(.plain)
             }
-            Button { sessions.goHome() } label: { Label("New Connection", systemImage: "plus") }
-            Button(role: .destructive) {
-                surfaces.drop(active.id); sessions.close(active)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+        }
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private func tab(_ s: TerminalSession) -> some View {
+        let isActive = s.id == activeID
+        return HStack(spacing: 7) {
+            statusDot(s)
+            Text(s.title)
+                .font(.subheadline)
+                .lineLimit(1)
+                .foregroundStyle(isActive ? .primary : .secondary)
+            Button {
+                surfaces.drop(s.id); sessions.close(s)
             } label: {
-                Label("Close “\(active.title)”", systemImage: "xmark")
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
             }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "square.on.square")
-                if sessions.sessions.count > 1 { Text("\(sessions.sessions.count)") }
-            }
+            .buttonStyle(.plain)
+        }
+        .padding(.leading, 12).padding(.trailing, 9).padding(.vertical, 7)
+        .background(isActive ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.10),
+                    in: Capsule())
+        .overlay(Capsule().strokeBorder(isActive ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1))
+        .frame(maxWidth: 200)
+        .contentShape(Capsule())
+        .onTapGesture { sessions.activate(s) }
+    }
+
+    @ViewBuilder private func statusDot(_ s: TerminalSession) -> some View {
+        switch s.status {
+        case .connected: Circle().fill(.green).frame(width: 7, height: 7)
+        case .connecting: ProgressView().controlSize(.mini)
+        case .disconnected: Circle().fill(.orange).frame(width: 7, height: 7)
         }
     }
 }
