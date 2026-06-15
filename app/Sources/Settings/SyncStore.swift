@@ -56,6 +56,18 @@ final class SyncStore {
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale)
         else { return nil }
+        if stale {
+            // Refresh the stored bookmark from the resolved URL so access doesn't
+            // lapse; if we can't, drop it so the user is asked to pick again.
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            if let fresh = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+                UserDefaults.standard.set(fresh, forKey: bookmarkKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: bookmarkKey)
+                return nil
+            }
+        }
         return url
     }
 

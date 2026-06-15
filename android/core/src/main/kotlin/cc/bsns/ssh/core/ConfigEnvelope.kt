@@ -56,8 +56,13 @@ object ConfigEnvelope {
         } catch (e: Exception) {
             throw BadEnvelopeException()
         }
-        val key = deriveKey(passphrase, unb64(env.salt), env.iterations)
+        val salt = unb64(env.salt)
         val combined = unb64(env.combined)
+        // Validate the untrusted envelope before expensive KDF work (parity with iOS).
+        if (env.format != FORMAT || salt.size != 16 || env.iterations !in 1..10_000_000 || combined.size < 28) {
+            throw BadEnvelopeException()
+        }
+        val key = deriveKey(passphrase, salt, env.iterations)
         val iv = combined.copyOfRange(0, 12)
         val ctAndTag = combined.copyOfRange(12, combined.size)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")

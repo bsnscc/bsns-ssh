@@ -64,9 +64,11 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// success or an error string (e.g. the local port is in use).
     @discardableResult
     func addForward(listenPort: UInt16, destHost: String, destPort: UInt16) -> String? {
+        // Forwarding is multiplexed over the SSH channel — mosh (UDP) has none.
+        guard let shell = sshShell else { return "Port forwarding isn't available over mosh." }
         let id = UUID()
-        let err = sshShell?.addLocalForward(id: id, bindAddress: "127.0.0.1",
-                                            listenPort: listenPort, destHost: destHost, destPort: destPort)
+        let err = shell.addLocalForward(id: id, bindAddress: "127.0.0.1",
+                                        listenPort: listenPort, destHost: destHost, destPort: destPort)
         forwards.append(Forward(id: id, listenPort: listenPort, destHost: destHost, destPort: destPort, error: err))
         return err
     }
@@ -179,6 +181,8 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             return "Couldn't run the command on the server: \(m)"
         case SSHShellError.libssh2Init, SSHShellError.sessionInit:
             return "Couldn't start the SSH session."
+        case SSHShellError.algorithmPolicyFailed:
+            return "Couldn't enforce the secure algorithm policy — connection refused."
         case let e as LocalizedError where e.errorDescription != nil:
             return e.errorDescription!
         default:

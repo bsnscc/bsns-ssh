@@ -84,7 +84,7 @@ enum ConfigCrypto {
             guard SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) == errSecSuccess
             else { throw ConfigCryptoError.badFormat }
         }
-        let key = deriveKey(passphrase: passphrase, salt: salt, iterations: iterations)
+        let key = try deriveKey(passphrase: passphrase, salt: salt, iterations: iterations)
         let sealed = try AES.GCM.seal(plaintext, using: key)
         guard let combined = sealed.combined else { throw ConfigCryptoError.badFormat }
         return try JSONEncoder().encode(Envelope(iterations: iterations, salt: salt, combined: combined))
@@ -94,7 +94,16 @@ enum ConfigCrypto {
         guard let env = try? JSONDecoder().decode(Envelope.self, from: data) else {
             throw ConfigCryptoError.badFormat
         }
-        let key = deriveKey(passphrase: passphrase, salt: env.salt, iterations: env.iterations)
+        // Validate the untrusted envelope before any expensive KDF work: a
+        // malicious import/sync file must not be able to force huge PBKDF2 work,
+        // trap on UInt32(iterations), or supply an undersized box.
+        guard env.format == "bsns-config-aesgcm-v1",
+              env.salt.count == 16,
+              (1...10_000_000).contains(env.iterations),
+              env.combined.count >= 28 else {   // 12-byte nonce + 16-byte tag minimum
+            throw ConfigCryptoError.badFormat
+        }
+        let key = try deriveKey(passphrase: passphrase, salt: env.salt, iterations: env.iterations)
         guard let box = try? AES.GCM.SealedBox(combined: env.combined),
               let plaintext = try? AES.GCM.open(box, using: key) else {
             throw ConfigCryptoError.badPassphrase
@@ -107,11 +116,11 @@ enum ConfigCrypto {
         (try? JSONDecoder().decode(Envelope.self, from: data)) != nil
     }
 
-    private static func deriveKey(passphrase: String, salt: Data, iterations: Int) -> SymmetricKey {
+    private static func deriveKey(passphrase: String, salt: Data, iterations: Int) throws -> SymmetricKey {
         var derived = [UInt8](repeating: 0, count: 32)
-        passphrase.withCString { pw in
+        let status = passphrase.withCString { pw in
             salt.withUnsafeBytes { saltBuf in
-                _ = CCKeyDerivationPBKDF(
+                CCKeyDerivationPBKDF(
                     CCPBKDFAlgorithm(kCCPBKDF2),
                     pw, strlen(pw),
                     saltBuf.bindMemory(to: UInt8.self).baseAddress, salt.count,
@@ -120,6 +129,8 @@ enum ConfigCrypto {
                     &derived, derived.count)
             }
         }
+        // Don't proceed with a zeroed key if the KDF failed.
+        guard Int(status) == kCCSuccess else { throw ConfigCryptoError.badFormat }
         return SymmetricKey(data: Data(derived))
     }
 }

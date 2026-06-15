@@ -17,7 +17,7 @@ xcuserdata/
 # Generated Xcode project (XcodeGen) — regenerated from app/project.yml
 *.xcodeproj/
 
-# Vendored binary xcframework — fetched via app/vendor/fetch-cssh.sh, not committed.
+# Vendored xcframework — built from source by app/vendor/build-cssh.sh, not committed.
 app/vendor/CSSH/CSSH.xcframework/
 
 # Never commit key material or secrets — this is a key-management tool.

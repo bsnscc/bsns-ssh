@@ -18,6 +18,7 @@ public enum SSHShellError: Error {
     case noHostKey, unknownHostKey(HostKey), hostKeyMismatch(String, String)
     case noIdentities, authFailed(String)
     case channelOpenFailed, ptyFailed, shellFailed, execFailed(String)
+    case algorithmPolicyFailed
 }
 
 /// Bridges libssh2's synchronous sign-callback to the async Agent: blocks the
@@ -226,7 +227,7 @@ public final class SSHShell: @unchecked Sendable {
         guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else { throw SSHShellError.sessionInit }
         self.session = session
         libssh2_session_set_blocking(session, 1)
-        Self.applyAlgorithmPolicy(session)
+        try Self.applyAlgorithmPolicy(session)
         guard libssh2_session_handshake(session, fd) == 0 else { throw SSHShellError.handshakeFailed }
 
         // Host key (TOFU): proceed only if trusted; surface unknown (prompt) and
@@ -371,7 +372,7 @@ public final class SSHShell: @unchecked Sendable {
             close(fd); throw SSHShellError.sessionInit
         }
         libssh2_session_set_blocking(session, 1)
-        applyAlgorithmPolicy(session)
+        try applyAlgorithmPolicy(session)
         do {
             guard libssh2_session_handshake(session, fd) == 0 else { throw SSHShellError.handshakeFailed }
             let hostKey = try presentedHostKey(session)
@@ -394,10 +395,11 @@ public final class SSHShell: @unchecked Sendable {
     }
 
     /// Restrict the SSH handshake to modern algorithms — no SHA-1 host keys,
-    /// CBC ciphers, 3DES/arcfour, or HMAC-SHA1. libssh2 keeps its default list
-    /// for any category where none of these are supported, so this only ever
-    /// tightens the negotiation; it can't make a reachable server unconnectable.
-    static func applyAlgorithmPolicy(_ session: OpaquePointer) {
+    /// CBC ciphers, 3DES/arcfour, or HMAC-SHA1. Fail closed: if libssh2 can't
+    /// honor one of these lists (none of our algorithms are available for a
+    /// category), we refuse rather than silently fall back to its weaker
+    /// defaults, since the security claim depends on the allowlist holding.
+    static func applyAlgorithmPolicy(_ session: OpaquePointer) throws {
         let prefs: [(Int32, String)] = [
             (0 /* KEX */, "curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group14-sha256"),
             (1 /* HOSTKEY */, "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256"),
@@ -407,7 +409,8 @@ public final class SSHShell: @unchecked Sendable {
             (5 /* MAC_SC */, "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"),
         ]
         for (method, list) in prefs {
-            _ = list.withCString { libssh2_session_method_pref(session, method, $0) }
+            let rc = list.withCString { libssh2_session_method_pref(session, method, $0) }
+            if rc != 0 { throw SSHShellError.algorithmPolicyFailed }
         }
     }
 
@@ -446,7 +449,7 @@ public final class SSHShell: @unchecked Sendable {
         guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else { throw SSHShellError.sessionInit }
         defer { libssh2_session_free(session) }
         libssh2_session_set_blocking(session, 1)
-        applyAlgorithmPolicy(session)
+        try applyAlgorithmPolicy(session)
         guard libssh2_session_handshake(session, fd) == 0 else { throw SSHShellError.handshakeFailed }
 
         let hostKey = try presentedHostKey(session)
@@ -492,7 +495,7 @@ public final class SSHShell: @unchecked Sendable {
         guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else { throw SSHShellError.sessionInit }
         defer { libssh2_session_free(session) }
         libssh2_session_set_blocking(session, 1)
-        applyAlgorithmPolicy(session)
+        try applyAlgorithmPolicy(session)
         guard libssh2_session_handshake(session, fd) == 0 else { throw SSHShellError.handshakeFailed }
 
         let hostKey = try presentedHostKey(session)

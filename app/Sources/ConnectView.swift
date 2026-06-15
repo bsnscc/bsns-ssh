@@ -101,7 +101,7 @@ struct ConnectView: View {
                               || (useMosh ? store.identities.isEmpty : (password.isEmpty && store.identities.isEmpty)))
                 Button("Install my key (ssh-copy-id)") { attemptInstall() }
                     .disabled(busy || host.isEmpty || user.isEmpty || password.isEmpty || store.identities.isEmpty)
-                Button("Browse files (SFTP)") { if UInt16(port) != nil { showSFTP = true } }
+                Button("Browse files (SFTP)") { if let p = UInt16(port), p > 0 { showSFTP = true } }
                     .disabled(busy || host.isEmpty || user.isEmpty || store.identities.isEmpty)
                 Button("Save host") { saveHost() }
                     .disabled(host.isEmpty || user.isEmpty)
@@ -119,7 +119,7 @@ struct ConnectView: View {
             if !hostStore.hosts.isEmpty { EditButton() }
         }
         .sheet(isPresented: $showSFTP) {
-            if let p = UInt16(port) {
+            if let p = UInt16(port), p > 0 {
                 SFTPBrowserView(host: host, port: p, user: user)
             }
         }
@@ -153,7 +153,7 @@ struct ConnectView: View {
     }
 
     private func attemptConnect() {
-        guard let portValue = UInt16(port) else { error = "Invalid port."; return }
+        guard let portValue = UInt16(port), portValue > 0 else { error = "Invalid port."; return }
         if useMosh { attemptConnectMosh(portValue); return }
         error = nil; notice = nil; busy = true
         let shell = SSHShell()
@@ -209,7 +209,7 @@ struct ConnectView: View {
     }
 
     private func attemptInstall() {
-        guard let portValue = UInt16(port) else { error = "Invalid port."; return }
+        guard let portValue = UInt16(port), portValue > 0 else { error = "Invalid port."; return }
         error = nil; notice = nil; busy = true
         let lines = store.identities.map(authorizedKeysLine)
         let known = knownHostsStore.knownHosts

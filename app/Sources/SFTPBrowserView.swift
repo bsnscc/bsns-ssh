@@ -22,6 +22,7 @@ struct SFTPBrowserView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var pendingHostKey: HostKey?
+    @State private var pendingDelete: SFTPEntry?
 
     @State private var showUpload = false
     @State private var newFolderName = ""
@@ -51,7 +52,7 @@ struct SFTPBrowserView: View {
                         }
                     }
                     .swipeActions {
-                        Button("Delete", role: .destructive) { remove(entry) }
+                        Button("Delete", role: .destructive) { pendingDelete = entry }
                         if !entry.isDirectory {
                             Button("Download") { download(entry) }.tint(.blue)
                         }
@@ -87,6 +88,14 @@ struct SFTPBrowserView: View {
             if let key = pendingHostKey {
                 Text("First connection to \(user)@\(host):\(port).\n\n\(key.keyType)\n\(key.fingerprint)\n\nOnly trust this if the fingerprint matches what the server's admin gave you.")
             }
+        }
+        .alert("Delete \(pendingDelete?.name ?? "")?", isPresented: Binding(
+            get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }
+        ), presenting: pendingDelete) { entry in
+            Button("Delete", role: .destructive) { remove(entry); pendingDelete = nil }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: { entry in
+            Text(entry.isDirectory ? "Deletes this folder on the server." : "Deletes this file on the server.")
         }
         .alert("New folder", isPresented: $askNewFolder) {
             TextField("name", text: $newFolderName)

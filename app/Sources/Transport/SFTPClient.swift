@@ -71,12 +71,16 @@ final class SFTPClient: @unchecked Sendable {
             }
             defer { libssh2_sftp_close_handle(dir) }
             var entries: [SFTPEntry] = []
-            var nameBuf = [CChar](repeating: 0, count: 512)
+            var nameBuf = [CChar](repeating: 0, count: 1024)
             while true {
                 var attrs = LIBSSH2_SFTP_ATTRIBUTES()
                 let n = libssh2_sftp_readdir_ex(dir, &nameBuf, nameBuf.count, nil, 0, &attrs)
-                if n <= 0 { break }
-                let name = String(cString: nameBuf)
+                if n <= 0 { break }   // 0 = end of directory, <0 = error
+                // Decode exactly the n bytes returned — the name isn't NUL-terminated
+                // and may not be valid UTF-8, so bound by the real length and decode
+                // lossily rather than trusting String(cString:).
+                let nameBytes = nameBuf.prefix(Int(n)).map { UInt8(bitPattern: $0) }
+                let name = String(decoding: nameBytes, as: UTF8.self)
                 if name == "." || name == ".." { continue }
                 let perms = UInt32(attrs.permissions)
                 entries.append(SFTPEntry(name: name,
@@ -125,7 +129,7 @@ final class SFTPClient: @unchecked Sendable {
                 let base = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
                 while off < raw.count {
                     let n = libssh2_sftp_write(handle, base + off, raw.count - off)
-                    if n < 0 { throw SFTPError.op("Write failed.") }
+                    if n <= 0 { throw SFTPError.op("Write failed (code \(n)).") }   // 0 = no progress
                     off += n
                 }
             }

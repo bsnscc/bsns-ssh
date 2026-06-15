@@ -59,7 +59,6 @@ struct ConfigBackupView: View {
                 }
                 SecureField("Sync passphrase", text: $syncPass)
                     .textContentType(.password).autocorrectionDisabled().textInputAutocapitalization(.never)
-                    .onChange(of: syncPass) { _, new in sync.savePassphrase(new) }
                 Toggle("Include private keys", isOn: $syncIncludeKeys).disabled(syncPass.isEmpty)
                 Button("Push to sync") { pushSync() }
                     .disabled(!sync.isConfigured || syncPass.isEmpty)
@@ -171,6 +170,7 @@ struct ConfigBackupView: View {
         do {
             let data = try sync.pull()
             let bundle = try ConfigService.decode(data, passphrase: syncPass.isEmpty ? nil : syncPass)
+            sync.savePassphrase(syncPass)             // remember only after a successful decode
             sync.lastStatus = nil
             reviewItem = ReviewItem(bundle: bundle)   // pulled config goes through the same review
         } catch ConfigCryptoError.badPassphrase {

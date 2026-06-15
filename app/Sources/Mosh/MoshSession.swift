@@ -2,67 +2,89 @@ import Foundation
 import CMosh
 
 /// Drives a mosh (UDP) session: opens the client transport with the key the SSH
-/// bootstrap obtained from `mosh-server`, pumps datagrams on a background queue,
-/// and forwards the rendered framebuffer (ANSI) out via `onOutput`. Input goes in
-/// through `write`. Conforms to `TerminalTransport` so a `TerminalSession` drives
-/// it the same way it drives an `SSHShell`.
+/// bootstrap obtained from `mosh-server`, pumps datagrams on a background thread,
+/// and forwards the rendered framebuffer (ANSI) out via `onOutput`. Conforms to
+/// `TerminalTransport`.
+///
+/// The run loop owns the client exclusively; `write`/`resize`/`disconnect` don't
+/// touch it directly (that would either race the C client or, on a serial queue,
+/// starve behind the loop). Instead they stage work under a lock and wake the
+/// loop through a self-pipe, the same pattern as `SSHShell`.
 final class MoshSession: TerminalTransport, @unchecked Sendable {
     var onOutput: (@Sendable (ArraySlice<UInt8>) -> Void)?
     var onClosed: (@Sendable (String?) -> Void)?
 
     private let queue = DispatchQueue(label: "cc.bsns.ssh.mosh")
     private var client: OpaquePointer?
-    private var running = false
 
-    /// Open a mosh client to `host` (resolved to an IP) on `port`, using the
-    /// base64 key from the `MOSH CONNECT` line. Returns nil on success or an
-    /// error string. mosh's own transport keeps the session alive across network
-    /// changes, so there's no separate keepalive here.
+    private let lock = NSLock()
+    private var pendingInput: [UInt8] = []
+    private var pendingResize: (Int32, Int32)?
+    private var stopRequested = false
+    private var closeNotified = false
+
+    private var wakeRead: Int32 = -1
+    private var wakeWrite: Int32 = -1
+
     func open(host: String, port: String, key: String, cols: Int32, rows: Int32) -> String? {
         guard let ip = Self.resolve(host) else { return "couldn't resolve \(host)" }
         let c = mosh_client_create(ip, port, key, cols, rows)
         if let err = mosh_client_last_error(c) { mosh_client_free(c); return String(cString: err) }
         client = c
-        running = true
+        var fds: [Int32] = [-1, -1]
+        pipe(&fds)
+        wakeRead = fds[0]; wakeWrite = fds[1]
         queue.async { [weak self] in self?.runLoop() }
         return nil
     }
 
     func write(_ bytes: ArraySlice<UInt8>) {
-        queue.async { [weak self] in
-            guard let self, let c = self.client else { return }
-            Array(bytes).withUnsafeBytes { raw in
-                mosh_client_push(c, raw.bindMemory(to: CChar.self).baseAddress, Int32(raw.count))
-            }
-            mosh_client_tick(c)
-        }
+        lock.lock(); pendingInput.append(contentsOf: bytes); lock.unlock()
+        wake()
     }
 
     func resize(cols: Int32, rows: Int32) {
-        queue.async { [weak self] in
-            guard let self, let c = self.client else { return }
-            mosh_client_resize(c, cols, rows); mosh_client_tick(c)
-        }
+        lock.lock(); pendingResize = (cols, rows); lock.unlock()
+        wake()
     }
 
     func disconnect() {
-        queue.async { [weak self] in
-            guard let self else { return }
-            guard self.running else { return }
-            self.running = false
-            if let c = self.client { mosh_client_free(c); self.client = nil }
-            self.onClosed?(nil)   // user-initiated = clean
-        }
+        lock.lock(); stopRequested = true; lock.unlock()
+        wake()
+    }
+
+    private func wake() {
+        if wakeWrite >= 0 { var b: UInt8 = 1; _ = Darwin.write(wakeWrite, &b, 1) }
     }
 
     private func runLoop() {
         guard let c = client else { return }
-        var fds = [pollfd(fd: mosh_client_fd(c), events: Int16(POLLIN), revents: 0)]
-        while running {
+        while true {
+            // Apply staged commands before blocking.
+            lock.lock()
+            let stop = stopRequested
+            let input = pendingInput; pendingInput.removeAll(keepingCapacity: true)
+            let resize = pendingResize; pendingResize = nil
+            lock.unlock()
+
+            if stop { break }
+            if !input.isEmpty {
+                input.withUnsafeBytes { raw in
+                    mosh_client_push(c, raw.bindMemory(to: CChar.self).baseAddress, Int32(raw.count))
+                }
+            }
+            if let (cols, rows) = resize { mosh_client_resize(c, cols, rows) }
             mosh_client_tick(c)
+
+            var fds = [pollfd(fd: mosh_client_fd(c), events: Int16(POLLIN), revents: 0),
+                       pollfd(fd: wakeRead, events: Int16(POLLIN), revents: 0)]
             let timeout = max(1, min(mosh_client_wait_ms(c), 1000))
-            poll(&fds, 1, Int32(timeout))
-            if !running { break }
+            poll(&fds, 2, Int32(timeout))
+
+            if fds[1].revents & Int16(POLLIN) != 0 {            // drain the wake pipe
+                var trash = [UInt8](repeating: 0, count: 64)
+                _ = Darwin.read(wakeRead, &trash, trash.count)
+            }
             if fds[0].revents & Int16(POLLIN) != 0 { mosh_client_recv(c) }
             mosh_client_tick(c)
             if let ansi = mosh_client_drain_ansi(c) {
@@ -71,10 +93,19 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 onOutput?(bytes[...])
             }
         }
+        teardown()
     }
 
-    /// Resolve a host (name or IP literal) to a numeric address string for the
-    /// mosh transport, which connects to a literal. Prefers the first result.
+    private func teardown() {
+        if let c = client { mosh_client_free(c); client = nil }
+        if wakeRead >= 0 { close(wakeRead); wakeRead = -1 }
+        if wakeWrite >= 0 { close(wakeWrite); wakeWrite = -1 }
+        lock.lock(); let notify = !closeNotified; closeNotified = true; lock.unlock()
+        if notify { onClosed?(nil) }   // user-initiated stop = clean
+    }
+
+    /// Resolve a host (name or IP literal) to a numeric address for the mosh
+    /// transport, which connects to a literal. Prefers the first result.
     private static func resolve(_ host: String) -> String? {
         var hints = addrinfo(ai_flags: 0, ai_family: AF_UNSPEC, ai_socktype: SOCK_DGRAM,
                              ai_protocol: 0, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)

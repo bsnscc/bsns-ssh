@@ -325,6 +325,7 @@ final class ZoomableTerminalView: TerminalView {
     var onZoomChange: ((CGFloat) -> Void)?
     /// Send raw bytes to the remote (set by the surface → session.write).
     var onSendBytes: (([UInt8]) -> Void)?
+    private var editMenu: UIEditMenuInteraction?
     private var currentSize: CGFloat = defaultFontSize
     private var pinchStart: CGFloat = defaultFontSize
     private var fontFamily: String = TerminalFont.families[0]
@@ -343,6 +344,22 @@ final class ZoomableTerminalView: TerminalView {
 
     func installZoomGestures() {
         addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:))))
+        // SwiftTerm starts text selection on long-press but offers Copy through the
+        // deprecated UIMenuController, which doesn't appear on iOS 16+. Add the
+        // modern edit menu and present it on long-press so selected text is copyable.
+        let menu = UIEditMenuInteraction(delegate: self)
+        addInteraction(menu)
+        editMenu = menu
+        addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(showEditMenu(_:))))
+    }
+
+    @objc private func showEditMenu(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, let editMenu else { return }
+        let point = gesture.location(in: self)
+        // Let SwiftTerm's own long-press set the selection first, then show Copy.
+        DispatchQueue.main.async {
+            editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+        }
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
@@ -388,6 +405,16 @@ final class ZoomableTerminalView: TerminalView {
     @objc private func zoomIn() { onZoomChange?(min(maxFontSize, currentSize + 1)) }
     @objc private func zoomOut() { onZoomChange?(max(minFontSize, currentSize - 1)) }
     @objc private func zoomReset() { onZoomChange?(defaultFontSize) }
+}
+
+extension ZoomableTerminalView: UIEditMenuInteractionDelegate {
+    // Show the system edit actions the terminal supports (Copy when a selection
+    // is active, Paste, Select All — all routed through SwiftTerm's responder).
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                             menuFor configuration: UIEditMenuConfiguration,
+                             suggestedActions: [UIMenuElement]) -> UIMenu? {
+        UIMenu(children: suggestedActions)
+    }
 }
 
 /// Embeds a session's persistent `TerminalSurface.view`. The view is owned by
