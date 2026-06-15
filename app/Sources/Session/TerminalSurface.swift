@@ -34,15 +34,37 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         if scrollback > 0 { view.getTerminal().changeScrollback(scrollback) }
         applyPrefs()
 
-        // The session forwards output from whichever shell is current, so a
-        // reconnect swaps the underlying shell without re-wiring here.
+        // The session forwards output from whichever transport is current, so a
+        // reconnect swaps the underlying transport without re-wiring here.
+        // Output is coalesced: chunks accumulate and we feed + repaint once per
+        // runloop turn, so a flood (cat of a big file) costs one redraw per frame
+        // instead of one per network packet.
         session.onOutput = { [weak self] bytes in
             DispatchQueue.main.async {
-                guard let view = self?.view else { return }
-                view.feed(byteArray: bytes)
-                view.getTerminal().updateFullScreen()
-                view.setNeedsDisplay(view.bounds)
+                guard let self else { return }
+                self.pendingFeed.append(contentsOf: bytes)
+                self.scheduleFlush()
             }
+        }
+    }
+
+    private var pendingFeed: [UInt8] = []
+    private var flushScheduled = false
+
+    /// Drain accumulated output on the next runloop turn — coalescing every chunk
+    /// that arrived in between into a single feed + full repaint.
+    private func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.flushScheduled = false
+            guard !self.pendingFeed.isEmpty else { return }
+            let chunk = self.pendingFeed
+            self.pendingFeed.removeAll(keepingCapacity: true)
+            self.view.feed(byteArray: chunk[...])
+            self.view.getTerminal().updateFullScreen()
+            self.view.setNeedsDisplay(self.view.bounds)
         }
     }
 
