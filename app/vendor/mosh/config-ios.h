@@ -26,6 +26,9 @@
 #define HAVE_DECL___BUILTIN_CTZ 1
 #define HAVE_DECL_FFS 1
 
+// Use std::shared_ptr / std::make_shared (not the TR1 fallback) in shared.h.
+#define HAVE_STD_SHARED_PTR 1
+
 // Crypto: use Apple CommonCrypto's AES for the bundled OCB (no OpenSSL).
 #define USE_APPLE_COMMON_CRYPTO_AES 1
 #define USE_OPENSSL_AES 0

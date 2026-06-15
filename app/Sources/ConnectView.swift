@@ -100,12 +100,19 @@ struct ConnectView: View {
         .toolbar {
             if !hostStore.hosts.isEmpty { EditButton() }
         }
-        .alert("Unknown host key", isPresented: Binding(get: { pendingHostKey != nil }, set: { if !$0 { pendingHostKey = nil } })) {
-            Button("Trust & continue") { trustAndContinue() }
+        .alert("Verify host key", isPresented: Binding(get: { pendingHostKey != nil }, set: { if !$0 { pendingHostKey = nil } })) {
+            Button("Trust", role: .destructive) { trustAndContinue() }
             Button("Cancel", role: .cancel) { pendingHostKey = nil }
         } message: {
             if let key = pendingHostKey {
-                Text("First connection to \(host). Verify the fingerprint:\n\n\(key.keyType)\n\(key.fingerprint)")
+                Text("""
+                First connection to \(user)@\(host):\(port).
+
+                \(key.keyType)
+                \(key.fingerprint)
+
+                Only trust this if the fingerprint matches what the server's admin gave you (e.g. `ssh-keygen -lf` on the host). Trusting an unverified key can expose your session to interception.
+                """)
             }
         }
     }
@@ -135,7 +142,7 @@ struct ConnectView: View {
                 await MainActor.run {
                     busy = false
                     let spec = TerminalSession.Spec(host: host, port: portValue, user: user,
-                                                    password: pw, agent: store.agent,
+                                                    agent: store.agent,
                                                     knownHosts: knownHostsStore.knownHosts)
                     let s = TerminalSession(spec: spec, title: "\(user)@\(host)")
                     s.adopt(shell)

@@ -21,9 +21,10 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         let host: String
         let port: UInt16
         let user: String
-        let password: String?
         let agent: Agent
         var knownHosts: KnownHosts
+        // Note: no password is retained. Reconnect uses the agent (keys); a
+        // password-only session must be re-established from the Connect screen.
     }
 
     private(set) var status: Status = .connecting
@@ -112,7 +113,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             do {
                 try await shell.connect(host: spec.host, port: spec.port, user: spec.user,
                                         agent: spec.agent, cols: cols, rows: rows,
-                                        knownHosts: spec.knownHosts, password: spec.password)
+                                        knownHosts: spec.knownHosts, password: nil)
                 DispatchQueue.main.async { self.reapplyForwards() }
                 self.setStatus(.connected)
             } catch {

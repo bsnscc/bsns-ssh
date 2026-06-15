@@ -73,8 +73,7 @@ struct RootView: View {
             }
             // Reconnect via the agent key (now installed), not the bootstrap password.
             let spec = TerminalSession.Spec(host: host, port: port, user: user,
-                                            password: nil, agent: store.agent,
-                                            knownHosts: known)
+                                            agent: store.agent, knownHosts: known)
             let session = TerminalSession(spec: spec, title: "dev")
             session.adopt(shell)
             sessions.add(session)

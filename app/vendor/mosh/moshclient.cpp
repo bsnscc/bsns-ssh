@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string>
 
+#include "src/util/fatal_assert.h"
 #include "src/network/network.h"
 #include "src/network/networktransport.h"
 #include "src/network/networktransport-impl.h"

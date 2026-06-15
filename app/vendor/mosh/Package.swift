@@ -30,8 +30,16 @@ let package = Package(
             publicHeadersPath: "include",
             cxxSettings: [
                 .headerSearchPath("include"),
-                .headerSearchPath("mosh-src"),
+                .headerSearchPath("mosh-src"),                 // full "src/..." includes
                 .headerSearchPath("mosh-src/src/include"),
+                // mosh 1.4.0 sources use bare includes ("crypto.h"); its autotools
+                // build puts each source subdir on the include path. Mirror that.
+                .headerSearchPath("mosh-src/src/crypto"),
+                .headerSearchPath("mosh-src/src/network"),
+                .headerSearchPath("mosh-src/src/terminal"),
+                .headerSearchPath("mosh-src/src/statesync"),
+                .headerSearchPath("mosh-src/src/util"),
+                .headerSearchPath("mosh-src/src/protobufs"),
                 .headerSearchPath("protobuf"),
                 .define("HAVE_PTHREAD", to: "1"),
                 .define("_DARWIN_C_SOURCE", to: "1"),

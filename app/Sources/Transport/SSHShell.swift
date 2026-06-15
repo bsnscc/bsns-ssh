@@ -194,6 +194,7 @@ public final class SSHShell: @unchecked Sendable {
         guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else { throw SSHShellError.sessionInit }
         self.session = session
         libssh2_session_set_blocking(session, 1)
+        Self.applyAlgorithmPolicy(session)
         guard libssh2_session_handshake(session, fd) == 0 else { throw SSHShellError.handshakeFailed }
 
         // Host key (TOFU): proceed only if trusted; surface unknown (prompt) and
@@ -304,6 +305,115 @@ public final class SSHShell: @unchecked Sendable {
         }
     }
 
+    /// Run a command over SSH (agent or password auth) and return its stdout.
+    /// Used to bootstrap mosh (`mosh-server new` prints `MOSH CONNECT ...`).
+    public static func execCapturing(host: String, port: UInt16, user: String,
+                                     agent: Agent?, password: String?,
+                                     command: String, knownHosts: KnownHosts) async throws -> String {
+        let identities = agent == nil ? [] : await agent!.identities()
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    cont.resume(returning: try execBlocking(host: host, port: port, user: user,
+                                                            agent: agent, identities: identities,
+                                                            password: password, command: command,
+                                                            knownHosts: knownHosts))
+                } catch { cont.resume(throwing: error) }
+            }
+        }
+    }
+
+    /// Restrict the SSH handshake to modern algorithms — no SHA-1 host keys,
+    /// CBC ciphers, 3DES/arcfour, or HMAC-SHA1. libssh2 keeps its default list
+    /// for any category where none of these are supported, so this only ever
+    /// tightens the negotiation; it can't make a reachable server unconnectable.
+    static func applyAlgorithmPolicy(_ session: OpaquePointer) {
+        let prefs: [(Int32, String)] = [
+            (0 /* KEX */, "curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group14-sha256"),
+            (1 /* HOSTKEY */, "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256"),
+            (2 /* CRYPT_CS */, "aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"),
+            (3 /* CRYPT_SC */, "aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"),
+            (4 /* MAC_CS */, "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"),
+            (5 /* MAC_SC */, "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512"),
+        ]
+        for (method, list) in prefs {
+            _ = list.withCString { libssh2_session_method_pref(session, method, $0) }
+        }
+    }
+
+    private static func authenticatePublicKey(_ session: OpaquePointer, user: String,
+                                              identities: [SSHPublicKey], agent: Agent, host: String) throws {
+        var keepAlive: [AgentSignBridge] = []   // hold bridges for the duration of the call
+        var lastError = "no identity accepted"
+        for identity in identities {
+            let bridge = AgentSignBridge(agent: agent, publicKeyBlob: identity.blob,
+                                         signContext: SignContext(host: host, purpose: .sshUserAuth))
+            keepAlive.append(bridge)
+            var abstract: UnsafeMutableRawPointer? = Unmanaged.passUnretained(bridge).toOpaque()
+            let rc: Int32 = identity.blob.withUnsafeBytes { (pk: UnsafeRawBufferPointer) in
+                withUnsafeMutablePointer(to: &abstract) { absP in
+                    user.withCString { cuser in
+                        libssh2_userauth_publickey(session, cuser,
+                                                   pk.bindMemory(to: UInt8.self).baseAddress, pk.count,
+                                                   agentSignCallback, absP)
+                    }
+                }
+            }
+            if rc == 0 { return }
+            var message: UnsafeMutablePointer<CChar>?
+            _ = libssh2_session_last_error(session, &message, nil, 0)
+            lastError = message.map { String(cString: $0) } ?? "rc=\(rc)"
+        }
+        throw SSHShellError.authFailed(lastError)
+    }
+
+    private static func execBlocking(host: String, port: UInt16, user: String,
+                                     agent: Agent?, identities: [SSHPublicKey], password: String?,
+                                     command: String, knownHosts: KnownHosts) throws -> String {
+        guard libssh2Ready else { throw SSHShellError.libssh2Init }
+        guard let fd = tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
+        defer { close(fd) }
+        guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else { throw SSHShellError.sessionInit }
+        defer { libssh2_session_free(session) }
+        libssh2_session_set_blocking(session, 1)
+        applyAlgorithmPolicy(session)
+        guard libssh2_session_handshake(session, fd) == 0 else { throw SSHShellError.handshakeFailed }
+
+        let hostKey = try presentedHostKey(session)
+        switch knownHosts.verify(host: host, port: port, key: hostKey) {
+        case .trusted: break
+        case .unknown: throw SSHShellError.unknownHostKey(hostKey)
+        case let .mismatch(stored, presented): throw SSHShellError.hostKeyMismatch(stored, presented)
+        }
+
+        if let password, !password.isEmpty {
+            try passwordAuth(session, user: user, password: password)
+        } else if let agent {
+            try authenticatePublicKey(session, user: user, identities: identities, agent: agent, host: host)
+        } else {
+            throw SSHShellError.noIdentities
+        }
+
+        guard let channel = libssh2_channel_open_ex(session, "session", 7, 2 * 1024 * 1024, 32768, nil, 0) else {
+            throw SSHShellError.channelOpenFailed
+        }
+        defer { libssh2_channel_free(channel) }
+        let startup = command.withCString {
+            libssh2_channel_process_startup(channel, "exec", 4, $0, UInt32(strlen($0)))
+        }
+        guard startup == 0 else { throw SSHShellError.execFailed("process_startup rc=\(startup)") }
+
+        var out = [UInt8]()
+        var buffer = [CChar](repeating: 0, count: 4096)
+        while true {
+            let n = libssh2_channel_read_ex(channel, 0, &buffer, buffer.count)
+            if n > 0 { out.append(contentsOf: buffer[0 ..< Int(n)].map { UInt8(bitPattern: $0) }) }
+            else { break }
+        }
+        libssh2_channel_close(channel)
+        return String(decoding: out, as: UTF8.self)
+    }
+
     private static func runExec(host: String, port: UInt16, user: String, password: String,
                                 command: String, knownHosts: KnownHosts) throws {
         guard libssh2Ready else { throw SSHShellError.libssh2Init }
@@ -312,6 +422,7 @@ public final class SSHShell: @unchecked Sendable {
         guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else { throw SSHShellError.sessionInit }
         defer { libssh2_session_free(session) }
         libssh2_session_set_blocking(session, 1)
+        applyAlgorithmPolicy(session)
         guard libssh2_session_handshake(session, fd) == 0 else { throw SSHShellError.handshakeFailed }
 
         let hostKey = try presentedHostKey(session)
