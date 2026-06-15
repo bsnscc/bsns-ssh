@@ -7,7 +7,7 @@ import SwiftTerm
 /// for the life of the session so switching tabs preserves each terminal's
 /// on-screen buffer and scrollback — the view is re-embedded, not rebuilt.
 @MainActor
-final class TerminalSurface: NSObject, TerminalViewDelegate {
+final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     let session: TerminalSession
     let view: ZoomableTerminalView
     let handle = TerminalHandle()

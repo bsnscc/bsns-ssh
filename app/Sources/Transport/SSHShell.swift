@@ -93,11 +93,43 @@ public final class SSHShell: @unchecked Sendable {
     // channel ops happen on `queue`; listening sockets are added under `lock`.
     private struct Listener { let id: UUID; let fd: Int32; let destHost: String; let destPort: UInt16 }
     private struct PendingOpen { let localFd: Int32; let destHost: String; let destPort: UInt16 }
+
+    /// A FIFO byte buffer that consumes from the front in amortized O(1) — it
+    /// advances a head index and only compacts the backing array periodically,
+    /// instead of `removeFirst(n)` shifting every remaining byte each drain.
+    private struct ByteQueue {
+        private var bytes: [UInt8] = []
+        private var head = 0
+        var count: Int { bytes.count - head }
+        var isEmpty: Bool { head >= bytes.count }
+
+        mutating func append(_ slice: ArraySlice<UInt8>) {
+            if isEmpty { bytes.removeAll(keepingCapacity: true); head = 0 }
+            bytes.append(contentsOf: slice)
+        }
+
+        /// The unconsumed bytes, for writing out to a socket/channel.
+        func withUnsafeBytes<R>(_ body: (UnsafeRawBufferPointer) -> R) -> R {
+            bytes.withUnsafeBytes { body(UnsafeRawBufferPointer(rebasing: $0[head...])) }
+        }
+
+        mutating func consume(_ n: Int) {
+            head += n
+            if isEmpty { bytes.removeAll(keepingCapacity: true); head = 0 }
+            else if head > 65536 { bytes.removeFirst(head); head = 0 }  // amortized compaction
+        }
+    }
+
+    // Per-direction cap on a forward's buffer. Once a direction is this full we
+    // stop reading its source, so a slow consumer applies backpressure (TCP /
+    // libssh2 window) instead of letting the buffer grow without bound.
+    private static let forwardBufferCap = 1 << 20   // 1 MiB
+
     private final class ForwardConn {
         let localFd: Int32
         let channel: OpaquePointer
-        var toChannel: [UInt8] = []   // buffered local → remote
-        var toLocal: [UInt8] = []     // buffered remote → local
+        var toChannel = ByteQueue()   // buffered local → remote
+        var toLocal = ByteQueue()     // buffered remote → local
         var localClosed = false       // local socket hit EOF/error
         var channelEOF = false        // remote sent EOF
         var sentChannelEOF = false    // we forwarded local EOF to the channel
@@ -597,13 +629,15 @@ public final class SSHShell: @unchecked Sendable {
     /// Move bytes in both directions for one forwarded connection. Returns false
     /// once both halves are done (the channel + socket are then closed).
     private func pumpForward(_ c: ForwardConn, buf: inout [UInt8]) -> Bool {
-        // remote → buffer
+        let cap = Self.forwardBufferCap
+
+        // remote → buffer (stop reading while the local side is backed up)
         if !c.channelEOF {
-            while true {
+            while c.toLocal.count < cap {
                 let n = buf.withUnsafeMutableBytes {
                     libssh2_channel_read_ex(c.channel, 0, $0.baseAddress!.assumingMemoryBound(to: CChar.self), $0.count)
                 }
-                if n > 0 { c.toLocal.append(contentsOf: buf[0 ..< Int(n)]) }
+                if n > 0 { c.toLocal.append(buf[0 ..< Int(n)]) }
                 else if n == LIBSSH2_ERROR_EAGAIN { break }
                 else { c.channelEOF = true; break }   // 0 = EOF, <0 = error
             }
@@ -612,16 +646,16 @@ public final class SSHShell: @unchecked Sendable {
 
         // buffer → local socket
         while !c.toLocal.isEmpty {
-            let w = c.toLocal.withUnsafeBytes { Darwin.write(c.localFd, $0.baseAddress, c.toLocal.count) }
-            if w > 0 { c.toLocal.removeFirst(w) }
+            let w = c.toLocal.withUnsafeBytes { Darwin.write(c.localFd, $0.baseAddress, $0.count) }
+            if w > 0 { c.toLocal.consume(w) }
             else { if w < 0 && errno != EAGAIN && errno != EWOULDBLOCK { c.localClosed = true }; break }
         }
 
-        // local socket → buffer
+        // local socket → buffer (stop reading while the remote side is backed up)
         if !c.localClosed {
-            while true {
+            while c.toChannel.count < cap {
                 let n = buf.withUnsafeMutableBytes { Darwin.read(c.localFd, $0.baseAddress, $0.count) }
-                if n > 0 { c.toChannel.append(contentsOf: buf[0 ..< n]) }
+                if n > 0 { c.toChannel.append(buf[0 ..< n]) }
                 else if n == 0 { c.localClosed = true; break }
                 else { if errno != EAGAIN && errno != EWOULDBLOCK { c.localClosed = true }; break }
             }
@@ -630,9 +664,9 @@ public final class SSHShell: @unchecked Sendable {
         // buffer → remote
         while !c.toChannel.isEmpty {
             let w = c.toChannel.withUnsafeBytes {
-                libssh2_channel_write_ex(c.channel, 0, $0.baseAddress!.assumingMemoryBound(to: CChar.self), c.toChannel.count)
+                libssh2_channel_write_ex(c.channel, 0, $0.baseAddress!.assumingMemoryBound(to: CChar.self), $0.count)
             }
-            if w > 0 { c.toChannel.removeFirst(w) } else { break }   // EAGAIN/error: retry next tick
+            if w > 0 { c.toChannel.consume(w) } else { break }   // EAGAIN/error: retry next tick
         }
 
         // Forward a half-close once our outbound buffer is flushed.

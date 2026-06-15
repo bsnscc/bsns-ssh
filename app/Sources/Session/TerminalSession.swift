@@ -122,11 +122,11 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
                     if let err = mosh.open(host: spec.host, port: connect.port, key: connect.key, cols: cols, rows: rows) {
                         throw MoshBootstrap.Failure.noConnectLine(err)
                     }
-                    self.lock.lock(); self.transport = mosh; self.lock.unlock()
+                    self.lock.withLock { self.transport = mosh }
                 } else {
                     let shell = SSHShell()
                     self.wire(shell)
-                    self.lock.lock(); self.transport = shell; self.lock.unlock()
+                    self.lock.withLock { self.transport = shell }
                     try await shell.connect(host: spec.host, port: spec.port, user: spec.user,
                                             agent: spec.agent, cols: cols, rows: rows,
                                             knownHosts: spec.knownHosts, password: nil)
