@@ -11,9 +11,9 @@ packages:
     url: https://github.com/migueldeicaza/SwiftTerm
     from: "1.13.0"
   CSSH:
-    # Vendored locally (vendor/CSSH/CSSH.xcframework) — xcodebuild's package
-    # downloader stalls on the GitHub release asset in this environment, so we
-    # fetch it ourselves (vendor/fetch-cssh.sh) and reference it by path.
+    # Vendored locally (vendor/CSSH/CSSH.xcframework), built from source by
+    # vendor/build-cssh.sh — libssh2 1.11.0 on OpenSSL 3.5.1, pinned + sha256-
+    # verified. Referenced by path; the xcframework itself is gitignored.
     path: vendor/CSSH
   YubiKit:
     url: https://github.com/Yubico/yubikit-swift
@@ -76,7 +76,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cc.bsns.ssh
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "21"
+        CURRENT_PROJECT_VERSION: "22"
         # App UI layer stays Swift 5 mode for now; the BsnsSSHCore package is
         # already Swift 6 strict-concurrency clean on its own.
         SWIFT_VERSION: "5.0"
