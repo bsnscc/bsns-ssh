@@ -77,6 +77,9 @@ struct ConnectView: View {
             }
         }
         .navigationTitle("Connect")
+        .toolbar {
+            if !hostStore.hosts.isEmpty { EditButton() }
+        }
         .navigationDestination(isPresented: $showTerminal) {
             if let activeShell {
                 LiveTerminalScreen(shell: activeShell, title: "\(user)@\(host)")
