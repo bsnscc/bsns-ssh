@@ -8,8 +8,9 @@ packages:
   bsns-ssh:
     path: ..
   SwiftTerm:
-    url: https://github.com/migueldeicaza/SwiftTerm
-    exactVersion: "1.13.0"
+    # Vendored fork (vendor/SwiftTerm) of upstream 1.13.0, patched for pointer
+    # click-drag selection + PageUp/PageDown-to-remote. See vendor/SwiftTerm/PATCHES.md.
+    path: vendor/SwiftTerm
   CSSH:
     # Vendored locally (vendor/CSSH/CSSH.xcframework), built from source by
     # vendor/build-cssh.sh — libssh2 1.11.0 on OpenSSL 3.5.1, pinned + sha256-
