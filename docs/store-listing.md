@@ -13,48 +13,49 @@ the source. Character limits noted per field.
 **Subtitle** (≤30): `Keys you keep. No middleman.`
 _(alt: `SSH & mosh, keys in hardware`)_
 
-**Promotional text** (≤170, updatable without review):
-> Your SSH keys live in the Secure Enclave or on your YubiKey and never leave.
-> No analytics, no phone-home — only your own connections. Open source.
+**Promotional text** (≤170, updatable without review — 145 chars):
+> A free, open source SSH/Mosh/SFTP client from bsns.cc. No strings attached. No ads, no account needed, no paywalled features, no data collection.
 
-**Keywords** (≤100, comma-separated, no spaces):
-`ssh,mosh,terminal,sftp,ssh client,secure enclave,yubikey,key,proxyjump,sysadmin,devops,server,console`
+**Keywords** (≤100, comma-separated — 99 chars):
+`mosh,terminal,sftp,ssh client,yubikey,secure enclave,proxyjump,sysadmin,devops,server,console,shell`
 
-**Description** (≤4000):
-> bsns.SSH is a native SSH and mosh client built on one idea: your keys and your
-> config are yours — hardware-protected, with no vendor ever in the middle.
->
-> KEYS THAT NEVER LEAVE YOUR HARDWARE
-> Generate keys directly in the Secure Enclave, or use a YubiKey over NFC or
-> USB-C (PIV). The private key is non-extractable and signing sits behind Face ID
-> / Touch ID — it never touches the network, and we never see it.
->
-> NO TELEMETRY. AT ALL.
-> No analytics, no crash reporting, no phone-home. The only network traffic the
-> app makes is your own SSH/mosh sessions and the sync storage you choose. The
-> app is open source, so you can confirm this yourself — we even document how.
->
-> A REAL TERMINAL
-> Multi-session tabs, find, scrollback, a hardware-keyboard-friendly layout,
-> snippets, and local command history. mosh keeps your session alive across
-> network changes and sleep.
->
-> BRING YOUR EXISTING SETUP
-> Import your ~/.ssh/config, known_hosts, and keys in seconds. Host-key
-> verification is trust-on-first-use: an unknown host asks; a changed key is
-> refused, not silently accepted.
->
-> YOUR CONFIG, YOUR STORAGE
-> Optional encrypted sync over iCloud, Drive, Dropbox, or a file you move by
-> hand — the provider only ever sees ciphertext. No account of ours, no server
-> of ours.
->
-> ALSO
-> • SFTP file browsing • local port forwarding • single-hop ProxyJump (the
-> bastion is key-authenticated and host-key-verified) • current, pinned crypto
-> (OpenSSL 3.5 + libssh2 1.11), built reproducibly from source.
->
-> bsns.SSH is from the team behind bsns.cc. Source: github.com/bsnscc/bsns-ssh
+**Description** (≤4000 — ~2.4k chars). iOS version below; for **Android** swap
+"Secure Enclave" → "Android Keystore (StrongBox where available)" and "Face ID or
+Touch ID" → "your fingerprint or device unlock". (Don't name Android in the iOS
+listing — Apple flags other-platform references.) App Store descriptions are
+**plain text**, so use `•` bullets, not Markdown.
+
+```
+bsns.SSH is a native, zero-telemetry SSH and Mosh client built for operators who demand total control over their infrastructure and their data. No accounts, no subscriptions, and zero vendor middle-men.
+
+HARDWARE-BACKED SECURITY
+Generate non-extractable keys directly within your device's Secure Enclave, or authenticate seamlessly via a YubiKey (PIV over NFC or USB-C). Your private keys never touch the network, and signing operations sit securely behind Face ID or Touch ID.
+
+ZERO TELEMETRY
+We collect absolutely nothing. No analytics, no crash tracking, and no proprietary servers. The only network traffic the app ever creates is your own outbound sessions and your chosen sync destination. It's fully open-source and independently verifiable.
+
+BRING YOUR OWN CLOUD SYNC
+Keep your devices in sync without giving up your privacy. Because bsns.SSH saves directly to native OS file providers, you can use iCloud Drive, Google Drive, Nextcloud, Proton Drive, or local network shares without granting third-party API tokens to the app. The cloud provider only ever sees your encrypted ciphertext.
+
+A POWERFUL, NATIVE TERMINAL
+• True Mosh Support: Keep your terminal session alive across spotty cellular connections, Wi-Fi hops, and device sleep.
+• Desktop-Class Workspace: Multi-session tabs, interactive find, deep scrollback buffers, and a highly customizable hardware-keyboard layout.
+• Instant Migration: Import your existing ~/.ssh/config, known_hosts, and software keys in seconds with secure trust-on-first-use host verification.
+
+ADVANCED OPERATOR TOOLS
+• In-process SSH agent authentication (keys never touch the transport layer).
+• Full SFTP file browsing and local port forwarding.
+• Single-hop ProxyJump (key-authenticated and host-verified bastions).
+• Built on a modern, pinned crypto stack (OpenSSL 3.5 + libssh2 1.11) compiled reproducibly from source.
+• Engineered for accessibility with VoiceOver-labeled controls, Dynamic Type, and high-contrast dark themes.
+
+FULLY OPEN SOURCE (GPLv3)
+Review the codebase, audit our no-telemetry claims, or build the app yourself at: github.com/bsnscc/bsns-ssh
+
+bsns.SSH is proudly built and maintained by bsns.cc as part of our Tools for Operators campaign. We believe foundational administration and security utilities should be open, private, and free.
+
+bsns.cc is an operations platform for small business with many tools and a shared memory — because your business shouldn't live in your head.
+```
 
 **What's New** (first release):
 > First public release. Native SSH + mosh, hardware-backed keys (Secure Enclave /
