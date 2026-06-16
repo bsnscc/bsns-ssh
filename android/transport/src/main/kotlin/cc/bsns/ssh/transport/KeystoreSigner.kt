@@ -12,10 +12,14 @@ import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 
 /**
- * A non-extractable ECDSA P-256 key in the Android Keystore. The private key
- * never leaves the secure hardware (TEE on the emulator; StrongBox on capable
- * devices via `setIsStrongBoxBacked`). Signing happens in hardware; this is the
- * Android analogue of the iOS Secure Enclave backend.
+ * A non-extractable ECDSA P-256 key in the Android Keystore. The private key is
+ * generated in, and never leaves, the device's secure key store — StrongBox on
+ * devices that have it, otherwise the TEE (the emulator has no StrongBox).
+ * Signing happens there; the key is never exported.
+ *
+ * Note: signing is NOT gated on a per-use biometric/credential prompt — the app
+ * lock gates the UI, not each signature. (Per-sign user auth would require a
+ * prompt on every connection and a key migration; not enabled.)
  *
  * `sign` is invoked from the native libssh2 sign callback (by name/signature),
  * returning the SSH ECDSA signature body `mpint(r) || mpint(s)`.
@@ -27,16 +31,17 @@ class KeystoreSigner(alias: String) {
     init {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         if (!ks.containsAlias(alias)) {
+            fun spec(strongBox: Boolean) = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
+                .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .apply { if (strongBox && android.os.Build.VERSION.SDK_INT >= 28) setIsStrongBoxBacked(true) }
+                .build()
             val kpg = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
-            kpg.initialize(
-                KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
-                    .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-                    .setDigests(KeyProperties.DIGEST_SHA256)
-                    // On a real device add .setIsStrongBoxBacked(true) +
-                    // .setUserAuthenticationRequired(true) for biometric gating.
-                    .build()
-            )
-            kpg.generateKeyPair()
+            try {                                   // prefer StrongBox; fall back to the TEE
+                kpg.initialize(spec(true)); kpg.generateKeyPair()
+            } catch (e: Exception) {
+                kpg.initialize(spec(false)); kpg.generateKeyPair()
+            }
         }
         val entry = ks.getEntry(alias, null) as KeyStore.PrivateKeyEntry
         privateKey = entry.privateKey

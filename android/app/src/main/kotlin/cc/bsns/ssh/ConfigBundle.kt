@@ -61,19 +61,28 @@ object ConfigBundle {
         hasSettings = o.has("settings"),
     )
 
-    /** Merge a parsed bundle into the local stores (additive; dups skipped). */
-    fun apply(context: Context, o: JSONObject) {
-        val hostStore = HostStore(context)
-        o.optJSONArray("hosts")?.let { arr ->
+    /** Which categories the user opted to import. Hosts/settings are low-risk;
+     *  trusted host keys and private keys are explicit opt-ins. */
+    class Selection(
+        val hosts: Boolean,
+        val knownHosts: Boolean,
+        val settings: Boolean,
+        val keys: Boolean,
+    )
+
+    /** Merge the opted-in categories into the local stores (additive; dups skipped). */
+    fun apply(context: Context, o: JSONObject, sel: Selection) {
+        if (sel.hosts) o.optJSONArray("hosts")?.let { arr ->
+            val hostStore = HostStore(context)
             for (i in 0 until arr.length()) {
                 val h = arr.getJSONObject(i)
                 hostStore.add(SavedHost(h.getString("host"), h.getInt("port"), h.getString("user")))
             }
         }
-        o.optJSONObject("knownHosts")?.let { kh ->
+        if (sel.knownHosts) o.optJSONObject("knownHosts")?.let { kh ->
             kh.keys().forEach { id -> kh.getString(id).let { KnownHostsStore(context).trustRaw(id, Base64.getDecoder().decode(it)) } }
         }
-        o.optJSONObject("settings")?.let { s ->
+        if (sel.settings) o.optJSONObject("settings")?.let { s ->
             val st = SettingsStore(context)
             st.fontSize = s.optInt("fontSize", st.fontSize).coerceIn(8, 30)
             st.scrollback = s.optInt("scrollback", st.scrollback)
@@ -81,7 +90,7 @@ object ConfigBundle {
             st.keepAwake = s.optBoolean("keepAwake", st.keepAwake)
             st.showKeyBar = s.optBoolean("showKeyBar", st.showKeyBar)
         }
-        o.optJSONArray("keys")?.let { arr ->
+        if (sel.keys) o.optJSONArray("keys")?.let { arr ->
             val km = KeyManager(context)
             for (i in 0 until arr.length()) {
                 val k = arr.getJSONObject(i)

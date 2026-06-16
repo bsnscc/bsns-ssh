@@ -13,18 +13,22 @@ data class SavedHost(val host: String, val port: Int, val user: String) {
 class HostStore(context: Context) {
     private val prefs = context.getSharedPreferences("hosts", Context.MODE_PRIVATE)
 
-    fun load(): List<SavedHost> {
+    fun load(): List<SavedHost> = try {
         val arr = JSONArray(prefs.getString("list", "[]"))
-        return (0 until arr.length()).map { i ->
+        (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             SavedHost(o.getString("host"), o.getInt("port"), o.getString("user"))
         }
+    } catch (e: Exception) {
+        emptyList()   // never crash the connect screen on a corrupt store
     }
 
     private fun save(hosts: List<SavedHost>) {
         val arr = JSONArray()
         hosts.forEach { arr.put(JSONObject().put("host", it.host).put("port", it.port).put("user", it.user)) }
-        prefs.edit().putString("list", arr.toString()).apply()
+        // commit() (synchronous) so a saved host survives even if the process is
+        // killed right after — apply()'s background write can be lost.
+        prefs.edit().putString("list", arr.toString()).commit()
     }
 
     fun add(host: SavedHost): List<SavedHost> {

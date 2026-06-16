@@ -51,7 +51,7 @@ fun BackupScreen(onBack: () -> Unit) {
     var passphrase by remember { mutableStateOf("") }
     var includeKeys by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
-    var pendingImport by remember { mutableStateOf<JSONObject?>(null) }
+    var pendingImport by remember { mutableStateOf<PendingImport?>(null) }
 
     val exportDoc = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json"),
@@ -76,9 +76,9 @@ fun BackupScreen(onBack: () -> Unit) {
                 runCatching {
                     val sealed = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                         ?: error("unreadable")
-                    val plain = if (ConfigEnvelope.isEncrypted(sealed))
-                        ConfigEnvelope.decrypt(sealed, passphrase) else sealed
-                    ConfigBundle.parse(plain)
+                    val encrypted = ConfigEnvelope.isEncrypted(sealed)
+                    val plain = if (encrypted) ConfigEnvelope.decrypt(sealed, passphrase) else sealed
+                    PendingImport(ConfigBundle.parse(plain), encrypted)
                 }
             }
             result
@@ -131,25 +131,57 @@ fun BackupScreen(onBack: () -> Unit) {
     }
 
     pendingImport?.let { o ->
-        val s = remember(o) { ConfigBundle.summarize(o) }
+        val s = remember(o) { ConfigBundle.summarize(o.bundle) }
+        var impHosts by remember(o) { mutableStateOf(s.hosts > 0) }       // low-risk → default on
+        var impSettings by remember(o) { mutableStateOf(s.hasSettings) }  // low-risk → default on
+        var impKnown by remember(o) { mutableStateOf(false) }             // explicit opt-in
+        var impKeys by remember(o) { mutableStateOf(false) }              // explicit opt-in
+        val keysAllowed = o.encrypted && s.keys > 0                       // never from a plaintext bundle
         AlertDialog(
             onDismissRequest = { pendingImport = null },
             title = { Text("Import this backup?") },
             text = {
-                Text("• ${s.hosts} host(s)\n• ${s.knownHosts} trusted host key(s)\n" +
-                    "• ${s.keys} software key(s)\n• settings: ${if (s.hasSettings) "yes" else "no"}\n\n" +
-                    "Merges into what's already on this device.")
+                Column {
+                    Text("Choose what to merge into this device:", fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (s.hosts > 0) ImportToggle("${s.hosts} saved host(s)", impHosts) { impHosts = it }
+                    if (s.hasSettings) ImportToggle("Settings", impSettings) { impSettings = it }
+                    if (s.knownHosts > 0) ImportToggle("${s.knownHosts} trusted host key(s)", impKnown) { impKnown = it }
+                    if (s.keys > 0) ImportToggle("${s.keys} software private key(s)",
+                        impKeys && keysAllowed, enabled = keysAllowed) { impKeys = it }
+                    if (s.keys > 0 && !keysAllowed) Text(
+                        "Private keys are only imported from an encrypted backup.",
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val bundle = o; pendingImport = null
+                    val bundle = o.bundle
+                    val sel = ConfigBundle.Selection(impHosts, impKnown, impSettings, impKeys && keysAllowed)
+                    pendingImport = null
                     scope.launch {
-                        withContext(Dispatchers.IO) { runCatching { ConfigBundle.apply(context, bundle) } }
+                        withContext(Dispatchers.IO) { runCatching { ConfigBundle.apply(context, bundle, sel) } }
                         status = "imported"
                     }
                 }) { Text("Import") }
             },
             dismissButton = { TextButton(onClick = { pendingImport = null }) { Text("Cancel") } },
         )
+    }
+}
+
+/** A parsed bundle awaiting the import review, plus whether it came encrypted. */
+private class PendingImport(val bundle: org.json.JSONObject, val encrypted: Boolean)
+
+@Composable
+private fun ImportToggle(label: String, value: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, fontSize = 14.sp,
+            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+        Switch(checked = value, onCheckedChange = onChange, enabled = enabled)
     }
 }

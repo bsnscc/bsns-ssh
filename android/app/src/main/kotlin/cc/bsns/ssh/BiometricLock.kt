@@ -38,7 +38,7 @@ private fun promptUnlock(activity: FragmentActivity, onSuccess: () -> Unit) {
     prompt.authenticate(
         BiometricPrompt.PromptInfo.Builder()
             .setTitle("Unlock bsns.ssh")
-            .setSubtitle("Your keys are locked behind device authentication.")
+            .setSubtitle("Unlock to use your saved hosts, keys, and sessions.")
             .setAllowedAuthenticators(AUTHENTICATORS)
             .build(),
     )

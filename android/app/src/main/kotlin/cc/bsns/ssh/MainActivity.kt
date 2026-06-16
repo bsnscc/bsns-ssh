@@ -67,6 +67,18 @@ class MainActivity : FragmentActivity() {
         setContent { MaterialTheme(colorScheme = darkColorScheme()) { App() } }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // With app lock on, mark the window secure so terminal output is excluded
+        // from the recents/app-switcher snapshot and screenshots.
+        if (SettingsStore(this).appLock) {
+            window.setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE,
+                android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+
     override fun onStop() {
         super.onStop()
         YubiKeyManager.lock()   // forget the cached YubiKey PIN when backgrounded
@@ -527,16 +539,19 @@ fun ConnectScreen(
                 Text("Saved", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 savedHosts.forEach { h ->
                     Row(
-                        Modifier.fillMaxWidth(),
+                        // Whole row loads the host (a bigger, reliable tap target than
+                        // just the text); the ✕ removes it.
+                        Modifier.fillMaxWidth().clickable {
+                            host = h.host; port = h.port.toString(); user = h.user
+                            status = "loaded ${h.label}"
+                        }.padding(vertical = 6.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
                             h.label, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.weight(1f).clickable {
-                                host = h.host; port = h.port.toString(); user = h.user
-                            },
+                            modifier = Modifier.weight(1f),
                         )
                         TextButton(onClick = { savedHosts = hostStore.remove(h) }) { Text("✕") }
                     }
@@ -583,11 +598,14 @@ fun ConnectScreen(
                 }) { Text(if (forwardsActive) "Tunnels ●" else "Tunnels") }
 
                 OutlinedButton(enabled = !busy && password.isNotEmpty(), onClick = {
-                    busy = true; status = "installing key…"
-                    thread {
-                        val p = port.toIntOrNull() ?: 22
-                        val ok = SshBridge().nativeInstallKey(host, p, user, password, authLine)
-                        main.post { busy = false; status = if (ok) "key installed — now Connect" else "install failed" }
+                    // Verify the host key first (same TOFU prompt as Connect) so the
+                    // server password is never sent to an unverified host.
+                    verifyThen { p, blob ->
+                        busy = true; status = "installing key…"
+                        thread {
+                            val ok = SshBridge().nativeInstallKey(host, p, user, password, authLine, blob)
+                            main.post { busy = false; status = if (ok) "key installed — now Connect" else "install failed" }
+                        }
                     }
                 }) { Text("Install key") }
 

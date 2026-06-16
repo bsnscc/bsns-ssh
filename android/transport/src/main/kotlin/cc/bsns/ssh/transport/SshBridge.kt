@@ -7,7 +7,7 @@ package cc.bsns.ssh.transport
  */
 class SshBridge {
     /** Connect, password-auth, and append `authLine` to the server's authorized_keys. */
-    external fun nativeInstallKey(host: String, port: Int, user: String, password: String, authLine: String): Boolean
+    external fun nativeInstallKey(host: String, port: Int, user: String, password: String, authLine: String, expectedHostKey: ByteArray?): Boolean
 
     /** Public-key auth where signing is delegated to `signer` (a Keystore-backed
      *  object exposing `fun sign(data: ByteArray): ByteArray`), then exec `cmd`. */

@@ -41,10 +41,40 @@ static int tcp_connect(const char* host, int port) {
     return fd;
 }
 
+// Modern SSH algorithm allowlist — no SHA-1, CBC, or 3DES (parity with iOS
+// applyAlgorithmPolicy). method_pref fails only if NONE of a list is supported,
+// so unsupported entries are ignored and a fully-unsupported list fails closed.
+static int apply_algorithm_policy(LIBSSH2_SESSION* s) {
+    const char* kex =
+        "curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,"
+        "ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,"
+        "diffie-hellman-group16-sha512,diffie-hellman-group14-sha256";
+    const char* hostkey =
+        "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,"
+        "rsa-sha2-512,rsa-sha2-256";
+    const char* ciphers =
+        "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,"
+        "aes256-ctr,aes192-ctr,aes128-ctr";
+    const char* macs =
+        "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,"
+        "hmac-sha2-256,hmac-sha2-512";
+    if (libssh2_session_method_pref(s, LIBSSH2_METHOD_KEX, kex)) return -1;
+    if (libssh2_session_method_pref(s, LIBSSH2_METHOD_HOSTKEY, hostkey)) return -1;
+    if (libssh2_session_method_pref(s, LIBSSH2_METHOD_CRYPT_CS, ciphers)) return -1;
+    if (libssh2_session_method_pref(s, LIBSSH2_METHOD_CRYPT_SC, ciphers)) return -1;
+    if (libssh2_session_method_pref(s, LIBSSH2_METHOD_MAC_CS, macs)) return -1;
+    if (libssh2_session_method_pref(s, LIBSSH2_METHOD_MAC_SC, macs)) return -1;
+    return 0;
+}
+
 static LIBSSH2_SESSION* open_session(int fd) {
     LIBSSH2_SESSION* s = libssh2_session_init();
     if (!s) return NULL;
     libssh2_session_set_blocking(s, 1);
+    if (apply_algorithm_policy(s) != 0) {        // fail closed — never fall back to weak defaults
+        LOG("algorithm policy could not be applied — refusing");
+        libssh2_session_free(s); return NULL;
+    }
     if (libssh2_session_handshake(s, fd)) { libssh2_session_free(s); return NULL; }
     return s;
 }
@@ -78,7 +108,7 @@ static int sign_cb(LIBSSH2_SESSION* session, unsigned char** sig, size_t* sig_le
 JNIEXPORT jboolean JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeInstallKey(
     JNIEnv* env, jobject thiz, jstring jhost, jint port, jstring juser,
-    jstring jpassword, jstring jauthLine) {
+    jstring jpassword, jstring jauthLine, jbyteArray jexpectedHostKey) {
     (void)thiz;
     if (libssh2_init(0)) return JNI_FALSE;
     const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
@@ -89,6 +119,21 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeInstallKey(
     int fd = tcp_connect(host, port);
     if (fd >= 0) {
         LIBSSH2_SESSION* s = open_session(fd);
+        if (s && jexpectedHostKey != NULL) {
+            // Pin the host key BEFORE sending the password — never hand a reusable
+            // server password to an unverified (possibly wrong) host.
+            size_t hklen = 0; int hktype = 0;
+            const char* hk = libssh2_session_hostkey(s, &hklen, &hktype);
+            jsize explen = (*env)->GetArrayLength(env, jexpectedHostKey);
+            jbyte* exp = (*env)->GetByteArrayElements(env, jexpectedHostKey, 0);
+            int mismatch = (!hk || (jsize)hklen != explen || memcmp(hk, exp, hklen) != 0);
+            (*env)->ReleaseByteArrayElements(env, jexpectedHostKey, exp, JNI_ABORT);
+            if (mismatch) {
+                LOG("installKey: host key mismatch — refusing");
+                libssh2_session_disconnect(s, "host key mismatch");
+                libssh2_session_free(s); s = NULL;
+            }
+        }
         if (s) {
             if (libssh2_userauth_password(s, user, pass) == 0) {
                 LIBSSH2_CHANNEL* c = libssh2_channel_open_session(s);
