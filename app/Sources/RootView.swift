@@ -4,6 +4,10 @@ import BsnsSSHCore
 struct RootView: View {
     @Environment(AgentStore.self) private var store
     @Environment(SessionStore.self) private var sessions
+    @Environment(HostStore.self) private var hosts
+    @Environment(KnownHostsStore.self) private var knownHosts
+    @Environment(SyncStore.self) private var sync
+    @Environment(\.scenePhase) private var scenePhase
     @State private var homeTab = ProcessInfo.processInfo.environment["BSNS_DEV_TAB"] ?? "connect"
 
     var body: some View {
@@ -28,6 +32,13 @@ struct RootView: View {
             }
         }
         .task { await maybeDevAutoConnect() }
+        // Auto-sync: pull + merge the user's folder on launch; push when backgrounded.
+        .task { await ConfigSync.autoPull(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store) }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                ConfigSync.autoPush(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store)
+            }
+        }
     }
 
     /// Headless integration hook: BSNS_DEV_AUTOCONNECT=1 + a base64 Ed25519 key

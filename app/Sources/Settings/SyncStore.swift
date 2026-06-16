@@ -31,6 +31,7 @@ final class SyncStore {
 
     private(set) var folderName: String?     // display only
     var lastStatus: String?
+    private let hashKey = "sync.lastHash"
 
     init() {
         if let url = resolvedFolder() { folderName = url.lastPathComponent }
@@ -38,6 +39,14 @@ final class SyncStore {
 
     var isConfigured: Bool { UserDefaults.standard.data(forKey: bookmarkKey) != nil }
     var hasPassphrase: Bool { loadPassphrase() != nil }
+    /// Auto-sync runs only once a folder AND passphrase are set.
+    var autoEnabled: Bool { isConfigured && hasPassphrase }
+
+    /// Hash of the last bundle pushed/pulled, so a no-op push is skipped.
+    var lastHash: String? {
+        get { UserDefaults.standard.string(forKey: hashKey) }
+        set { UserDefaults.standard.set(newValue, forKey: hashKey) }
+    }
 
     // MARK: folder
 
