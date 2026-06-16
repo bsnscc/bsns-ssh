@@ -122,9 +122,15 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             case _ where inEscape: if (0x40...0x7e).contains(b) { inEscape = false }
             case 0x1b: inEscape = true
             case 0x0d, 0x0a:
-                let line = lineBuf.trimmingCharacters(in: .whitespaces)
+                let raw = lineBuf
                 lineBuf = ""
-                if !line.isEmpty { CommandHistory.shared.record(line) }
+                // Honor the shell `ignorespace` convention + the user's history
+                // toggle: a line typed with a leading space is never recorded
+                // (use it for secrets), and history can be turned off entirely.
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if !line.isEmpty, !raw.hasPrefix(" "), UserDefaults.standard.bool(forKey: SettingsKey.commandHistory) {
+                    CommandHistory.shared.record(line)
+                }
             case 0x03, 0x15: lineBuf = ""                          // Ctrl-C / Ctrl-U
             case 0x7f, 0x08: if !lineBuf.isEmpty { lineBuf.removeLast() }
             case 0x20...0x7e: lineBuf.append(Character(UnicodeScalar(b)))
@@ -207,6 +213,10 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             return "⚠️ The host key changed — possible interception. Connection refused."
         case SSHShellError.unknownHostKey:
             return "The server's host key isn't trusted yet."
+        case SSHShellError.unknownJumpHostKey:
+            return "The jump host's key isn't trusted yet — connect from the Connect screen to verify it."
+        case SSHShellError.jumpHostKeyMismatch:
+            return "⚠️ The jump host's key changed — possible interception. Connection refused."
         case SSHShellError.noIdentities:
             return "No key available — add or generate a key first."
         case SSHShellError.noHostKey:

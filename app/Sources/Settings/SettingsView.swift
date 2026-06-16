@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.keepAliveInterval) private var keepAlive = 30
     @AppStorage(SettingsKey.terminalType) private var terminalType = "xterm-256color"
     @AppStorage(SettingsKey.appLock) private var appLock = false
+    @AppStorage(SettingsKey.commandHistory) private var commandHistory = true
 
     private let scrollbackOptions = [500, 1000, 2000, 5000, 10000]
     private let keepAliveOptions = [15, 30, 60, 120]
@@ -76,9 +77,12 @@ struct SettingsView: View {
 
             Section {
                 Toggle("Require Face ID / passcode to unlock", isOn: $appLock)
+                Toggle("Record command history (on device)", isOn: $commandHistory)
                 NavigationLink { KnownHostsView() } label: { Label("Known Hosts", systemImage: "checkmark.shield") }
             } header: {
                 Text("Security")
+            } footer: {
+                Text("Command history stays on this device and is never synced. Type a command with a leading space to keep that one out of history.")
             }
 
             Section("Snippets") {

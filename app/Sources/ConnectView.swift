@@ -11,6 +11,10 @@ struct ConnectView: View {
 
     private enum PendingAction { case connect, install }
 
+    /// A jump host is configured — only the interactive shell tunnels through it
+    /// for now, so mosh / SFTP / install-key are disabled (they'd go direct).
+    private var hasJump: Bool { !jump.trimmingCharacters(in: .whitespaces).isEmpty }
+
     @State private var host = ""
     @State private var port = "22"
     @State private var user = ""
@@ -25,6 +29,11 @@ struct ConnectView: View {
     @State private var notice: String?
     @State private var pendingHostKey: HostKey?
     @State private var pendingAction: PendingAction = .connect
+    // A bastion (ProxyJump) host key awaiting trust — prompted + trusted under the
+    // bastion's own host/port before we ever authenticate to it.
+    @State private var pendingJumpKey: HostKey?
+    @State private var pendingJumpHost = ""
+    @State private var pendingJumpPort: UInt16 = 22
 
     var body: some View {
         Form {
@@ -68,8 +77,13 @@ struct ConnectView: View {
                 TextField("jump / bastion (optional: user@host[:port])", text: $jump)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                 Toggle("Use mosh (UDP, survives roaming)", isOn: $useMosh)
-                if useMosh {
+                    .disabled(hasJump)
+                if useMosh && !hasJump {
                     Text("Connects over SSH to start mosh-server, then runs over UDP. Requires mosh-server on the host and a key (agent) — not a password.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if hasJump {
+                    Text("Via a jump host, only an interactive shell is supported for now — mosh, SFTP, and key install go direct and are disabled.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -88,9 +102,9 @@ struct ConnectView: View {
                     .disabled(busy || host.isEmpty || user.isEmpty
                               || (useMosh ? store.identities.isEmpty : (password.isEmpty && store.identities.isEmpty)))
                 Button("Install my key (ssh-copy-id)") { attemptInstall() }
-                    .disabled(busy || host.isEmpty || user.isEmpty || password.isEmpty || store.identities.isEmpty)
+                    .disabled(busy || host.isEmpty || user.isEmpty || password.isEmpty || store.identities.isEmpty || hasJump)
                 Button("Browse files (SFTP)") { if let p = UInt16(port), p > 0 { showSFTP = true } }
-                    .disabled(busy || host.isEmpty || user.isEmpty || store.identities.isEmpty)
+                    .disabled(busy || host.isEmpty || user.isEmpty || store.identities.isEmpty || hasJump)
                 Button("Save host") { saveHost() }
                     .disabled(host.isEmpty || user.isEmpty)
             }
@@ -128,6 +142,21 @@ struct ConnectView: View {
                 \(key.fingerprint)
 
                 Only trust this if the fingerprint matches what the server's admin gave you (e.g. `ssh-keygen -lf` on the host). Trusting an unverified key can expose your session to interception.
+                """)
+            }
+        }
+        .alert("Verify jump host key", isPresented: Binding(get: { pendingJumpKey != nil }, set: { if !$0 { pendingJumpKey = nil } })) {
+            Button("Trust", role: .destructive) { trustJumpAndContinue() }
+            Button("Cancel", role: .cancel) { pendingJumpKey = nil }
+        } message: {
+            if let key = pendingJumpKey {
+                Text("""
+                First connection to the jump host \(pendingJumpHost):\(pendingJumpPort).
+
+                \(key.keyType)
+                \(key.fingerprint)
+
+                You're routing through this bastion to reach \(host). Trust it only if the fingerprint matches what its admin gave you.
                 """)
             }
         }
@@ -214,7 +243,7 @@ struct ConnectView: View {
 
     private func attemptConnect() {
         guard let portValue = UInt16(port), portValue > 0 else { error = "Invalid port."; return }
-        if useMosh { attemptConnectMosh(portValue); return }
+        if useMosh && !hasJump { attemptConnectMosh(portValue); return }   // jump ⇒ shell only
         error = nil; notice = nil; busy = true
         let shell = SSHShell()
         let known = knownHostsStore.knownHosts
@@ -284,7 +313,8 @@ struct ConnectView: View {
                                                      password: pw, knownHosts: known)
                 await MainActor.run {
                     busy = false
-                    notice = "Installed \(lines.count) key(s). Clear the password and tap Connect."
+                    password = ""   // don't keep the password in UI state after use
+                    notice = "Installed \(lines.count) key(s). Tap Connect."
                 }
             } catch let e as SSHShellError {
                 await MainActor.run { busy = false; handle(e, action: .install) }
@@ -299,8 +329,13 @@ struct ConnectView: View {
         case .unknownHostKey(let key):
             pendingHostKey = key
             pendingAction = action
+        case let .unknownJumpHostKey(key, jumpHost, jumpPort):
+            pendingJumpKey = key; pendingJumpHost = jumpHost; pendingJumpPort = jumpPort
+            pendingAction = action
         case .hostKeyMismatch(let stored, let presented):
             error = "⚠️ HOST KEY CHANGED — possible interception.\nstored: \(stored)\nnow:    \(presented)"
+        case .jumpHostKeyMismatch(let stored, let presented):
+            error = "⚠️ JUMP HOST KEY CHANGED — possible interception.\nstored: \(stored)\nnow:    \(presented)"
         default:
             error = TerminalSession.describe(e)
         }
@@ -310,6 +345,16 @@ struct ConnectView: View {
         guard let key = pendingHostKey, let portValue = UInt16(port) else { return }
         knownHostsStore.trust(host: host, port: portValue, key: key)
         pendingHostKey = nil
+        switch pendingAction {
+        case .connect: attemptConnect()
+        case .install: attemptInstall()
+        }
+    }
+
+    private func trustJumpAndContinue() {
+        guard let key = pendingJumpKey else { return }
+        knownHostsStore.trust(host: pendingJumpHost, port: pendingJumpPort, key: key)
+        pendingJumpKey = nil
         switch pendingAction {
         case .connect: attemptConnect()
         case .install: attemptInstall()

@@ -177,11 +177,18 @@ final class SFTPClient: @unchecked Sendable {
                 guard let chunk, !chunk.isEmpty else { break }
                 try chunk.withUnsafeBytes { raw in
                     var off = 0
+                    var stalls = 0
                     let base = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
                     while off < raw.count {
                         let n = libssh2_sftp_write(handle, base + off, raw.count - off)
                         if n < 0 { throw SFTPError.op("Write failed (code \(n)).") }
-                        off += n   // n == 0 → retry the same offset
+                        if n == 0 {   // no progress on a blocking handle — bail rather than spin
+                            stalls += 1
+                            if stalls > 1000 { throw SFTPError.op("Write stalled.") }
+                            continue
+                        }
+                        stalls = 0
+                        off += n
                     }
                 }
             }

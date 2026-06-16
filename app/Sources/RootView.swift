@@ -46,6 +46,9 @@ struct RootView: View {
     /// (auto-trusting the host key). Used to verify the SSH path in the
     /// simulator without UI automation. No effect in normal use.
     private func maybeDevAutoConnect() async {
+        #if DEBUG
+        // Headless integration hooks (env-triggered) — compiled into DEBUG only, so
+        // none of this auto-trust / auto-connect code exists in a release build.
         let env = ProcessInfo.processInfo.environment
         // Dev hook: BSNS_DEV_ENCLAVE=1 generates a Secure Enclave key so its
         // creation, storage, and public-key format can be verified in the sim.
@@ -141,6 +144,7 @@ struct RootView: View {
         } catch {
             print("dev autoconnect failed: \(error)")
         }
+        #endif
     }
 }
 

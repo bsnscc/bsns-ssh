@@ -80,7 +80,7 @@ struct InstallKeyView: View {
             do {
                 try await SSHShell.installPublicKeys(keyLines, host: host, port: portValue, user: user,
                                                      password: password, knownHosts: known)
-                await MainActor.run { busy = false; notice = "Installed on \(user)@\(host)." }
+                await MainActor.run { busy = false; password = ""; notice = "Installed on \(user)@\(host)." }
             } catch SSHShellError.unknownHostKey(let key) {
                 await MainActor.run { pendingHostKey = key }
             } catch SSHShellError.hostKeyMismatch(let stored, let now) {

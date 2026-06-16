@@ -178,7 +178,9 @@ struct LiveTerminalScreen: View {
 
     /// Dev hook: BSNS_DEV_FINDTEST=<term> auto-opens find on that term after
     /// output arrives, so the match highlight can be screenshotted headlessly.
+    /// DEBUG-only — it writes commands into a session, so it must not exist in release.
     private func devFindTest() {
+        #if DEBUG
         guard let term = ProcessInfo.processInfo.environment["BSNS_DEV_FINDTEST"], !term.isEmpty else { return }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_800_000_000)   // let the shell prompt appear
@@ -189,6 +191,7 @@ struct LiveTerminalScreen: View {
             findQuery = term
             _ = handle.find(term)
         }
+        #endif
     }
 }
 

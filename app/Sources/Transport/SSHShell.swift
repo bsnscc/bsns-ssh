@@ -16,6 +16,11 @@ private let BLOCK_OUTBOUND: Int32 = 0x0002
 public enum SSHShellError: Error {
     case libssh2Init, connectFailed, sessionInit, handshakeFailed
     case noHostKey, unknownHostKey(HostKey), hostKeyMismatch(String, String)
+    // A ProxyJump bastion whose own host key isn't trusted yet — carries the
+    // bastion's host/port so the UI can prompt + trust under the right identifier
+    // (vs. the target, which is verified separately through the tunnel).
+    case unknownJumpHostKey(HostKey, host: String, port: UInt16)
+    case jumpHostKeyMismatch(String, String)
     case noIdentities, authFailed(String)
     case channelOpenFailed, ptyFailed, shellFailed, execFailed(String)
     case algorithmPolicyFailed
@@ -242,7 +247,8 @@ public final class SSHShell: @unchecked Sendable {
         let fd: Int32
         if let jump {
             fd = try openJumpTunnel(jump, targetHost: host, targetPort: port,
-                                    agent: agent, identities: identities, password: password)
+                                    agent: agent, identities: identities, password: password,
+                                    knownHosts: knownHosts)
         } else {
             guard let direct = Self.tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
             fd = direct
@@ -326,15 +332,24 @@ public final class SSHShell: @unchecked Sendable {
     /// Establish the bastion session + a direct-tcpip channel to the target, relayed
     /// over a socketpair. Returns the target-side fd for the end-to-end handshake
     /// (so the caller's handshake + host-key check apply to the real target). The
-    /// bastion's own key is trust-on-first-use in v1; the same key/password auths it.
+    /// bastion's OWN host key is verified against `knownHosts` BEFORE we authenticate
+    /// to it — a spoofed bastion can't collect an auth attempt before it's trusted.
     private func openJumpTunnel(_ jump: JumpHop, targetHost: String, targetPort: UInt16,
-                                agent: Agent, identities: [SSHPublicKey], password: String?) throws -> Int32 {
+                                agent: Agent, identities: [SSHPublicKey], password: String?,
+                                knownHosts: KnownHosts) throws -> Int32 {
         guard let bfd = Self.tcpConnect(host: jump.host, port: jump.port) else { throw SSHShellError.connectFailed }
         guard let bsession = libssh2_session_init_ex(nil, nil, nil, nil) else { close(bfd); throw SSHShellError.sessionInit }
         libssh2_session_set_blocking(bsession, 1)
         do {
             try Self.applyAlgorithmPolicy(bsession)
             guard libssh2_session_handshake(bsession, bfd) == 0 else { throw SSHShellError.handshakeFailed }
+            // Trust the bastion BEFORE sending any auth (its own TOFU decision).
+            let bastionKey = try Self.presentedHostKey(bsession)
+            switch knownHosts.verify(host: jump.host, port: jump.port, key: bastionKey) {
+            case .trusted: break
+            case .unknown: throw SSHShellError.unknownJumpHostKey(bastionKey, host: jump.host, port: jump.port)
+            case let .mismatch(stored, presented): throw SSHShellError.jumpHostKeyMismatch(stored, presented)
+            }
             if let password, !password.isEmpty {
                 try Self.passwordAuth(bsession, user: jump.user, password: password)
             } else {

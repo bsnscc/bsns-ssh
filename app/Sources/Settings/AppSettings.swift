@@ -18,6 +18,7 @@ enum SettingsKey {
     static let keepAliveInterval = "session.keepAliveInterval"
     static let terminalType = "session.terminalType"
     static let appLock = "security.appLock"
+    static let commandHistory = "privacy.commandHistory"   // record run commands locally
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -35,6 +36,7 @@ enum SettingsKey {
             keepAliveInterval: 30,
             terminalType: "xterm-256color",
             appLock: false,
+            commandHistory: true,
         ])
     }
 }
