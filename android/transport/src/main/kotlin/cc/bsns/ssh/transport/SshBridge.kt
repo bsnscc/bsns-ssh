@@ -26,6 +26,17 @@ class SshBridge {
     external fun nativeResize(handle: Long, cols: Int, rows: Int)
     external fun nativeClose(handle: Long)
 
+    // SFTP — its own authenticated session (handle, 0 on failure). Serialise all
+    // calls onto one thread (libssh2 isn't thread-safe).
+    external fun nativeSftpOpen(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, expectedHostKey: ByteArray?): Long
+    /** Each row is "d\t<size>\t<name>" or "f\t<size>\t<name>"; null if path unreadable. */
+    external fun nativeSftpList(handle: Long, path: String): Array<String>?
+    external fun nativeSftpRead(handle: Long, path: String): ByteArray?
+    external fun nativeSftpWrite(handle: Long, path: String, data: ByteArray): Boolean
+    external fun nativeSftpMkdir(handle: Long, path: String): Boolean
+    external fun nativeSftpRemove(handle: Long, path: String, isDir: Boolean): Boolean
+    external fun nativeSftpClose(handle: Long)
+
     companion object {
         init { System.loadLibrary("sshbridge") }
     }

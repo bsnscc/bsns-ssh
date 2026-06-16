@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(sshbridge C)
+project(sshbridge C CXX)
 
-# Static libssh2 + OpenSSL built from source by android/jni/build-libssh2.sh.
-# CMAKE_SOURCE_DIR = .../transport/src/main/cpp ; the prebuilt tree is under android/jni.
+# Static libssh2 + OpenSSL (build-libssh2.sh) and mosh + protobuf-lite
+# (build-mosh.sh), both built from source for ${ANDROID_ABI} under android/jni.
 set(PREBUILT ${CMAKE_SOURCE_DIR}/../../../../jni/prebuilt/${ANDROID_ABI})
 
 add_library(ssh2 STATIC IMPORTED)
@@ -11,10 +11,12 @@ add_library(ssl STATIC IMPORTED)
 set_target_properties(ssl PROPERTIES IMPORTED_LOCATION ${PREBUILT}/lib/libssl.a)
 add_library(crypto STATIC IMPORTED)
 set_target_properties(crypto PROPERTIES IMPORTED_LOCATION ${PREBUILT}/lib/libcrypto.a)
+add_library(mosh STATIC IMPORTED)
+set_target_properties(mosh PROPERTIES IMPORTED_LOCATION ${PREBUILT}/lib/libmosh.a)
 
 find_library(log-lib log)
 
-add_library(sshbridge SHARED sshbridge.c)
+add_library(sshbridge SHARED sshbridge.c mosh_bridge.cpp)
 target_include_directories(sshbridge PRIVATE ${PREBUILT}/include)
-# Order matters for static linking: libssh2 depends on ssl/crypto/z.
-target_link_libraries(sshbridge ssh2 ssl crypto z ${log-lib})
+# Order matters for static linking: libssh2 → ssl/crypto/z; libmosh → crypto.
+target_link_libraries(sshbridge mosh ssh2 ssl crypto z ${log-lib})

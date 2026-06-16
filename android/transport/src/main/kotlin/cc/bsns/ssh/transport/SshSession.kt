@@ -16,12 +16,12 @@ class SshSession(
     private val pubBlob: ByteArray,
     private val signer: Any,
     private val expectedHostKey: ByteArray? = null,
-) {
+) : TerminalTransport {
     // Output that arrives before a consumer attaches `onOutput` is buffered and
     // flushed when it's set, so the initial banner/prompt is never dropped (the
     // loop starts at open(), which may be before the UI wires up).
     private val preBuffer = ArrayList<ByteArray>()
-    var onOutput: ((ByteArray) -> Unit)? = null
+    override var onOutput: ((ByteArray) -> Unit)? = null
         set(value) {
             synchronized(lock) {
                 field = value
@@ -47,15 +47,15 @@ class SshSession(
         return true
     }
 
-    fun write(data: ByteArray) {
+    override fun write(data: ByteArray) {
         synchronized(lock) { writeQueue.add(data) }
     }
 
-    fun resize(cols: Int, rows: Int) {
+    override fun resize(cols: Int, rows: Int) {
         synchronized(lock) { pendingResize = cols to rows }
     }
 
-    fun close() {
+    override fun close() {
         running.set(false)
     }
 

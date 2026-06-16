@@ -95,3 +95,26 @@ a real `mosh-server` + network, so 4–5 validate on Graham's device.
 
 Testing needs a real server running `mosh-server` and network roaming, so this
 lands and is validated on-device, not in the simulator.
+
+## Android port (2026-06-16)
+
+The Android port reuses this exact vendored tree (`app/vendor/mosh/{protobuf,
+mosh-src,moshclient.cpp}`) — the C++ shim and sources are platform-independent;
+only the toolchain and `config.h` differ:
+
+- **`android/jni/build-mosh.sh`** compiles all 57 TUs with the NDK clang++ into
+  `libmosh.a` (arm64-v8a), using **`android/jni/mosh/config.h`** — the Linux/bionic
+  analogue of `config-ios.h`. Crypto uses the bundled internal OCB over **OpenSSL's
+  AES** (`USE_OPENSSL_AES`, EVP API — fully OpenSSL-3.x compatible), linking the same
+  `libcrypto.a` already built for libssh2; no CommonCrypto. Android also enables the
+  Linux-only `HAVE_IP_MTU_DISCOVER` / `HAVE_IP_RECVTOS` that iOS omits.
+- **`android/transport/src/main/cpp/mosh_bridge.cpp`** is the JNI over `moshclient.h`,
+  with a wake-pipe poll loop (`nativeMoshService` polls the mosh fd + a self-pipe so
+  staged input interrupts the poll → low latency). `MoshBridge.kt` / `MoshSession.kt`
+  are the Kotlin face (owner-thread loop, `TerminalTransport`). `MoshBootstrap.kt`
+  parses `MOSH CONNECT`. The connect screen has a "Use mosh (UDP)" toggle.
+- **Status:** compiles, links, bootstraps, opens the UDP transport, and renders the
+  live remote framebuffer (proving crypto/protobuf/transport/display end-to-end);
+  input reaches the native push. Sustained live session is on-device-pending — the
+  Docker-Desktop-Mac UDP-publish + emulator double-NAT collapses the return path
+  after the handshake. Same on-device-only gate as iOS.

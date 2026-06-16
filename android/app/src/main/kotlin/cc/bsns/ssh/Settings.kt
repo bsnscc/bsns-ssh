@@ -1,0 +1,140 @@
+package cc.bsns.ssh
+
+import android.content.Context
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Divider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+/** App preferences (SharedPreferences). The terminal layer reads these at session
+ *  creation; the key bar reads `showKeyBar` live. Mirrors the iOS `AppSettings`. */
+class SettingsStore(context: Context) {
+    private val p = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+
+    var fontSize: Int
+        get() = p.getInt("fontSize", 15); set(v) { p.edit().putInt("fontSize", v).apply() }
+    var scrollback: Int
+        get() = p.getInt("scrollback", 2000); set(v) { p.edit().putInt("scrollback", v).apply() }
+    var keepAwake: Boolean
+        get() = p.getBoolean("keepAwake", false); set(v) { p.edit().putBoolean("keepAwake", v).apply() }
+    var showKeyBar: Boolean
+        get() = p.getBoolean("showKeyBar", true); set(v) { p.edit().putBoolean("showKeyBar", v).apply() }
+    var cursorBlink: Boolean
+        get() = p.getBoolean("cursorBlink", true); set(v) { p.edit().putBoolean("cursorBlink", v).apply() }
+    var appLock: Boolean
+        get() = p.getBoolean("appLock", false); set(v) { p.edit().putBoolean("appLock", v).apply() }
+}
+
+@Composable
+private fun SettingToggle(label: String, value: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, fontSize = 15.sp,
+            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+        Switch(checked = value, onCheckedChange = onChange, enabled = enabled)
+    }
+}
+
+/** Settings: terminal appearance/behaviour + the app-lock toggle. */
+@Composable
+fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: () -> Unit, onBack: () -> Unit) {
+    var fontSize by remember { mutableStateOf(store.fontSize) }
+    var scrollback by remember { mutableStateOf(store.scrollback) }
+    var keepAwake by remember { mutableStateOf(store.keepAwake) }
+    var showKeyBar by remember { mutableStateOf(store.showKeyBar) }
+    var cursorBlink by remember { mutableStateOf(store.cursorBlink) }
+    var appLock by remember { mutableStateOf(store.appLock) }
+    val scrollbackOptions = listOf(500, 1000, 2000, 5000, 10000)
+
+    Scaffold { pad ->
+        Column(
+            Modifier.fillMaxSize().padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Settings", fontFamily = FontFamily.Monospace, fontSize = 20.sp)
+                TextButton(onClick = onBack) { Text("Done") }
+            }
+            Text("Changes apply to new sessions.", fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            Divider()
+            Text("Terminal", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+
+            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Font size", fontSize = 15.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(onClick = {
+                        if (fontSize > 8) { fontSize--; store.fontSize = fontSize }
+                    }) { Text("–") }
+                    Text("$fontSize", fontFamily = FontFamily.Monospace, fontSize = 15.sp,
+                        modifier = Modifier.padding(horizontal = 14.dp))
+                    OutlinedButton(onClick = {
+                        if (fontSize < 30) { fontSize++; store.fontSize = fontSize }
+                    }) { Text("+") }
+                }
+            }
+
+            Row(Modifier.fillMaxWidth().clickable {
+                val next = scrollbackOptions[(scrollbackOptions.indexOf(scrollback).coerceAtLeast(0) + 1) % scrollbackOptions.size]
+                scrollback = next; store.scrollback = next
+            }.padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Scrollback", fontSize = 15.sp)
+                Text("$scrollback lines", fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.primary)
+            }
+
+            SettingToggle("Cursor blink", cursorBlink) { cursorBlink = it; store.cursorBlink = it }
+            SettingToggle("Keep screen awake while connected", keepAwake) { keepAwake = it; store.keepAwake = it }
+            SettingToggle("Show key bar", showKeyBar) { showKeyBar = it; store.showKeyBar = it }
+
+            Divider()
+            Text("Security", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+            SettingToggle(
+                if (biometricAvailable) "Require fingerprint / face to unlock"
+                else "Require fingerprint / face (none enrolled)",
+                appLock, enabled = biometricAvailable,
+            ) { appLock = it; store.appLock = it }
+
+            Divider()
+            Text("Backup", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+            OutlinedButton(onClick = onBackup) { Text("Export / import (encrypted)") }
+
+            Divider()
+            Text(
+                "No accounts. No analytics. No telemetry. Your keys stay on this device; " +
+                    "the hardware-backed one can never be exported.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
