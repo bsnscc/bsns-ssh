@@ -7,3 +7,7 @@ jni/prebuilt/
 jni/spike/ssh_spike
 # CMake/ninja externalNativeBuild artifacts
 .cxx/
+
+# Release signing — keep these OUT of git and BACK THEM UP.
+keystore.properties
+*.jks

@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application") version "8.7.2"
     id("org.jetbrains.kotlin.android") version "2.1.0"
@@ -19,6 +21,27 @@ android {
     }
 
     buildFeatures { compose = true }
+
+    signingConfigs {
+        create("release") {
+            val props = rootProject.file("keystore.properties")
+            if (props.exists()) {
+                val k = Properties().apply { props.inputStream().use { load(it) } }
+                storeFile = file(k.getProperty("storeFile"))
+                storePassword = k.getProperty("storePassword")
+                keyAlias = k.getProperty("keyAlias")
+                keyPassword = k.getProperty("keyPassword")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            // R8 off for now: KeystoreSigner.sign is called from native by name —
+            // add a keep rule before enabling minification.
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
