@@ -51,6 +51,8 @@ class SettingsStore(context: Context) {
         get() = p.getString("cursorStyle", "block") ?: "block"; set(v) { p.edit().putString("cursorStyle", v).apply() }
     var bellHaptic: Boolean
         get() = p.getBoolean("bellHaptic", true); set(v) { p.edit().putBoolean("bellHaptic", v).apply() }
+    var commandHistory: Boolean
+        get() = p.getBoolean("commandHistory", true); set(v) { p.edit().putBoolean("commandHistory", v).apply() }
 }
 
 @Composable
@@ -76,6 +78,7 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
     var showKeyBar by remember { mutableStateOf(store.showKeyBar) }
     var cursorBlink by remember { mutableStateOf(store.cursorBlink) }
     var appLock by remember { mutableStateOf(store.appLock) }
+    var commandHistory by remember { mutableStateOf(store.commandHistory) }
     var theme by remember { mutableStateOf(store.theme) }
     var cursorStyle by remember { mutableStateOf(store.cursorStyle) }
     var bellHaptic by remember { mutableStateOf(store.bellHaptic) }
@@ -159,6 +162,12 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
                 // Apply screenshot/recents protection NOW, not on the next resume.
                 (context as? android.app.Activity)?.let { a -> applySecureFlag(a.window, it) }
             }
+            SettingToggle("Record command history (on device)", commandHistory) {
+                commandHistory = it; store.commandHistory = it
+            }
+            Text("History stays on this device and is never synced. Type a command with a " +
+                "leading space to keep that one out of history.",
+                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             Divider()
             Text("Snippets", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)

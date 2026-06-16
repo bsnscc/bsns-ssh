@@ -20,6 +20,7 @@ class SshSession(
     private val jumpHost: String? = null,
     private val jumpPort: Int = 22,
     private val jumpUser: String? = null,
+    private val expectedBastionHostKey: ByteArray? = null,
 ) : TerminalTransport {
     // Output that arrives before a consumer attaches `onOutput` is buffered and
     // flushed when it's set, so the initial banner/prompt is never dropped (the
@@ -46,7 +47,7 @@ class SshSession(
      *  start the I/O loop. Returns false if the session couldn't be opened. */
     fun open(cols: Int, rows: Int): Boolean {
         handle = bridge.nativeOpenShell(host, port, user, pubBlob, signer, cols, rows, expectedHostKey,
-            jumpHost, jumpPort, jumpUser)
+            jumpHost, jumpPort, jumpUser, expectedBastionHostKey)
         if (handle == 0L) return false
         running.set(true)
         Thread({ loop() }, "ssh-session").apply { isDaemon = true }.start()

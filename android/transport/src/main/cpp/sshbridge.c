@@ -139,10 +139,15 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeInstallKey(
                 LIBSSH2_CHANNEL* c = libssh2_channel_open_session(s);
                 if (c) {
                     char cmd[8192];
+                    // Append the key only if it isn't already present (dedup), matching
+                    // the iOS installer's `grep -qxF || append` so repeated installs
+                    // don't pile up duplicate authorized_keys lines.
                     snprintf(cmd, sizeof(cmd),
-                             "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
-                             "printf '%%s\\n' \"%s\" >> ~/.ssh/authorized_keys && "
-                             "chmod 600 ~/.ssh/authorized_keys && echo INSTALLED", line);
+                             "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && "
+                             "chmod 600 ~/.ssh/authorized_keys && "
+                             "{ grep -qxF -- \"%s\" ~/.ssh/authorized_keys || "
+                             "printf '%%s\\n' \"%s\" >> ~/.ssh/authorized_keys; } && echo INSTALLED",
+                             line, line);
                     libssh2_channel_exec(c, cmd);
                     char buf[256];
                     int n;
@@ -342,9 +347,11 @@ static void* jump_pump(void* arg) {
 static int open_jump_fd(JNIEnv* env, const char* jhost, int jport, const char* juser,
                         const char* dhost, int dport,
                         const unsigned char* blob, size_t bloblen, jobject signer,
-                        JumpChain** out) {
+                        jbyteArray jexpectedBastionHostKey, JumpChain** out) {
     int jfd = -1;
-    LIBSSH2_SESSION* js = connect_and_auth(env, jhost, jport, juser, blob, bloblen, signer, NULL, &jfd);
+    // Verify the bastion's OWN host key (if supplied) before authenticating to it.
+    LIBSSH2_SESSION* js = connect_and_auth(env, jhost, jport, juser, blob, bloblen, signer,
+                                           jexpectedBastionHostKey, &jfd);
     if (!js) { LOG("jump: connect/auth to bastion %s:%d failed", jhost, jport); return -1; }
     LIBSSH2_CHANNEL* ch = libssh2_channel_direct_tcpip_ex(js, dhost, dport, "127.0.0.1", 22);
     if (!ch) {
@@ -384,7 +391,7 @@ JNIEXPORT jbyteArray JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeHostKeyBlobVia(
     JNIEnv* env, jobject thiz, jstring jhost, jint port,
     jstring jjumpHost, jint jumpPort, jstring jjumpUser,
-    jbyteArray jpubblob, jobject signer) {
+    jbyteArray jpubblob, jobject signer, jbyteArray jexpectedBastionHostKey) {
     (void)thiz;
     if (libssh2_init(0)) return NULL;
     const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
@@ -395,7 +402,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeHostKeyBlobVia(
     jbyteArray result = NULL;
     JumpChain* jump = NULL;
     int fd = open_jump_fd(env, jh, jumpPort, ju, host, port,
-                          (const unsigned char*)blob, (size_t)bloblen, signer, &jump);
+                          (const unsigned char*)blob, (size_t)bloblen, signer, jexpectedBastionHostKey, &jump);
     if (fd >= 0) {
         LIBSSH2_SESSION* s = open_session(fd);
         if (s) {
@@ -421,7 +428,7 @@ JNIEXPORT jlong JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
     JNIEnv* env, jobject thiz, jstring jhost, jint port, jstring juser,
     jbyteArray jpubblob, jobject signer, jint cols, jint rows, jbyteArray jexpectedHostKey,
-    jstring jjumpHost, jint jumpPort, jstring jjumpUser) {
+    jstring jjumpHost, jint jumpPort, jstring jjumpUser, jbyteArray jexpectedBastionHostKey) {
     (void)thiz;
     if (libssh2_init(0)) return 0;
     const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
@@ -432,11 +439,12 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
     JumpChain* jump = NULL;
     int fd;
     if (jjumpHost != NULL) {
-        // Reach the target through a bastion (ProxyJump). Same key auths both hops.
+        // Reach the target through a bastion (ProxyJump). The bastion's own host key
+        // is verified (jexpectedBastionHostKey) before auth; same key auths both hops.
         const char* jh = (*env)->GetStringUTFChars(env, jjumpHost, 0);
         const char* ju = (*env)->GetStringUTFChars(env, jjumpUser, 0);
         fd = open_jump_fd(env, jh, jumpPort, ju, host, port,
-                          (const unsigned char*)blob, (size_t)bloblen, signer, &jump);
+                          (const unsigned char*)blob, (size_t)bloblen, signer, jexpectedBastionHostKey, &jump);
         (*env)->ReleaseStringUTFChars(env, jjumpHost, jh);
         (*env)->ReleaseStringUTFChars(env, jjumpUser, ju);
     } else {
@@ -806,10 +814,16 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeSftpWriteChunk(
     jbyte* buf = (*env)->GetByteArrayElements(env, jbuf, 0);
     jboolean ok = JNI_TRUE;
     jint off = 0;
+    int stalls = 0;
     while (off < len) {
         ssize_t n = libssh2_sftp_write(h, (const char*)buf + off, (size_t)(len - off));
         if (n == LIBSSH2_ERROR_EAGAIN) continue;
         if (n < 0) { ok = JNI_FALSE; break; }
+        if (n == 0) {                 // no progress on a blocking handle — bail, don't spin
+            if (++stalls > 1000) { ok = JNI_FALSE; break; }
+            continue;
+        }
+        stalls = 0;
         off += (jint)n;
     }
     (*env)->ReleaseByteArrayElements(env, jbuf, buf, JNI_ABORT);

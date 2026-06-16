@@ -108,8 +108,10 @@ object ConfigSync {
         val plain = runCatching { ConfigEnvelope.decrypt(sealed, pass) }.getOrNull() ?: return null
         val o = ConfigBundle.parse(plain)
         // The user configured this folder + passphrase, so it's a trusted source:
-        // merge every category (hosts, trusted keys, settings, snippets, software keys).
-        val sel = ConfigBundle.Selection(hosts = true, knownHosts = true, settings = true, keys = true)
+        // merge every category. Snippets come across too, but apply() forces their
+        // runOnConnect off — synced snippets never silently auto-execute.
+        val sel = ConfigBundle.Selection(hosts = true, knownHosts = true, settings = true,
+                                         keys = true, snippets = true)
         return ConfigBundle.apply(context, o, sel)
     }
 }

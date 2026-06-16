@@ -67,8 +67,9 @@ fun BackupScreen(onBack: () -> Unit) {
             syncOn = true
             scope.launch {
                 status = "syncing…"
-                // First push seeds the folder; pull merges anything already there; push again.
-                withContext(Dispatchers.IO) { ConfigSync.push(context); ConfigSync.pull(context); ConfigSync.push(context) }
+                // PULL + merge first so an existing bundle from another device is never
+                // overwritten before we've taken its contents; then push the union.
+                withContext(Dispatchers.IO) { ConfigSync.pull(context); ConfigSync.push(context) }
                 status = "auto-sync on"
             }
         }
@@ -183,6 +184,7 @@ fun BackupScreen(onBack: () -> Unit) {
         var impSettings by remember(o) { mutableStateOf(s.hasSettings) }  // low-risk → default on
         var impKnown by remember(o) { mutableStateOf(false) }             // explicit opt-in
         var impKeys by remember(o) { mutableStateOf(false) }              // explicit opt-in
+        var impSnippets by remember(o) { mutableStateOf(false) }          // executable config → opt-in
         val keysAllowed = o.encrypted && s.keys > 0                       // never from a plaintext bundle
         AlertDialog(
             onDismissRequest = { pendingImport = null },
@@ -199,13 +201,18 @@ fun BackupScreen(onBack: () -> Unit) {
                     if (s.keys > 0 && !keysAllowed) Text(
                         "Private keys are only imported from an encrypted backup.",
                         fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                    if (s.snippets > 0) ImportToggle("${s.snippets} snippet(s)", impSnippets) { impSnippets = it }
+                    if (s.snippets > 0) Text(
+                        "Snippets are commands. Imported snippets won't run on connect until you " +
+                            "enable that yourself" + (if (s.runOnConnect > 0) " (${s.runOnConnect} were marked run-on-connect)." else "."),
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = {
-                val anySelected = impHosts || impSettings || impKnown || (impKeys && keysAllowed)
+                val anySelected = impHosts || impSettings || impKnown || (impKeys && keysAllowed) || impSnippets
                 TextButton(enabled = anySelected, onClick = {
                     val bundle = o.bundle
-                    val sel = ConfigBundle.Selection(impHosts, impKnown, impSettings, impKeys && keysAllowed)
+                    val sel = ConfigBundle.Selection(impHosts, impKnown, impSettings, impKeys && keysAllowed, impSnippets)
                     pendingImport = null
                     scope.launch {
                         val result = withContext(Dispatchers.IO) {

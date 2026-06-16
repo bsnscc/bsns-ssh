@@ -12,7 +12,10 @@ object MoshBootstrap {
 
     data class Connect(val port: Int, val key: String)
 
-    private val LINE = Regex("""MOSH CONNECT (\d{1,5}) ([A-Za-z0-9/+]{22,})""")
+    // The mosh key is 16 bytes, unpadded base64 = EXACTLY 22 chars (matches the
+    // iOS MoshConnect rule). A `$` anchor + no trailing base64 char rejects an
+    // overlong key rather than truncating it.
+    private val LINE = Regex("""MOSH CONNECT (\d{1,5}) ([A-Za-z0-9/+]{22})$""")
 
     /** Find the `MOSH CONNECT <port> <key>` line in mosh-server's output. */
     fun parse(output: String?): Connect? {

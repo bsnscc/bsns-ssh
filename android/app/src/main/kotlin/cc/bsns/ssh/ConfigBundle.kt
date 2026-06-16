@@ -14,7 +14,8 @@ import java.util.Base64
  * Android↔Android is verified; full iOS↔Android bundle parity is by-design.
  */
 object ConfigBundle {
-    class Summary(val hosts: Int, val knownHosts: Int, val keys: Int, val hasSettings: Boolean)
+    class Summary(val hosts: Int, val knownHosts: Int, val keys: Int, val hasSettings: Boolean,
+                  val snippets: Int = 0, val runOnConnect: Int = 0)
 
     /** Serialise the current config to JSON bytes (keys only when opted in). */
     fun build(context: Context, includeKeys: Boolean): ByteArray {
@@ -65,20 +66,31 @@ object ConfigBundle {
 
     fun parse(data: ByteArray): JSONObject = JSONObject(String(data, Charsets.UTF_8))
 
-    fun summarize(o: JSONObject) = Summary(
-        hosts = o.optJSONArray("hosts")?.length() ?: 0,
-        knownHosts = o.optJSONObject("knownHosts")?.length() ?: 0,
-        keys = o.optJSONArray("keys")?.length() ?: 0,
-        hasSettings = o.has("settings"),
-    )
+    fun summarize(o: JSONObject): Summary {
+        val snips = o.optJSONArray("snippets")
+        var roc = 0
+        if (snips != null) for (i in 0 until snips.length()) {
+            if (snips.optJSONObject(i)?.optBoolean("runOnConnect", false) == true) roc++
+        }
+        return Summary(
+            hosts = o.optJSONArray("hosts")?.length() ?: 0,
+            knownHosts = o.optJSONObject("knownHosts")?.length() ?: 0,
+            keys = o.optJSONArray("keys")?.length() ?: 0,
+            hasSettings = o.has("settings"),
+            snippets = snips?.length() ?: 0,
+            runOnConnect = roc,
+        )
+    }
 
     /** Which categories the user opted to import. Hosts/settings are low-risk;
-     *  trusted host keys and private keys are explicit opt-ins. */
+     *  trusted host keys, private keys, and snippets (executable config) are
+     *  explicit opt-ins. */
     class Selection(
         val hosts: Boolean,
         val knownHosts: Boolean,
         val settings: Boolean,
         val keys: Boolean,
+        val snippets: Boolean = false,
     )
 
     /** What an import actually merged — so the UI reports the truth, not "imported". */
@@ -132,8 +144,12 @@ object ConfigBundle {
             st.showKeyBar = s.optBoolean("showKeyBar", st.showKeyBar)
             settings = true
         }
-        // Snippets carry no secrets — they ride the (default-on) settings opt-in.
-        if (sel.settings) o.optJSONArray("snippets")?.let { arr ->
+        // Snippets are executable configuration (a run-on-connect snippet auto-runs
+        // on every future session), so they're a SEPARATE explicit opt-in — and
+        // imported snippets always land with runOnConnect = OFF. The user re-enables
+        // run-on-connect per snippet on their own device, so a malicious or synced
+        // bundle can never inject an auto-executing command.
+        if (sel.snippets) o.optJSONArray("snippets")?.let { arr ->
             val store = SnippetStore(context)
             for (i in 0 until arr.length()) {
                 val sn = arr.optJSONObject(i) ?: continue
@@ -141,7 +157,7 @@ object ConfigBundle {
                 val command = sn.optString("command")
                 if (name.isEmpty() || command.isEmpty()) continue
                 store.upsert(Snippet(sn.optString("id").ifEmpty { java.util.UUID.randomUUID().toString() },
-                    name, command, sn.optBoolean("runOnConnect", false)))
+                    name, command, runOnConnect = false))
                 snippets++
             }
         }

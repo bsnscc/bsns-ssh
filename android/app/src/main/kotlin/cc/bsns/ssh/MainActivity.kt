@@ -287,6 +287,7 @@ class TerminalHolder(
 
     // Local command history + the line currently being typed (for suggestions).
     private val history = CommandHistory(context)
+    private val settingsStore = SettingsStore(context)
     var currentLine by mutableStateOf("")
         private set
     private val lineBuf = StringBuilder()
@@ -314,8 +315,13 @@ class TerminalHolder(
                 inEscape -> if (c in 0x40..0x7e) inEscape = false   // end of an escape seq
                 c == 0x1b -> inEscape = true
                 c == 0x0d || c == 0x0a -> {                          // Enter — commit the line
-                    val line = lineBuf.toString().trim()
-                    if (line.isNotEmpty()) history.record(line)
+                    val raw = lineBuf.toString()
+                    val line = raw.trim()
+                    // ignorespace convention + history toggle: a leading-space line is
+                    // never recorded (use it for secrets), and history can be disabled.
+                    if (line.isNotEmpty() && !raw.startsWith(" ") && settingsStore.commandHistory) {
+                        history.record(line)
+                    }
                     lineBuf.setLength(0)
                 }
                 c == 0x03 || c == 0x15 -> lineBuf.setLength(0)       // Ctrl-C / Ctrl-U
@@ -623,16 +629,21 @@ fun ConnectScreen(
     var savedHosts by remember(reloadKey) { mutableStateOf(hostStore.load()) }
     val knownHosts = remember { KnownHostsStore(context) }
     var pendingTofu by remember { mutableStateOf<TofuInfo?>(null) }
+    var pendingBastionTofu by remember { mutableStateOf<BastionTofu?>(null) }
     var pendingAction by remember { mutableStateOf<((Int, ByteArray) -> Unit)?>(null) }
 
     fun openWith(p: Int, blob: ByteArray) {
         busy = true; status = "connecting…"
         val js = parseJump(jump.trim().ifEmpty { null }, user)
         val title = if (js != null) "$user@$host:$p ⇢ ${js.host}" else "$user@$host:$p"
+        // The bastion was verified by verifyThen, so its trusted key is in the store —
+        // pin it on the tunnel so the bastion is re-verified on connect + reconnect.
+        val bastionKey = js?.let { knownHosts.trustedBlob(it.host, it.port) }
         // The same factory does the initial open and any later reconnect-on-drop.
         val factory: () -> TerminalTransport? = {
             val s = SshSession(host, p, user, key.publicKeyBlob, key.signer, expectedHostKey = blob,
-                jumpHost = js?.host, jumpPort = js?.port ?: 22, jumpUser = js?.user)
+                jumpHost = js?.host, jumpPort = js?.port ?: 22, jumpUser = js?.user,
+                expectedBastionHostKey = bastionKey)
             if (s.open(80, 24)) s else null
         }
         thread {
@@ -672,17 +683,34 @@ fun ConnectScreen(
         }
     }
 
-    // Verify the host key (TOFU) once, then run the chosen action (shell or SFTP).
+    // Verify the host key (TOFU), then run the chosen action. With a jump host this
+    // is two-stage: trust the BASTION's own key first (before any auth to it), then
+    // the target's key fetched through the now-verified tunnel.
     fun verifyThen(action: (Int, ByteArray) -> Unit) {
         val p = validPort(port)
         if (p == null) { status = "port must be a number from 1 to 65535"; return }
         val js = parseJump(jump.trim().ifEmpty { null }, user)
-        busy = true; status = if (js != null) "verifying host via ${js.host}…" else "verifying host…"
+        busy = true; status = if (js != null) "verifying jump host ${js.host}…" else "verifying host…"
         thread {
-            // Through a bastion, fetch the TARGET's key over the tunnel so TOFU still
-            // approves the real target fingerprint (the target may be unreachable directly).
+            // Stage 1: the bastion's own key (direct), trusted before we auth to it.
+            val bastionKey: ByteArray?
+            if (js != null) {
+                val bkey = SshBridge().nativeHostKeyBlob(js.host, js.port)
+                if (bkey == null) { main.post { busy = false; status = "couldn't reach jump host ${js.host}:${js.port}" }; return@thread }
+                val bt = knownHosts.trustedBlob(js.host, js.port)
+                when {
+                    bt == null -> { main.post { busy = false; pendingAction = action; pendingBastionTofu = BastionTofu(js.host, js.port, bkey) }; return@thread }
+                    !bt.contentEquals(bkey) -> { main.post { busy = false
+                        status = "⚠ jump host key CHANGED for ${js.host}:${js.port} — refusing. Verify out of band, then forget it under Hosts." }; return@thread }
+                }
+                bastionKey = bkey
+            } else bastionKey = null
+
+            // Stage 2: the target's key — fetched THROUGH the tunnel (re-verifying the
+            // bastion) for a jump, or directly otherwise.
+            status = if (js != null) "verifying host via ${js.host}…" else status
             val blob = if (js != null)
-                SshBridge().nativeHostKeyBlobVia(host, p, js.host, js.port, js.user, key.publicKeyBlob, key.signer)
+                SshBridge().nativeHostKeyBlobVia(host, p, js.host, js.port, js.user, key.publicKeyBlob, key.signer, bastionKey)
             else SshBridge().nativeHostKeyBlob(host, p)
             val trusted = if (blob != null) knownHosts.trustedBlob(host, p) else null
             when {
@@ -690,8 +718,6 @@ fun ConnectScreen(
                 trusted == null -> main.post { busy = false; pendingAction = action; pendingTofu = TofuInfo(p, blob) }
                 !trusted.contentEquals(blob) -> main.post {
                     busy = false
-                    // Could be an attack — or a host that legitimately rotated its key
-                    // (our newer algorithm allowlist can also surface a different key type).
                     status = "⚠ host key CHANGED for $host:$p — refusing. If you expected this, " +
                         "verify the new fingerprint out of band, then forget the host under Hosts and reconnect."
                 }
@@ -785,6 +811,8 @@ fun ConnectScreen(
 
             if (keys.size > 1) KeyPicker(keys, key.id, onSelectKey)
 
+            val hasJump = jump.trim().isNotEmpty()
+
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -792,7 +820,13 @@ fun ConnectScreen(
             ) {
                 Text("Use mosh (UDP — roams, survives sleep)", fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                androidx.compose.material3.Switch(checked = useMosh, onCheckedChange = { useMosh = it })
+                androidx.compose.material3.Switch(checked = useMosh, enabled = !hasJump,
+                    onCheckedChange = { useMosh = it })
+            }
+            if (hasJump) {
+                Text("Via a jump host, only an interactive shell is supported for now — " +
+                    "mosh, Files, Tunnels, and Install key go direct and are disabled.",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
 
             Row(
@@ -800,10 +834,11 @@ fun ConnectScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Button(enabled = !busy, onClick = {
-                    withYubiPin { verifyThen { p, blob -> if (useMosh) openMosh(p, blob) else openWith(p, blob) } }
-                }) { Text(if (useMosh) "Connect (mosh)" else "Connect") }
+                    // A jump host tunnels the shell only; ignore mosh when one is set.
+                    withYubiPin { verifyThen { p, blob -> if (useMosh && !hasJump) openMosh(p, blob) else openWith(p, blob) } }
+                }) { Text(if (useMosh && !hasJump) "Connect (mosh)" else "Connect") }
 
-                OutlinedButton(enabled = !busy, onClick = {
+                OutlinedButton(enabled = !busy && !hasJump, onClick = {
                     withYubiPin {
                         verifyThen { p, blob ->
                             onSftp(SftpTarget(host, p, user, key.publicKeyBlob, key.signer, blob))
@@ -811,19 +846,23 @@ fun ConnectScreen(
                     }
                 }) { Text("Files") }
 
-                OutlinedButton(enabled = !busy, onClick = {
+                OutlinedButton(enabled = !busy && !hasJump, onClick = {
                     if (forwardsActive) onReopenForwards()
                     else withYubiPin { verifyThen { p, blob -> openForwards(p, blob) } }
                 }) { Text(if (forwardsActive) "Tunnels ●" else "Tunnels") }
 
-                OutlinedButton(enabled = !busy && password.isNotEmpty(), onClick = {
+                OutlinedButton(enabled = !busy && password.isNotEmpty() && !hasJump, onClick = {
                     // Verify the host key first (same TOFU prompt as Connect) so the
                     // server password is never sent to an unverified host.
                     verifyThen { p, blob ->
                         busy = true; status = "installing key…"
                         thread {
                             val ok = SshBridge().nativeInstallKey(host, p, user, password, authLine, blob)
-                            main.post { busy = false; status = if (ok) "key installed — now Connect" else "install failed" }
+                            main.post {
+                                busy = false
+                                if (ok) password = ""   // don't keep the password in UI state after use
+                                status = if (ok) "key installed — now Connect" else "install failed"
+                            }
                         }
                     }
                 }) { Text("Install key") }
@@ -865,6 +904,33 @@ fun ConnectScreen(
                 )
             }
 
+            pendingBastionTofu?.let { bt ->
+                val fp = remember(bt) { SshKeyFormat.fingerprintOfPublicKeyBlob(bt.blob) }
+                AlertDialog(
+                    onDismissRequest = { pendingBastionTofu = null; pendingAction = null },
+                    title = { Text("Verify jump host key") },
+                    text = {
+                        Text(
+                            "First connection to the jump host ${bt.host}:${bt.port}.\n\n$fp\n\n" +
+                                "You're routing through this bastion to reach $host. Trust it only if the " +
+                                "fingerprint matches what its admin gave you out of band.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            knownHosts.trust(bt.host, bt.port, bt.blob)
+                            val act = pendingAction
+                            pendingBastionTofu = null
+                            // Bastion now trusted → re-run verification (proceeds to the target).
+                            if (act != null) verifyThen(act)
+                        }) { Text("Trust") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingBastionTofu = null; pendingAction = null }) { Text("Cancel") }
+                    },
+                )
+            }
+
             if (showYubiPin) {
                 AlertDialog(
                     onDismissRequest = { showYubiPin = false; yubiPin = ""; afterPin = null },
@@ -889,6 +955,7 @@ fun ConnectScreen(
 }
 
 private class TofuInfo(val port: Int, val blob: ByteArray)
+private class BastionTofu(val host: String, val port: Int, val blob: ByteArray)
 
 
 private fun seq(vararg b: Int) = ByteArray(b.size) { b[it].toByte() }
