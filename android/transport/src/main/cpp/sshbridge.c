@@ -799,12 +799,50 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeSftpClose(JNIEnv* env, jobject thiz, 
 #define FWD_MAX 16
 #define FWD_CONN_MAX 64
 #define FWD_BUF 16384
+#define FWD_CAP (1 << 20)   // 1 MiB per-direction buffer cap → backpressure
+
+// A grow-on-demand FIFO byte buffer (head/tail indices; compacts on consume) so
+// a forwarded connection can buffer a bounded amount in each direction and stop
+// reading its source when full — instead of spinning on EAGAIN to drain a slow
+// peer. Mirrors the iOS forwarder's ByteQueue.
+typedef struct { unsigned char* data; size_t cap, head, tail; } ByteQueue;
+
+static size_t bq_count(const ByteQueue* q) { return q->tail - q->head; }
+
+static int bq_append(ByteQueue* q, const unsigned char* src, size_t n) {
+    if (q->head == q->tail) { q->head = q->tail = 0; }
+    if (q->tail + n > q->cap) {
+        if (q->head > 0) {   // compact before growing
+            memmove(q->data, q->data + q->head, q->tail - q->head);
+            q->tail -= q->head; q->head = 0;
+        }
+        if (q->tail + n > q->cap) {
+            size_t ncap = q->cap ? q->cap : 8192;
+            while (ncap < q->tail + n) ncap *= 2;
+            unsigned char* nd = (unsigned char*)realloc(q->data, ncap);
+            if (!nd) return -1;
+            q->data = nd; q->cap = ncap;
+        }
+    }
+    memcpy(q->data + q->tail, src, n); q->tail += n;
+    return 0;
+}
+
+static void bq_consume(ByteQueue* q, size_t n) {
+    q->head += n;
+    if (q->head == q->tail) { q->head = q->tail = 0; }
+}
+
+static void bq_free(ByteQueue* q) { free(q->data); q->data = NULL; q->cap = q->head = q->tail = 0; }
 
 typedef struct {
     int sock;                 // accepted loopback socket (-1 = free slot)
     LIBSSH2_CHANNEL* channel; // direct-tcpip channel to dest
     int sock_eof;             // local side closed its write
     int chan_eof;             // remote side closed its write
+    int sent_chan_eof;        // we forwarded the local half-close to the channel
+    ByteQueue to_channel;     // buffered local → remote
+    ByteQueue to_local;       // buffered remote → local
 } FwdConn;
 
 typedef struct {
@@ -827,7 +865,8 @@ typedef struct {
 static void fwd_conn_close(FwdConn* c) {
     if (c->channel) { libssh2_channel_close(c->channel); libssh2_channel_free(c->channel); c->channel = NULL; }
     if (c->sock >= 0) { close(c->sock); c->sock = -1; }
-    c->sock_eof = c->chan_eof = 0;
+    c->sock_eof = c->chan_eof = c->sent_chan_eof = 0;
+    bq_free(&c->to_channel); bq_free(&c->to_local);
 }
 
 JNIEXPORT jlong JNICALL
@@ -927,10 +966,16 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeForwardService(
         Forward* f = &fc->fwds[i];
         if (f->listen_fd < 0) continue;
         if (!f->remove_flag) { pfds[n].fd = f->listen_fd; pfds[n].events = POLLIN; pfds[n].revents = 0; n++; }
-        for (int j = 0; j < FWD_CONN_MAX; j++)
-            if (f->conns[j].sock >= 0 && !f->conns[j].sock_eof) {
-                pfds[n].fd = f->conns[j].sock; pfds[n].events = POLLIN; pfds[n].revents = 0; n++;
-            }
+        for (int j = 0; j < FWD_CONN_MAX; j++) {
+            FwdConn* c = &f->conns[j];
+            if (c->sock < 0) continue;
+            short ev = 0;
+            // Read the local socket only while its outbound buffer has room (backpressure).
+            if (!c->sock_eof && bq_count(&c->to_channel) < FWD_CAP) ev |= POLLIN;
+            // Wait for writability when we have buffered bytes to push to the socket.
+            if (bq_count(&c->to_local) > 0) ev |= POLLOUT;
+            if (ev) { pfds[n].fd = c->sock; pfds[n].events = ev; pfds[n].revents = 0; n++; }
+        }
     }
     pthread_mutex_unlock(&fc->lock);
 
@@ -973,45 +1018,56 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeForwardService(
             f->conns[slot].sock_eof = f->conns[slot].chan_eof = 0;
         }
 
-        // Pump each active connection both directions (non-blocking).
+        // Pump each active connection both directions, all non-blocking and
+        // bounded. We never spin to drain a slow peer: bytes that can't be sent
+        // right now stay buffered and go out when poll() reports the destination
+        // writable. Reading a source stops while its buffer is at cap, so a slow
+        // consumer applies backpressure (TCP / the SSH window) instead of OOM.
         for (int j = 0; j < FWD_CONN_MAX; j++) {
             FwdConn* c = &f->conns[j];
             if (c->sock < 0) continue;
             active++;
-            // local socket → remote channel
-            if (!c->sock_eof) {
-                ssize_t r = recv(c->sock, buf, sizeof(buf), 0);
-                if (r > 0) {
-                    ssize_t off = 0;
-                    while (off < r) {
-                        ssize_t w = libssh2_channel_write(c->channel, buf + off, (size_t)(r - off));
-                        if (w == LIBSSH2_ERROR_EAGAIN) continue;
-                        if (w < 0) { c->sock_eof = 1; break; }
-                        off += w;
-                    }
-                } else if (r == 0) {
-                    c->sock_eof = 1; libssh2_channel_send_eof(c->channel);
-                } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                    c->sock_eof = 1; libssh2_channel_send_eof(c->channel);
-                }
-            }
-            // remote channel → local socket
-            if (!c->chan_eof) {
+
+            // remote channel → to_local buffer (stop while the local side is backed up)
+            while (!c->chan_eof && bq_count(&c->to_local) < FWD_CAP) {
                 ssize_t r = libssh2_channel_read(c->channel, buf, sizeof(buf));
-                if (r > 0) {
-                    ssize_t off = 0;
-                    while (off < r) {
-                        ssize_t w = send(c->sock, buf + off, (size_t)(r - off), 0);
-                        if (w < 0) { if (errno == EAGAIN || errno == EWOULDBLOCK) continue; c->chan_eof = 1; break; }
-                        off += w;
-                    }
-                } else if (r == 0 && libssh2_channel_eof(c->channel)) {
-                    c->chan_eof = 1; shutdown(c->sock, SHUT_WR);
-                } else if (r < 0 && r != LIBSSH2_ERROR_EAGAIN) {
-                    c->chan_eof = 1;
-                }
+                if (r > 0) bq_append(&c->to_local, (unsigned char*)buf, (size_t)r);
+                else if (r == LIBSSH2_ERROR_EAGAIN) break;
+                else { c->chan_eof = 1; break; }   // 0 = EOF, <0 = error
             }
-            if (c->sock_eof && c->chan_eof) { fwd_conn_close(c); active--; }
+            if (libssh2_channel_eof(c->channel)) c->chan_eof = 1;
+
+            // to_local buffer → local socket (one non-blocking pass)
+            while (bq_count(&c->to_local) > 0) {
+                ssize_t w = send(c->sock, c->to_local.data + c->to_local.head, bq_count(&c->to_local), 0);
+                if (w > 0) bq_consume(&c->to_local, (size_t)w);
+                else { if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) c->sock_eof = 1; break; }
+            }
+
+            // local socket → to_channel buffer (stop while the remote side is backed up)
+            while (!c->sock_eof && bq_count(&c->to_channel) < FWD_CAP) {
+                ssize_t r = recv(c->sock, buf, sizeof(buf), 0);
+                if (r > 0) bq_append(&c->to_channel, (unsigned char*)buf, (size_t)r);
+                else if (r == 0) { c->sock_eof = 1; break; }
+                else { if (errno != EAGAIN && errno != EWOULDBLOCK) c->sock_eof = 1; break; }
+            }
+
+            // to_channel buffer → remote channel (one non-blocking pass)
+            while (bq_count(&c->to_channel) > 0) {
+                ssize_t w = libssh2_channel_write(c->channel, (char*)(c->to_channel.data + c->to_channel.head),
+                                                  bq_count(&c->to_channel));
+                if (w > 0) bq_consume(&c->to_channel, (size_t)w);
+                else break;   // EAGAIN/error: retry next service
+            }
+
+            // Forward the local half-close once our outbound buffer is flushed.
+            if (c->sock_eof && bq_count(&c->to_channel) == 0 && !c->sent_chan_eof) {
+                libssh2_channel_send_eof(c->channel); c->sent_chan_eof = 1;
+            }
+
+            int remote_done = c->chan_eof && bq_count(&c->to_local) == 0;
+            int local_done = c->sock_eof && bq_count(&c->to_channel) == 0;
+            if (remote_done && local_done) { fwd_conn_close(c); active--; }
         }
     }
     pthread_mutex_unlock(&fc->lock);
