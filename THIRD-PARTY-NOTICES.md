@@ -8,6 +8,11 @@ The app is a combined work that links the components below. Because one of them
 distribute the app to is entitled to the complete corresponding source under the
 terms of the GPL.
 
+The **exact, verbatim upstream license texts** for the vendored / built-from-
+source components — at the versions we ship — live in [`licenses/`](licenses/)
+(see [`licenses/README.md`](licenses/README.md) for the index). The summaries
+below are a guide, not a substitute for those texts.
+
 ## Components
 
 | Component | Version | License | Use |
@@ -27,7 +32,7 @@ same pinned source for the NDK). The Android app also links:
 
 | Component | License | Use |
 |-----------|---------|-----|
-| [Termux terminal-emulator / terminal-view](https://github.com/termux/termux-app) | **GPL-3.0** | vendored VT terminal (forked) |
+| [Termux terminal-emulator / terminal-view](https://github.com/termux/termux-app) | **GPL-3.0-only** (incorporates Apache-2.0 [Android Terminal Emulator](https://github.com/jackpal/Android-Terminal-Emulator)) | vendored VT terminal (forked) |
 | [AndroidX + Jetpack Compose](https://developer.android.com/jetpack/androidx) | Apache-2.0 | UI, activity, biometric, documentfile |
 | [Kotlin stdlib + kotlinx.serialization](https://kotlinlang.org) | Apache-2.0 | language runtime, config envelope |
 | [Bouncy Castle](https://www.bouncycastle.org/java.html) (bcprov-jdk18on 1.78.1) | MIT-style (BC) | software-key math (not the transport) |
