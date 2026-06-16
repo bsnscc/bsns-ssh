@@ -52,6 +52,7 @@ android {
 
 dependencies {
     implementation(project(":transport"))
+    implementation(project(":terminal-view"))   // vendored Termux VT terminal
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation(platform("androidx.compose:compose-bom:2024.10.00"))
     implementation("androidx.compose.material3:material3")

@@ -1,5 +1,6 @@
 package cc.bsns.ssh
 
+import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -22,15 +23,20 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import com.termux.terminal.TerminalSession
+import com.termux.view.TerminalView
 import cc.bsns.ssh.transport.KeystoreSigner
 import cc.bsns.ssh.transport.SshBridge
 import cc.bsns.ssh.transport.SshSession
@@ -121,40 +127,51 @@ fun ConnectScreen(signer: KeystoreSigner, onConnected: (SshSession) -> Unit) {
     }
 }
 
-// Strip CSI/OSC/CR so the plain-text view is legible; a real VT widget is next.
-private val ANSI = Regex("\\[[0-9;?]*[ -/]*[@-~]|\\][^]*(?:|\\\\)|\r")
-private fun stripAnsi(s: String) = s.replace(ANSI, "")
 
+/**
+ * Real VT terminal: a vendored Termux TerminalView, SSH-backed via our forked
+ * TerminalSession. The view renders the screen (cursor, colors, vim/htop) and
+ * handles keyboard/IME input directly — type and see at once, no command box.
+ */
 @Composable
 fun TerminalScreen(session: SshSession, onDisconnect: () -> Unit) {
-    var output by remember { mutableStateOf("") }
-    var input by remember { mutableStateOf("") }
-    val scroll = rememberScrollState()
-
-    LaunchedEffect(session) {
-        session.onOutput = { bytes -> main.post { output += stripAnsi(String(bytes, Charsets.UTF_8)) } }
-        session.onClosed = { main.post { output += "\n[disconnected]\n" } }
+    val context = LocalContext.current
+    val terminalView = remember(session) {
+        TerminalView(context, null).apply {
+            setTextSize((14 * resources.displayMetrics.scaledDensity).toInt())
+            setTypeface(Typeface.MONOSPACE)
+            keepScreenOn = true
+            isFocusableInTouchMode = true
+        }
     }
-    LaunchedEffect(output) { scroll.scrollTo(scroll.maxValue) }
+
+    DisposableEffect(session) {
+        val io = object : TerminalSession.ExternalIo {
+            override fun write(data: ByteArray, offset: Int, count: Int) =
+                session.write(data.copyOfRange(offset, offset + count))
+            override fun onResize(columns: Int, rows: Int) = session.resize(columns, rows)
+        }
+        val termSession = TerminalSession(5000, BsnsSessionClient { terminalView.onScreenUpdated() }, io)
+        terminalView.setTerminalViewClient(BsnsViewClient(view = { terminalView }, onEmulatorReady = {
+            // Emulator is ready — start feeding remote output (the SshSession
+            // buffered anything that arrived before now).
+            session.onOutput = { bytes -> main.post { termSession.appendToEmulator(bytes, bytes.size) } }
+        }))
+        terminalView.attachSession(termSession)
+        terminalView.requestFocus()
+        onDispose { session.onOutput = null }
+    }
 
     Scaffold { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(8.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Column(Modifier.fillMaxSize().padding(pad)) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
                 Text("bsns.\$_", fontFamily = FontFamily.Monospace, fontSize = 16.sp)
                 OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
             }
-            Text(
-                output,
-                modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).padding(top = 6.dp),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                OutlinedTextField(input, { input = it }, modifier = Modifier.weight(1f), label = { Text("command") })
-                Button(onClick = { session.write((input + "\n").toByteArray()); input = "" },
-                    modifier = Modifier.padding(start = 8.dp)) { Text("Send") }
-            }
+            AndroidView(factory = { terminalView }, modifier = Modifier.weight(1f).fillMaxWidth())
         }
     }
 }

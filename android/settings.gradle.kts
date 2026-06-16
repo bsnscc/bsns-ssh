@@ -23,5 +23,10 @@ include(":core")
 // a non-extractable Keystore key. Built/tested on the arm64 emulator.
 include(":transport")
 
+// Vendored Termux terminal emulator + view (GPLv3), forked so TerminalSession
+// is backed by our SSH session instead of a local process.
+include(":terminal-emulator")
+include(":terminal-view")
+
 // The Compose app.
 include(":app")
