@@ -264,6 +264,47 @@ class TerminalHolder(
     var status by mutableStateOf(ConnStatus.Connected)
     private var userClosing = false
 
+    // Local command history + the line currently being typed (for suggestions).
+    private val history = CommandHistory(context)
+    var currentLine by mutableStateOf("")
+        private set
+    private val lineBuf = StringBuilder()
+    private var inEscape = false
+
+    fun suggestionsFor(prefix: String): List<String> = history.suggestions(prefix)
+    fun history(): List<String> = history.all()
+    fun clearHistory() = history.clear()
+
+    /** Send the completion's remaining suffix to the shell (the prefix is already typed). */
+    fun applyCompletion(full: String) {
+        val typed = currentLine
+        if (full.length > typed.length && full.startsWith(typed)) {
+            session.write(full.substring(typed.length).toByteArray(Charsets.UTF_8))
+        }
+    }
+
+    // Track typed input by watching the byte stream to the shell: accumulate a
+    // line buffer and record it on Enter. Best-effort (ignores escape sequences);
+    // it feeds local suggestions only, never leaves the device.
+    private fun trackInput(bytes: ByteArray) {
+        for (b in bytes) {
+            val c = b.toInt() and 0xFF
+            when {
+                inEscape -> if (c in 0x40..0x7e) inEscape = false   // end of an escape seq
+                c == 0x1b -> inEscape = true
+                c == 0x0d || c == 0x0a -> {                          // Enter — commit the line
+                    val line = lineBuf.toString().trim()
+                    if (line.isNotEmpty()) history.record(line)
+                    lineBuf.setLength(0)
+                }
+                c == 0x03 || c == 0x15 -> lineBuf.setLength(0)       // Ctrl-C / Ctrl-U
+                c == 0x7f || c == 0x08 -> if (lineBuf.isNotEmpty()) lineBuf.setLength(lineBuf.length - 1)
+                c in 0x20..0x7e -> lineBuf.append(c.toChar())
+            }
+        }
+        main.post { currentLine = lineBuf.toString() }
+    }
+
     val terminalView = TerminalView(context, null).apply {
         setTextSize((fontSizeSp * resources.displayMetrics.scaledDensity).toInt())
         setTypeface(Typeface.MONOSPACE)
@@ -276,8 +317,11 @@ class TerminalHolder(
 
     init {
         val io = object : TerminalSession.ExternalIo {
-            override fun write(data: ByteArray, offset: Int, count: Int) =
-                session.write(data.copyOfRange(offset, offset + count))
+            override fun write(data: ByteArray, offset: Int, count: Int) {
+                val bytes = data.copyOfRange(offset, offset + count)
+                trackInput(bytes)
+                session.write(bytes)
+            }
             override fun onResize(columns: Int, rows: Int) = session.resize(columns, rows)
         }
         termSession = TerminalSession(scrollback,
@@ -371,6 +415,7 @@ fun TabStrip(titles: List<String>, active: Int, onSelect: (Int) -> Unit, onClose
 fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnect: () -> Unit) {
     var searching by remember { mutableStateOf(false) }
     var showSnippets by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var hits by remember { mutableStateOf<List<Int>>(emptyList()) }
     var hitIdx by remember { mutableStateOf(0) }
@@ -427,6 +472,7 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
             ) {
                 Text(holder.title, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { showHistory = true }) { Text("⟳") }
                     TextButton(onClick = { showSnippets = true }) { Text("⌗") }
                     TextButton(onClick = { searching = true }) { Text("⌕") }
                     OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
@@ -461,6 +507,22 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
             },
             modifier = Modifier.weight(1f).fillMaxWidth(),
         )
+        // Local autocomplete: chips from your own command history (no phone-home).
+        val suggestions = holder.suggestionsFor(holder.currentLine)
+        if (suggestions.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                suggestions.forEach { s ->
+                    OutlinedButton(onClick = { holder.applyCompletion(s) },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)) {
+                        Text(s, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1)
+                    }
+                }
+            }
+        }
         if (showKeyBar) KeyBar { holder.session.write(it) }
     }
 
@@ -468,6 +530,31 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
         onPick = { holder.runSnippet(it.command); showSnippets = false },
         onDismiss = { showSnippets = false },
     )
+
+    if (showHistory) {
+        val items = remember(showHistory) { holder.history() }
+        AlertDialog(
+            onDismissRequest = { showHistory = false },
+            title = { Text("Command history") },
+            text = {
+                if (items.isEmpty()) Text("No history yet — run a few commands.", fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else Column(Modifier.verticalScroll(rememberScrollState())) {
+                    items.take(60).forEach { cmd ->
+                        Text(cmd, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                            maxLines = 1,
+                            modifier = Modifier.fillMaxWidth()
+                                .clickable { holder.runSnippet(cmd); showHistory = false }
+                                .padding(vertical = 6.dp))
+                    }
+                }
+            },
+            confirmButton = {
+                if (items.isNotEmpty()) TextButton(onClick = { holder.clearHistory(); showHistory = false }) { Text("Clear") }
+            },
+            dismissButton = { TextButton(onClick = { showHistory = false }) { Text("Close") } },
+        )
+    }
 }
 
 @Composable
