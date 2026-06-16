@@ -4,8 +4,9 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** A saved connection target. */
-data class SavedHost(val host: String, val port: Int, val user: String) {
+/** A saved connection target. `jump` is an optional ProxyJump spec
+ *  ("user@bastion[:port][,user@bastion2…]") used by the host-chain connect path. */
+data class SavedHost(val host: String, val port: Int, val user: String, val jump: String? = null) {
     val label: String get() = "$user@$host${if (port == 22) "" else ":$port"}"
 }
 
@@ -17,7 +18,8 @@ class HostStore(context: Context) {
         val arr = JSONArray(prefs.getString("list", "[]"))
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
-            SavedHost(o.getString("host"), o.getInt("port"), o.getString("user"))
+            SavedHost(o.getString("host"), o.getInt("port"), o.getString("user"),
+                o.optString("jump").ifEmpty { null })
         }
     } catch (e: Exception) {
         emptyList()   // never crash the connect screen on a corrupt store
@@ -25,7 +27,11 @@ class HostStore(context: Context) {
 
     private fun save(hosts: List<SavedHost>) {
         val arr = JSONArray()
-        hosts.forEach { arr.put(JSONObject().put("host", it.host).put("port", it.port).put("user", it.user)) }
+        hosts.forEach {
+            val o = JSONObject().put("host", it.host).put("port", it.port).put("user", it.user)
+            if (it.jump != null) o.put("jump", it.jump)
+            arr.put(o)
+        }
         // commit() (synchronous) so a saved host survives even if the process is
         // killed right after — apply()'s background write can be lost.
         prefs.edit().putString("list", arr.toString()).commit()

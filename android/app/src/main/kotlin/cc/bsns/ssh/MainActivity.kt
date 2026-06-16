@@ -99,7 +99,7 @@ private val main = Handler(Looper.getMainLooper())
  *  fallback to 22 that could connect to / trust / save the wrong endpoint. */
 fun validPort(text: String): Int? = text.trim().toIntOrNull()?.takeIf { it in 1..65535 }
 
-private enum class Route { Connect, Keys, Hosts, Settings, Backup }
+private enum class Route { Connect, Keys, Hosts, Settings, Backup, Import }
 
 @Composable
 fun App() {
@@ -171,6 +171,7 @@ fun App() {
                 onManageKeys = { route = Route.Keys },
                 onManageHosts = { route = Route.Hosts },
                 onSettings = { route = Route.Settings },
+                onImport = { route = Route.Import },
                 onSftp = { sftpTarget = it },
                 forwardsActive = forwardSession != null,
                 onReopenForwards = { showForwards = true },
@@ -197,6 +198,8 @@ fun App() {
                 route = Route.Connect
             }
             Route.Backup -> BackupScreen { route = Route.Settings }
+            // Returning recreates ConnectScreen, which reloads saved hosts from disk.
+            Route.Import -> ImportConfigScreen { route = Route.Connect }
         }
     }
 
@@ -436,6 +439,7 @@ fun ConnectScreen(
     onManageKeys: () -> Unit,
     onManageHosts: () -> Unit,
     onSettings: () -> Unit,
+    onImport: () -> Unit,
     onSftp: (SftpTarget) -> Unit,
     forwardsActive: Boolean,
     onReopenForwards: () -> Unit,
@@ -553,6 +557,8 @@ fun ConnectScreen(
             }
             Text("Connect over SSH — your key stays in the Keystore.", fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            TextButton(onClick = onImport) { Text("Import from ~/.ssh (config · known_hosts · keys)", fontSize = 12.sp) }
 
             if (savedHosts.isNotEmpty()) {
                 Text("Saved", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
