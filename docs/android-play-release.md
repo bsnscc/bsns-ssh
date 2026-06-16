@@ -34,20 +34,25 @@ pipeline notes). bsns-ssh is a **new app** under that same account.
 1. **Create the app** in Play Console (first time is manual): name, default
    language, app/game = app, free/paid = free. Enable **Play App Signing**.
 2. **Internal testing track** → upload `app-release.aab`. Either drag it into
-   the console, or use the wired Play Developer API path:
+   the console, or use the API submit script (same mechanism as bsns-mobile —
+   gcloud **application-default credentials**, no service-account JSON):
 
    ```sh
-   # Service account JSON via env (or drop it at android/play-service-account.json, gitignored)
-   export PLAY_SERVICE_ACCOUNT_JSON=/path/to/play-service-account.json
-   cd android && ./gradlew :app:publishReleaseBundle   # builds + signs + uploads to the internal track
+   cd android && ./gradlew :app:bundleRelease
+   android/scripts/submit-play.sh                 # uploads to the internal track
    ```
 
-   This is wired via the Gradle Play Publisher plugin (`play {}` in
-   `app/build.gradle.kts`, track = internal). It only works once (a) the app
-   exists in the Play Console and (b) the service account has release access to
-   it. A Play Developer API service account is created in Google Cloud and linked
-   under Play Console → Users and permissions / API access; the suite already has
-   a Play developer account to host it.
+   `submit-play.sh` authenticates with graham@bsns.cc's ADC (quota project
+   `bsns-mobile`, which is already linked to the Play account) and drives the
+   Play Developer API directly (create edit → upload bundle → assign track →
+   commit). Prerequisites:
+   - **ADC with the androidpublisher scope** (one-time, opens a browser):
+     `gcloud auth application-default login --scopes=https://www.googleapis.com/auth/androidpublisher`
+   - The **`cc.bsns.ssh` app exists in the Play Console** (the API can't create a
+     listing — create it once under the same developer account as `cc.bsns.mobile`).
+
+   (We deliberately do *not* use a Play service-account JSON — the suite never set
+   one up; the mobile pipeline uses user ADC, and this mirrors it.)
 3. **Store listing**: short + full description, app icon (512×512), feature
    graphic, phone screenshots, **privacy policy URL**.
 4. **App content**: content rating questionnaire, target audience, and the
