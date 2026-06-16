@@ -6,8 +6,11 @@ import android.os.Handler
 import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +24,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -29,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -79,6 +84,10 @@ fun ConnectScreen(signer: KeystoreSigner, onConnected: (SshSession) -> Unit) {
         "ecdsa-sha2-nistp256 " + Base64.getEncoder().encodeToString(signer.publicKeyBlob) + " bsns"
     }
 
+    val context = LocalContext.current
+    val hostStore = remember { HostStore(context) }
+    var savedHosts by remember { mutableStateOf(hostStore.load()) }
+
     Scaffold { pad ->
         Column(
             Modifier.fillMaxSize().padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
@@ -87,6 +96,26 @@ fun ConnectScreen(signer: KeystoreSigner, onConnected: (SshSession) -> Unit) {
             Text("bsns.\$_", fontFamily = FontFamily.Monospace, fontSize = 22.sp)
             Text("Connect over SSH — your key stays in the Keystore.", fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            if (savedHosts.isNotEmpty()) {
+                Text("Saved", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                savedHosts.forEach { h ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            h.label, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f).clickable {
+                                host = h.host; port = h.port.toString(); user = h.user
+                            },
+                        )
+                        TextButton(onClick = { savedHosts = hostStore.remove(h) }) { Text("✕") }
+                    }
+                }
+            }
 
             OutlinedTextField(host, { host = it }, label = { Text("host") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(port, { port = it }, label = { Text("port") }, modifier = Modifier.fillMaxWidth())
@@ -112,7 +141,12 @@ fun ConnectScreen(signer: KeystoreSigner, onConnected: (SshSession) -> Unit) {
                         val ok = SshBridge().nativeInstallKey(host, p, user, password, authLine)
                         main.post { busy = false; status = if (ok) "key installed — now Connect" else "install failed" }
                     }
-                }) { Text("Install my key") }
+                }) { Text("Install key") }
+
+                OutlinedButton(
+                    enabled = host.isNotBlank() && user.isNotBlank(),
+                    onClick = { savedHosts = hostStore.add(SavedHost(host, port.toIntOrNull() ?: 22, user)) },
+                ) { Text("Save") }
             }
 
             status?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }
@@ -163,7 +197,7 @@ fun TerminalScreen(session: SshSession, onDisconnect: () -> Unit) {
     }
 
     Scaffold { pad ->
-        Column(Modifier.fillMaxSize().padding(pad)) {
+        Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -172,6 +206,28 @@ fun TerminalScreen(session: SshSession, onDisconnect: () -> Unit) {
                 OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
             }
             AndroidView(factory = { terminalView }, modifier = Modifier.weight(1f).fillMaxWidth())
+            KeyBar { session.write(it) }
+        }
+    }
+}
+
+private fun seq(vararg b: Int) = ByteArray(b.size) { b[it].toByte() }
+
+/** Keys missing from soft keyboards but essential in a terminal. */
+@Composable
+private fun KeyBar(onKey: (ByteArray) -> Unit) {
+    val keys = listOf(
+        "esc" to seq(0x1B), "tab" to seq(0x09),
+        "^C" to seq(0x03), "^D" to seq(0x04), "^Z" to seq(0x1A), "^L" to seq(0x0C),
+        "←" to seq(0x1B, 0x5B, 0x44), "↑" to seq(0x1B, 0x5B, 0x41),
+        "↓" to seq(0x1B, 0x5B, 0x42), "→" to seq(0x1B, 0x5B, 0x43),
+        "|" to seq('|'.code), "~" to seq('~'.code), "/" to seq('/'.code), "-" to seq('-'.code),
+    )
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+        keys.forEach { (label, bytes) ->
+            TextButton(onClick = { onKey(bytes) }) {
+                Text(label, fontFamily = FontFamily.Monospace, fontSize = 15.sp)
+            }
         }
     }
 }
