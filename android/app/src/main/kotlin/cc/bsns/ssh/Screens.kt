@@ -17,9 +17,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import kotlin.concurrent.thread
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +48,9 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
     val context = LocalContext.current
     var keys by remember { mutableStateOf(keyManager.keys()) }
     var confirmDelete by remember { mutableStateOf<AppKey?>(null) }
+    var yubiPin by remember { mutableStateOf("") }
+    var yubiStatus by remember { mutableStateOf<String?>(null) }
+    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
     fun refresh() { keys = keyManager.keys() }
 
@@ -67,15 +73,17 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically) {
                     Text(k.label, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.primary)
-                    Text(if (k.hardware) "hardware" else "software", fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (k.yubiKey) "yubikey" else if (k.hardware) "hardware" else "software",
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text(k.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { copyToClipboard(context, "authorized_keys", k.authLine) }) {
                         Text("Copy public key")
                     }
-                    if (!k.hardware) {
+                    if (k.yubiKey) {
+                        OutlinedButton(onClick = { keyManager.forgetYubiKey(k.id); refresh() }) { Text("Forget") }
+                    } else if (!k.hardware) {
                         OutlinedButton(onClick = { confirmDelete = k }) { Text("Delete") }
                     }
                 }
@@ -92,6 +100,27 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                     Text("+ ecdsa p256")
                 }
             }
+
+            Divider()
+            Text("Add a YubiKey (PIV slot 9A, P-256)", fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            Text("Reads (or generates) the key in the authentication slot. The private key never " +
+                "leaves the token — it signs over NFC or USB-C.", fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedTextField(yubiPin, { yubiPin = it }, label = { Text("YubiKey PIN") },
+                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            OutlinedButton(enabled = yubiPin.isNotEmpty(), onClick = {
+                val pin = yubiPin
+                yubiStatus = "enrolling…"
+                thread {
+                    val result = runCatching { keyManager.enrollYubiKey(pin) }
+                    mainHandler.post {
+                        result.onSuccess { yubiPin = ""; yubiStatus = "enrolled"; refresh() }
+                            .onFailure { yubiStatus = it.message ?: "couldn't read the YubiKey" }
+                    }
+                }
+            }) { Text("Enroll YubiKey") }
+            yubiStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
         }
     }
 

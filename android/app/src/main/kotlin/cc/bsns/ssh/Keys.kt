@@ -31,7 +31,8 @@ class FileKeySigner(private val fileKey: FileKey) {
     }
 }
 
-/** A key the app can authenticate with: hardware (Keystore) or software (FileKey). */
+/** A key the app can authenticate with: hardware (Keystore), software (FileKey),
+ *  or a YubiKey (PIV slot — signs over NFC/USB). */
 class AppKey(
     val id: String,
     val label: String,
@@ -39,6 +40,7 @@ class AppKey(
     val algorithm: String,   // wire name
     val hardware: Boolean,
     val signer: Any,         // object exposing sign([B): [B + publicKeyBlob
+    val yubiKey: Boolean = false,
 ) {
     val fingerprint: String get() = SshKeyFormat.fingerprintOfPublicKeyBlob(publicKeyBlob)
     val authLine: String get() = "$algorithm ${Base64.getEncoder().encodeToString(publicKeyBlob)} bsns"
@@ -87,6 +89,8 @@ private class SecureKeyStore(context: Context) {
 class KeyManager(context: Context) {
     private val hardwareSigner = KeystoreSigner(HARDWARE_ALIAS)
     private val store = SecureKeyStore(context)
+    // Enrolled YubiKeys: just the public blob (the private key lives on the token).
+    private val yubiPrefs = context.getSharedPreferences("yubikeys", Context.MODE_PRIVATE)
 
     fun keys(): List<AppKey> {
         val hw = AppKey(
@@ -98,8 +102,23 @@ class KeyManager(context: Context) {
             val short = algo.removePrefix("ssh-").removePrefix("ecdsa-sha2-")
             AppKey(id, "Software key ($short)", fk.publicKey.blob, algo, hardware = false, signer = FileKeySigner(fk))
         }
-        return listOf(hw) + soft
+        val yubi = yubiPrefs.all.mapNotNull { (id, v) ->
+            val blob = (v as? String)?.let { Base64.getDecoder().decode(it) } ?: return@mapNotNull null
+            AppKey(id, "YubiKey (PIV)", blob, "ecdsa-sha2-nistp256",
+                hardware = true, signer = YubiKeyPivKey(blob), yubiKey = true)
+        }
+        return listOf(hw) + soft + yubi
     }
+
+    /** Enroll a YubiKey (blocking — prompts a tap); returns the new key's id. */
+    fun enrollYubiKey(pin: String): String {
+        val blob = YubiKeyManager.enroll(pin)
+        val id = SshKeyFormat.fingerprintOfPublicKeyBlob(blob)
+        yubiPrefs.edit().putString(id, Base64.getEncoder().encodeToString(blob)).apply()
+        return id
+    }
+
+    fun forgetYubiKey(id: String) = yubiPrefs.edit().remove(id).apply()
 
     fun generateSoftware(algorithm: KeyAlgorithm): String {
         val fk = FileKey.generate(algorithm, "bsns")

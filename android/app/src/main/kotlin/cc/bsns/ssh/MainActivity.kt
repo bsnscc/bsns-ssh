@@ -63,7 +63,13 @@ import kotlin.concurrent.thread
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        YubiKeyManager.attach(this)   // for NFC reader-mode + USB discovery
         setContent { MaterialTheme(colorScheme = darkColorScheme()) { App() } }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        YubiKeyManager.lock()   // forget the cached YubiKey PIN when backgrounded
     }
 }
 
@@ -166,6 +172,16 @@ fun App() {
             }
             Route.Backup -> BackupScreen { route = Route.Settings }
         }
+    }
+
+    // Global overlay while a YubiKey operation waits for the user to tap/insert.
+    YubiKeyManager.awaitingTap?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("YubiKey") },
+            text = { Text("$msg\n\nHold your YubiKey to the back of the phone (NFC) or plug it into USB-C.") },
+            confirmButton = {},
+        )
     }
 }
 
@@ -338,8 +354,16 @@ fun ConnectScreen(
     var status by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var useMosh by remember { mutableStateOf(false) }
+    var showYubiPin by remember { mutableStateOf(false) }
+    var yubiPin by remember { mutableStateOf("") }
+    var afterPin by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     val authLine = key.authLine
+
+    // A YubiKey signs only after its PIN is supplied — prompt once, then proceed.
+    fun withYubiPin(action: () -> Unit) {
+        if (key.yubiKey && !YubiKeyManager.unlocked) { afterPin = action; showYubiPin = true } else action()
+    }
 
     val context = LocalContext.current
     val hostStore = remember { HostStore(context) }
@@ -464,18 +488,20 @@ fun ConnectScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Button(enabled = !busy, onClick = {
-                    verifyThen { p, blob -> if (useMosh) openMosh(p) else openWith(p, blob) }
+                    withYubiPin { verifyThen { p, blob -> if (useMosh) openMosh(p) else openWith(p, blob) } }
                 }) { Text(if (useMosh) "Connect (mosh)" else "Connect") }
 
                 OutlinedButton(enabled = !busy, onClick = {
-                    verifyThen { p, blob ->
-                        onSftp(SftpTarget(host, p, user, key.publicKeyBlob, key.signer, blob))
+                    withYubiPin {
+                        verifyThen { p, blob ->
+                            onSftp(SftpTarget(host, p, user, key.publicKeyBlob, key.signer, blob))
+                        }
                     }
                 }) { Text("Files") }
 
                 OutlinedButton(enabled = !busy, onClick = {
                     if (forwardsActive) onReopenForwards()
-                    else verifyThen { p, blob -> openForwards(p, blob) }
+                    else withYubiPin { verifyThen { p, blob -> openForwards(p, blob) } }
                 }) { Text(if (forwardsActive) "Tunnels ●" else "Tunnels") }
 
                 OutlinedButton(enabled = !busy && password.isNotEmpty(), onClick = {
@@ -525,6 +551,26 @@ fun ConnectScreen(
                     },
                     dismissButton = {
                         TextButton(onClick = { pendingTofu = null; pendingAction = null }) { Text("Cancel") }
+                    },
+                )
+            }
+
+            if (showYubiPin) {
+                AlertDialog(
+                    onDismissRequest = { showYubiPin = false; yubiPin = ""; afterPin = null },
+                    title = { Text("YubiKey PIN") },
+                    text = {
+                        OutlinedTextField(yubiPin, { yubiPin = it }, label = { Text("PIN") }, singleLine = true,
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            YubiKeyManager.setPin(yubiPin); yubiPin = ""; showYubiPin = false
+                            val act = afterPin; afterPin = null; act?.invoke()
+                        }) { Text("Continue") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showYubiPin = false; yubiPin = ""; afterPin = null }) { Text("Cancel") }
                     },
                 )
             }

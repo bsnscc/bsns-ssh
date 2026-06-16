@@ -59,6 +59,8 @@ dependencies {
     // biometric:1.1.0 pulls an old fragment whose startActivityForResult clashes with
     // the Compose ActivityResultRegistry ("lower 16 bits for requestCode"); force-upgrade.
     implementation("androidx.fragment:fragment:1.8.5")
+    implementation("com.yubico.yubikit:android:2.5.0")          // YubiKey NFC/USB transport
+    implementation("com.yubico.yubikit:piv:2.5.0")              // PIV applet (slot 9A signing)
     implementation(platform("androidx.compose:compose-bom:2024.10.00"))
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")

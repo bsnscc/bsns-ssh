@@ -44,7 +44,7 @@ ported + cross-verified) is now wired into the app across passes P3–P6 below.
 | Port forwarding (-L) | ✅ | ✅ `ForwardSession` + JNI direct-tcpip + `PortForwardsScreen` | **DONE** (verified end-to-end) |
 | Find-in-scrollback | ✅ | ✅ `TerminalSearch` + search bar in `TerminalPane` | **DONE** (scan buffer, scroll-to-match, ↑/↓, counter) |
 | mosh | ✅ | 🟡 built + transport-proven, live session on-device-pending | NDK `libmosh.a` + JNI + `MoshSession` + connect toggle |
-| YubiKey (NFC/USB PIV) | ✅ | ❌ | ⏭ (on-device) |
+| YubiKey (NFC/USB PIV) | ✅ | 🟡 built (`YubiKeyManager` + yubikit-android), tap/sign on-device-pending | enroll + sign over NFC/USB-C, slot 9A P-256 |
 | Secure Enclave ↔ StrongBox + biometric gate | ✅ | 🟡 Keystore non-biometric | P3/P5 (add user-auth requirement) |
 
 ## Build passes
@@ -125,7 +125,18 @@ ported + cross-verified) is now wired into the app across passes P3–P6 below.
   so tunnels survive navigation) adds/removes forwards and shows status.
   Verified end-to-end: `localhost:7777 → 127.0.0.1:9000` tunnelled a real
   response through the server (the server must allow `AllowTcpForwarding`).
-- **Deferred:** YubiKey (needs a physical key + yubikit-android).
+- **YubiKey (PIV) — built, tap/sign on-device-pending.** `YubiKeyManager`
+  (yubikit-android) talks to the PIV applet over NFC (tap) or USB-C: enroll reads
+  (or generates) the slot-9A P-256 key and stores its SSH public blob; signing is
+  delegated to the key (the private half never leaves the token). The tricky part
+  is that the JNI sign callback runs on the SSH owner thread and must *block* while
+  the user taps — `signRawRS` does the discovery + PIV op on yubikit's threads and
+  hands the result back through a queue, driving an `awaitingTap` overlay in the UI.
+  `YubiKeyPivKey` is the JNI signer (DER→raw r‖s → `ecdsaSignatureBody`). Enroll
+  lives in `KeysScreen` (PIN + button); connecting with a YubiKey prompts for the
+  PIN first (cached, cleared on background) then taps. Compiles, app launches, UI
+  renders, no regression to other key types — but the tap/sign needs a physical
+  key, so it's verified on-device.
 
 > Lifecycle: `MainActivity` declares `configChanges` (orientation/screenSize/
 > etc.) so resizing the window, rotating, or entering multi-window does NOT
