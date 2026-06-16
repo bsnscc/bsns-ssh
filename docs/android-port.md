@@ -5,9 +5,11 @@
 > Keystore/StrongBox or YubiKey key, mosh, SFTP, ProxyJump, sync). Kept as the
 > design record; for current state see `../README.md` and `../android/README.md`.
 
-Status: **decision doc, pre-code.** Decide the transport and hardware-key
-direction here before scaffolding, because those two choices shape every layer
-above them.
+Status: **shipped — kept as the design record.** This began as a pre-code
+decision doc (transport + hardware-key direction, decided before scaffolding
+because those choices shape every layer above them); those decisions are now
+implemented and at parity with iOS. The reasoning is preserved below; for current
+state see [`../README.md`](../README.md) and [`../android/README.md`](../android/README.md).
 
 ## What carries over
 

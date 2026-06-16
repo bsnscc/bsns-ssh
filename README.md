@@ -1,7 +1,19 @@
-# bsns.SSH
+<p align="center">
+  <img src="docs/images/icon.png" alt="bsns.SSH" width="112" height="112">
+</p>
 
-A native iOS **and Android** SSH/mosh client built around one idea: **your keys
-and config are yours, hardware-protected, with no vendor ever in the middle.**
+<h1 align="center">bsns.SSH</h1>
+
+<p align="center">
+  A native iOS &amp; Android SSH/mosh client — <strong>your keys and config are
+  yours, hardware-protected, with no vendor ever in the middle.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/images/connect-ios.png" alt="bsns.SSH connect screen on iOS" width="270">
+</p>
+
+---
 
 - **Hardware-backed, non-extractable keys** — generated in and never leaving the
   Secure Enclave (iOS) or the Android Keystore / StrongBox, or held on a YubiKey

@@ -21,7 +21,7 @@ final class AppLock {
         guard ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
             locked = false; return
         }
-        ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock bsns.$_") { ok, _ in
+        ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock bsns.SSH") { ok, _ in
             DispatchQueue.main.async { if ok { self.locked = false } }
         }
     }

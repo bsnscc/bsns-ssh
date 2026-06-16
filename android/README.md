@@ -4,6 +4,22 @@ The Android port. Shares the design, the encrypted-bundle sync format, and the
 core wire/crypto contracts with the iOS app; see `../docs/android-port.md` for
 the architecture and decisions.
 
+## Prerequisites (fresh clone)
+
+The native libraries under `jni/prebuilt/` are **git-ignored** and built from
+pinned, sha256-verified source. A fresh clone must build them once before any
+Gradle build that links the transport (`:transport`, `:app`), or the CMake step
+fails with missing headers / `libssh2` / `libmosh` archives:
+
+```sh
+cd jni
+./build-libssh2.sh   # libssh2 1.11 + OpenSSL 3.5 for arm64-v8a
+./build-mosh.sh      # mosh 1.4 + protobuf-lite (re-run after editing app/vendor/mosh)
+```
+
+`build-mosh.sh` compiles `../../app/vendor/mosh` (shared with iOS) and copies its
+header into `jni/prebuilt/`; re-run it whenever that source changes.
+
 ## Modules
 
 - **`:core`** — pure Kotlin/JVM, platform-independent: SSH wire codec, signature
