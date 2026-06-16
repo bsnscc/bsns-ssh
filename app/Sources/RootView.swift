@@ -7,6 +7,7 @@ struct RootView: View {
     @Environment(HostStore.self) private var hosts
     @Environment(KnownHostsStore.self) private var knownHosts
     @Environment(SyncStore.self) private var sync
+    @Environment(SnippetStore.self) private var snippets
     @Environment(\.scenePhase) private var scenePhase
     @State private var homeTab = ProcessInfo.processInfo.environment["BSNS_DEV_TAB"] ?? "connect"
 
@@ -33,10 +34,10 @@ struct RootView: View {
         .tint(Brand.accent)   // brand accent on every control, link, and selection
         .task { await maybeDevAutoConnect() }
         // Auto-sync: pull + merge the user's folder on launch; push when backgrounded.
-        .task { await ConfigSync.autoPull(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store) }
+        .task { await ConfigSync.autoPull(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
-                ConfigSync.autoPush(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store)
+                ConfigSync.autoPush(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets)
             }
         }
     }

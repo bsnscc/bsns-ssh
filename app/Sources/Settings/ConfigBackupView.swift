@@ -9,6 +9,7 @@ struct ConfigBackupView: View {
     @Environment(KnownHostsStore.self) private var knownHosts
     @Environment(AgentStore.self) private var agent
     @Environment(SyncStore.self) private var sync
+    @Environment(SnippetStore.self) private var snippets
 
     @State private var passphrase = ""
     @State private var includeKeys = false
@@ -116,6 +117,7 @@ struct ConfigBackupView: View {
     private func startExport() {
         do {
             exportData = try ConfigService.export(hosts: hosts, knownHosts: knownHosts, agent: agent,
+                                                  snippets: snippets,
                                                   includeKeys: includeKeys && !passphrase.isEmpty,
                                                   passphrase: passphrase.isEmpty ? nil : passphrase)
             showExporter = true
@@ -157,6 +159,7 @@ struct ConfigBackupView: View {
         do {
             sync.savePassphrase(syncPass)
             let data = try ConfigService.export(hosts: hosts, knownHosts: knownHosts, agent: agent,
+                                                snippets: snippets,
                                                 includeKeys: syncIncludeKeys && !syncPass.isEmpty,
                                                 passphrase: syncPass)
             try sync.push(data)
@@ -182,7 +185,7 @@ struct ConfigBackupView: View {
 
     private func applyImport(_ bundle: ConfigBundle, selection: ConfigService.ImportSelection) {
         Task {
-            await ConfigService.apply(bundle, selection: selection, hosts: hosts, knownHosts: knownHosts, agent: agent)
+            await ConfigService.apply(bundle, selection: selection, hosts: hosts, knownHosts: knownHosts, agent: agent, snippets: snippets)
             var parts: [String] = []
             if selection.hosts { parts.append("\(bundle.hosts.count) host(s)") }
             if selection.knownHosts { parts.append("\(bundle.knownHosts.allEntries.count) trusted host(s)") }
@@ -205,6 +208,8 @@ struct ImportReviewView: View {
 
     private var trustedCount: Int { bundle.knownHosts.allEntries.count }
     private var keyCount: Int { bundle.keys?.count ?? 0 }
+    private var snippetCount: Int { bundle.snippets?.count ?? 0 }
+    private var runOnConnectCount: Int { bundle.snippets?.filter(\.runOnConnect).count ?? 0 }
 
     var body: some View {
         NavigationStack {
@@ -219,10 +224,14 @@ struct ImportReviewView: View {
                         .disabled(trustedCount == 0)
                     Toggle("\(keyCount) private key(s)", isOn: $selection.keys)
                         .disabled(keyCount == 0)
+                    Toggle("\(snippetCount) snippet(s)", isOn: $selection.snippets)
+                        .disabled(snippetCount == 0)
                 } header: {
                     Text("Security-sensitive")
                 } footer: {
-                    Text("Trusted host keys pre-trust those servers, skipping the first-connection verification prompt. Private keys are added to your agent and can sign on your behalf. Only enable these for a bundle you created and trust.")
+                    Text("Trusted host keys pre-trust those servers, skipping the first-connection verification prompt. Private keys are added to your agent and can sign on your behalf. Snippets are commands — imported ones won't run on connect until you enable that yourself"
+                         + (runOnConnectCount > 0 ? " (\(runOnConnectCount) were marked run-on-connect)." : ".")
+                         + " Only enable these for a bundle you created and trust.")
                 }
             }
             .navigationTitle("Review import")

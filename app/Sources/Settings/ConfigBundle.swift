@@ -12,6 +12,7 @@ struct ConfigBundle: Codable {
     var knownHosts: KnownHosts
     var settings: SettingsSnapshot
     var keys: [ExportedKey]?
+    var snippets: [Snippet]?
 }
 
 struct ExportedKey: Codable {
