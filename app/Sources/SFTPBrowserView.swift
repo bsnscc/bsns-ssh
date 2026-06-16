@@ -27,8 +27,7 @@ struct SFTPBrowserView: View {
     @State private var showUpload = false
     @State private var newFolderName = ""
     @State private var askNewFolder = false
-    @State private var exportData: Data?
-    @State private var exportName = "file"
+    @State private var exportFileURL: URL?       // a streamed-to temp file, exported via fileMover
     @State private var showExport = false
 
     var body: some View {
@@ -105,8 +104,12 @@ struct SFTPBrowserView: View {
         .fileImporter(isPresented: $showUpload, allowedContentTypes: [.data, .item]) { result in
             if case .success(let url) = result { upload(url) }
         }
-        .fileExporter(isPresented: $showExport, document: DataDocument(data: exportData ?? Data()),
-                      contentType: .data, defaultFilename: exportName) { _ in exportData = nil }
+        // Move the streamed-to temp file to the user's chosen location — no
+        // in-memory Data, so a large download won't OOM.
+        .fileMover(isPresented: $showExport, file: exportFileURL) { _ in
+            if let u = exportFileURL { try? FileManager.default.removeItem(at: u) }
+            exportFileURL = nil
+        }
     }
 
     // MARK: actions
@@ -157,20 +160,24 @@ struct SFTPBrowserView: View {
     private func download(_ entry: SFTPEntry) {
         Task {
             do {
-                exportData = try await client.download(childPath(entry.name))
-                exportName = entry.name
+                // Stream to a temp file, then hand it to the system file mover.
+                let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(entry.name)
+                try? FileManager.default.removeItem(at: tmp)
+                try await client.download(childPath(entry.name), toFile: tmp)
+                exportFileURL = tmp
                 showExport = true
             } catch { self.error = TerminalSession.describe(error) }
         }
     }
 
     private func upload(_ url: URL) {
+        // Hold security-scoped access across the whole streaming read (the Task's
+        // defer fires after the upload completes, not before the await).
         let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url) else { error = "Couldn't read the file."; return }
         let name = url.lastPathComponent
         Task {
-            do { try await client.upload(data, to: childPath(name)); await reload() }
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do { try await client.upload(fromFile: url, to: childPath(name)); await reload() }
             catch { self.error = TerminalSession.describe(error) }
         }
     }

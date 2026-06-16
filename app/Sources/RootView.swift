@@ -78,7 +78,17 @@ struct RootView: View {
                 // even when sim stdout isn't captured.
                 let result = "roundtrip_ok=\(back == payload) bytes=\(back.count) list_count=\(listing.count)"
                 try await client.remove("bsns-sftp-test.txt", isDirectory: false)   // also exercises unlink
-                print("SFTP-DEV \(result) — PASS")
+                // Streaming round-trip (multi-chunk, via temp files) — verifies the
+                // bounded-memory download(toFile:)/upload(fromFile:) path.
+                let up = FileManager.default.temporaryDirectory.appendingPathComponent("bsns-up.bin")
+                let down = FileManager.default.temporaryDirectory.appendingPathComponent("bsns-down.bin")
+                let big = Data((0 ..< 200_000).map { UInt8($0 % 251) })
+                try big.write(to: up)
+                try await client.upload(fromFile: up, to: "bsns-sftp-stream.bin")
+                try await client.download("bsns-sftp-stream.bin", toFile: down)
+                let streamOK = (try? Data(contentsOf: down)) == big
+                try await client.remove("bsns-sftp-stream.bin", isDirectory: false)
+                print("SFTP-DEV \(result) stream_ok=\(streamOK) — PASS")
             } catch {
                 print("SFTP-DEV FAIL: \(error)")
             }

@@ -136,6 +136,58 @@ final class SFTPClient: @unchecked Sendable {
         }
     }
 
+    /// Stream a remote file to a local file in fixed-size chunks — bounded
+    /// memory, no whole-file Data. Used for the browser's download (a huge file
+    /// can't OOM the app).
+    func download(_ path: String, toFile url: URL) async throws {
+        try await run {
+            guard let sftp = self.sftp else { throw SFTPError.initFailed }
+            guard let handle = path.withCString({ libssh2_sftp_open_ex(sftp, $0, UInt32(strlen($0)), Self.FXF_READ, 0, Int32(Self.OPENFILE)) }) else {
+                throw SFTPError.op("Couldn't open \(path).")
+            }
+            defer { libssh2_sftp_close_handle(handle) }
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+            guard let fh = try? FileHandle(forWritingTo: url) else { throw SFTPError.op("Couldn't write the local file.") }
+            defer { try? fh.close() }
+            var buf = [UInt8](repeating: 0, count: 32768)
+            while true {
+                let n = buf.withUnsafeMutableBytes {
+                    libssh2_sftp_read(handle, $0.baseAddress!.assumingMemoryBound(to: CChar.self), $0.count)
+                }
+                if n > 0 { try fh.write(contentsOf: Data(buf[0 ..< n])) }
+                else if n == 0 { break }
+                else { throw SFTPError.op("Read failed.") }
+            }
+        }
+    }
+
+    /// Stream a local file to a remote path in fixed-size chunks (bounded memory).
+    func upload(fromFile url: URL, to path: String) async throws {
+        try await run {
+            guard let sftp = self.sftp else { throw SFTPError.initFailed }
+            let flags = Self.FXF_WRITE | Self.FXF_CREAT | Self.FXF_TRUNC
+            guard let handle = path.withCString({ libssh2_sftp_open_ex(sftp, $0, UInt32(strlen($0)), flags, 0o644, Int32(Self.OPENFILE)) }) else {
+                throw SFTPError.op("Couldn't create \(path).")
+            }
+            defer { libssh2_sftp_close_handle(handle) }
+            guard let fh = try? FileHandle(forReadingFrom: url) else { throw SFTPError.op("Couldn't read the file.") }
+            defer { try? fh.close() }
+            while true {
+                let chunk = (try? fh.read(upToCount: 32768)) ?? nil
+                guard let chunk, !chunk.isEmpty else { break }
+                try chunk.withUnsafeBytes { raw in
+                    var off = 0
+                    let base = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
+                    while off < raw.count {
+                        let n = libssh2_sftp_write(handle, base + off, raw.count - off)
+                        if n < 0 { throw SFTPError.op("Write failed (code \(n)).") }
+                        off += n   // n == 0 → retry the same offset
+                    }
+                }
+            }
+        }
+    }
+
     func makeDirectory(_ path: String) async throws {
         try await run {
             guard let sftp = self.sftp else { throw SFTPError.initFailed }
