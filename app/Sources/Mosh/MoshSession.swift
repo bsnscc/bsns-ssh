@@ -60,6 +60,12 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private func runLoop() {
         guard let c = client else { return }
         while true {
+            // Refresh mosh's frozen clock once per iteration. Without this every
+            // send/ack timer stalls after the first packet and local input is
+            // never transmitted (the server connects + paints once, then input
+            // does nothing). See mosh_client_freeze_time / stmclient.cc.
+            mosh_client_freeze_time()
+
             // Apply staged commands before blocking.
             lock.lock()
             let stop = stopRequested

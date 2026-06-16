@@ -19,6 +19,12 @@ int mosh_client_fd(MoshClient* c);
 /// Suggested poll timeout (ms) before the next tick is due.
 int mosh_client_wait_ms(MoshClient* c);
 
+/// Refresh mosh's frozen monotonic clock. Mosh reads time from a cached value
+/// that only updates here; the event loop MUST call this once at the top of
+/// every iteration or all send/ack timers stall after the first packet (so
+/// input is never transmitted). Mirrors stmclient.cc's per-iteration freeze.
+void mosh_client_freeze_time(void);
+
 /// Process an incoming datagram (call when the socket is readable).
 void mosh_client_recv(MoshClient* c);
 /// Send any pending local state / keepalive.

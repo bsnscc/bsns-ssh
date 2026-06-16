@@ -61,6 +61,11 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshService(
     MoshHandle* h = (MoshHandle*)(intptr_t)handle;
     if (!h || !h->client) return nullptr;
 
+    // Refresh mosh's frozen clock once per service iteration. Without this the
+    // send/ack timers stall after the first packet and local input is never
+    // transmitted (server paints once, then keystrokes do nothing).
+    mosh_client_freeze_time();
+
     int waitMs = mosh_client_wait_ms(h->client);
     if (waitMs < 0) waitMs = 1000;
     if (maxMs >= 0 && maxMs < waitMs) waitMs = maxMs;

@@ -16,6 +16,7 @@
 #include "src/terminal/parseraction.h"
 #include "src/terminal/terminaldisplay.h"
 #include "src/terminal/terminalframebuffer.h"
+#include "src/util/timestamp.h"
 
 typedef Network::Transport<Network::UserStream, Terminal::Complete> ClientTransport;
 
@@ -65,6 +66,10 @@ int mosh_client_fd(MoshClient* c) {
 int mosh_client_wait_ms(MoshClient* c) {
   if (!c || !c->transport) return 1000;
   return c->transport->wait_time();
+}
+
+void mosh_client_freeze_time(void) {
+  freeze_timestamp();
 }
 
 void mosh_client_recv(MoshClient* c) {
