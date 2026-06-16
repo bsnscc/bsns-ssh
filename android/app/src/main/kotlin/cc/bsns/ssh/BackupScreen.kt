@@ -52,6 +52,27 @@ fun BackupScreen(onBack: () -> Unit) {
     var includeKeys by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var pendingImport by remember { mutableStateOf<PendingImport?>(null) }
+    val syncStore = remember { SyncStore(context) }
+    var syncOn by remember { mutableStateOf(syncStore.enabled) }
+
+    // Pick a sync folder from any Files provider; persist access + the passphrase.
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            if (passphrase.isEmpty()) { status = "enter a passphrase first, then choose the folder"; return@rememberLauncherForActivityResult }
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+            syncStore.configure(uri.toString(), passphrase)
+            syncOn = true
+            scope.launch {
+                status = "syncing…"
+                // First push seeds the folder; pull merges anything already there; push again.
+                withContext(Dispatchers.IO) { ConfigSync.push(context); ConfigSync.pull(context); ConfigSync.push(context) }
+                status = "auto-sync on"
+            }
+        }
+    }
 
     val exportDoc = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json"),
@@ -124,6 +145,32 @@ fun BackupScreen(onBack: () -> Unit) {
                     onClick = { exportDoc.launch("bsns-ssh-backup.json") }) { Text("Export") }
                 OutlinedButton(enabled = passphrase.isNotEmpty(),
                     onClick = { importDoc.launch("*/*") }) { Text("Import") }
+            }
+
+            Divider()
+            Text("Auto-sync", fontFamily = FontFamily.Monospace, fontSize = 16.sp)
+            Text("Keep your hosts, keys, snippets and settings in sync across devices through " +
+                "a folder you control (iCloud Drive, Drive, Dropbox, local…). The provider only " +
+                "ever sees the encrypted bundle — no account, no server of ours. Syncs on open and " +
+                "when you background the app.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (syncOn) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = {
+                        scope.launch {
+                            status = "syncing…"
+                            status = withContext(Dispatchers.IO) {
+                                ConfigSync.pull(context); ConfigSync.push(context)
+                            }
+                        }
+                    }) { Text("Sync now") }
+                    OutlinedButton(onClick = { syncStore.clear(); syncOn = false; status = "auto-sync off" }) {
+                        Text("Turn off")
+                    }
+                }
+            } else {
+                OutlinedButton(enabled = passphrase.isNotEmpty(), onClick = { pickFolder.launch(null) }) {
+                    Text("Choose a sync folder")
+                }
             }
 
             status?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }

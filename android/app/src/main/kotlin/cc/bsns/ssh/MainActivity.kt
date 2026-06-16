@@ -37,6 +37,8 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -78,6 +80,11 @@ class MainActivity : FragmentActivity() {
     override fun onStop() {
         super.onStop()
         YubiKeyManager.lock()   // forget the cached YubiKey PIN when backgrounded
+        // Auto-sync: push the latest config to the user's folder on background.
+        if (SyncStore(this).enabled) {
+            val app = applicationContext
+            thread { runCatching { ConfigSync.push(app) } }
+        }
     }
 }
 
@@ -128,6 +135,19 @@ fun App() {
 
     val settings = remember { SettingsStore(context) }
     var showKeyBar by remember { mutableStateOf(settings.showKeyBar) }
+
+    // Auto-sync: pull + merge the user's folder once on launch, then refresh the
+    // in-memory keys/hosts (syncTick re-reads the saved list on the connect screen).
+    var syncTick by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        if (SyncStore(context).enabled) {
+            val applied = withContext(Dispatchers.IO) { runCatching { ConfigSync.pull(context) }.getOrNull() }
+            if (applied != null && !applied.isEmpty) {
+                keys = keyManager.keys()
+                syncTick++
+            }
+        }
+    }
 
     // App lock: require device authentication at launch and after each backgrounding.
     val lockEnabled = settings.appLock && biometricAvailable(context)
@@ -183,6 +203,7 @@ fun App() {
             Route.Connect -> ConnectScreen(
                 key = selectedKey,
                 keys = keys,
+                reloadKey = syncTick,
                 onSelectKey = { selectedKeyId = it },
                 onManageKeys = { route = Route.Keys },
                 onManageHosts = { route = Route.Hosts },
@@ -561,6 +582,7 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
 fun ConnectScreen(
     key: AppKey,
     keys: List<AppKey>,
+    reloadKey: Int = 0,
     onSelectKey: (String) -> Unit,
     onManageKeys: () -> Unit,
     onManageHosts: () -> Unit,
@@ -597,7 +619,8 @@ fun ConnectScreen(
 
     val context = LocalContext.current
     val hostStore = remember { HostStore(context) }
-    var savedHosts by remember { mutableStateOf(hostStore.load()) }
+    // reloadKey bumps after an auto-sync pull so freshly-merged hosts appear.
+    var savedHosts by remember(reloadKey) { mutableStateOf(hostStore.load()) }
     val knownHosts = remember { KnownHostsStore(context) }
     var pendingTofu by remember { mutableStateOf<TofuInfo?>(null) }
     var pendingAction by remember { mutableStateOf<((Int, ByteArray) -> Unit)?>(null) }
