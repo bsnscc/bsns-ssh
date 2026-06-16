@@ -11,3 +11,4 @@ jni/spike/ssh_spike
 # Release signing — keep these OUT of git and BACK THEM UP.
 keystore.properties
 *.jks
+play-service-account.json

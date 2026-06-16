@@ -33,9 +33,21 @@ pipeline notes). bsns-ssh is a **new app** under that same account.
 
 1. **Create the app** in Play Console (first time is manual): name, default
    language, app/game = app, free/paid = free. Enable **Play App Signing**.
-2. **Internal testing track** → upload `app-release.aab` (drag in, or automate
-   via the suite service account once the app exists — Gradle Play Publisher or
-   the Play Developer API).
+2. **Internal testing track** → upload `app-release.aab`. Either drag it into
+   the console, or use the wired Play Developer API path:
+
+   ```sh
+   # Service account JSON via env (or drop it at android/play-service-account.json, gitignored)
+   export PLAY_SERVICE_ACCOUNT_JSON=/path/to/play-service-account.json
+   cd android && ./gradlew :app:publishReleaseBundle   # builds + signs + uploads to the internal track
+   ```
+
+   This is wired via the Gradle Play Publisher plugin (`play {}` in
+   `app/build.gradle.kts`, track = internal). It only works once (a) the app
+   exists in the Play Console and (b) the service account has release access to
+   it. A Play Developer API service account is created in Google Cloud and linked
+   under Play Console → Users and permissions / API access; the suite already has
+   a Play developer account to host it.
 3. **Store listing**: short + full description, app icon (512×512), feature
    graphic, phone screenshots, **privacy policy URL**.
 4. **App content**: content rating questionnaire, target audience, and the

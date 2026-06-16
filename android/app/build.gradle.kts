@@ -4,6 +4,7 @@ plugins {
     id("com.android.application") version "8.7.2"
     id("org.jetbrains.kotlin.android") version "2.1.0"
     id("org.jetbrains.kotlin.plugin.compose") version "2.1.0"
+    id("com.github.triplet.play") version "3.11.0"   // Play Developer API upload
 }
 
 android {
@@ -48,6 +49,20 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+}
+
+// Play Developer API upload (./gradlew :app:publishReleaseBundle). The service
+// account JSON is supplied out-of-band — PLAY_SERVICE_ACCOUNT_JSON env var, or a
+// gitignored android/play-service-account.json. The app must already exist in
+// the Play Console (the API can't create the listing) and the service account
+// must have release access to it.
+play {
+    val envCreds = System.getenv("PLAY_SERVICE_ACCOUNT_JSON")
+    serviceAccountCredentials.set(
+        if (envCreds != null) file(envCreds) else rootProject.file("play-service-account.json")
+    )
+    track.set("internal")
+    defaultToAppBundles.set(true)
 }
 
 dependencies {
