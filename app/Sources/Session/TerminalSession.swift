@@ -24,6 +24,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         let agent: Agent
         var knownHosts: KnownHosts
         var useMosh: Bool = false
+        var jump: SSHShell.JumpHop? = nil
         // Note: no password is retained. Reconnect uses the agent (keys); a
         // password-only session must be re-established from the Connect screen.
     }
@@ -166,7 +167,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
                     self.lock.withLock { self.transport = shell }
                     try await shell.connect(host: spec.host, port: spec.port, user: spec.user,
                                             agent: spec.agent, cols: cols, rows: rows,
-                                            knownHosts: spec.knownHosts, password: nil)
+                                            knownHosts: spec.knownHosts, password: nil, jump: spec.jump)
                     DispatchQueue.main.async { self.reapplyForwards() }
                 }
                 self.setStatus(.connected)

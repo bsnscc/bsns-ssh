@@ -194,6 +194,24 @@ struct ConnectView: View {
                                 group: group.trimmingCharacters(in: .whitespaces).isEmpty ? nil : group.trimmingCharacters(in: .whitespaces)))
     }
 
+    /// Parse the first hop of a ProxyJump spec ("user@bastion[:port]"); a missing
+    /// user falls back to the target user. Returns nil when no jump is set.
+    private func parsedJump() -> SSHShell.JumpHop? {
+        let spec = jump.trimmingCharacters(in: .whitespaces)
+        guard let first = spec.split(separator: ",").first.map(String.init)?.trimmingCharacters(in: .whitespaces),
+              !first.isEmpty else { return nil }
+        let who: String, hostPort: String
+        if let at = first.firstIndex(of: "@") {
+            who = String(first[first.startIndex..<at]); hostPort = String(first[first.index(after: at)...])
+        } else { who = user; hostPort = first }
+        if let colon = hostPort.lastIndex(of: ":"), colon != hostPort.startIndex {
+            let h = String(hostPort[hostPort.startIndex..<colon])
+            let p = UInt16(hostPort[hostPort.index(after: colon)...]) ?? 22
+            return SSHShell.JumpHop(host: h, port: p, user: who)
+        }
+        return SSHShell.JumpHop(host: hostPort, port: 22, user: who)
+    }
+
     private func attemptConnect() {
         guard let portValue = UInt16(port), portValue > 0 else { error = "Invalid port."; return }
         if useMosh { attemptConnectMosh(portValue); return }
@@ -201,16 +219,18 @@ struct ConnectView: View {
         let shell = SSHShell()
         let known = knownHostsStore.knownHosts
         let pw = password.isEmpty ? nil : password
+        let hop = parsedJump()
         Task {
             do {
                 try await shell.connect(host: host, port: portValue, user: user, agent: store.agent,
-                                        knownHosts: known, password: pw)
+                                        knownHosts: known, password: pw, jump: hop)
                 await MainActor.run {
                     busy = false
+                    let title = hop.map { "\(user)@\(host) ⇢ \($0.host)" } ?? "\(user)@\(host)"
                     let spec = TerminalSession.Spec(host: host, port: portValue, user: user,
                                                     agent: store.agent,
-                                                    knownHosts: knownHostsStore.knownHosts)
-                    let s = TerminalSession(spec: spec, title: "\(user)@\(host)")
+                                                    knownHosts: knownHostsStore.knownHosts, jump: hop)
+                    let s = TerminalSession(spec: spec, title: title)
                     s.adopt(shell)
                     sessions.add(s)
                     runStartupSnippets(on: s)

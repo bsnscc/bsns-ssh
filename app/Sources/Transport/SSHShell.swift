@@ -146,6 +146,20 @@ public final class SSHShell: @unchecked Sendable {
     private var wakeRead: Int32 = -1
     private var wakeWrite: Int32 = -1
 
+    /// One ProxyJump hop.
+    public struct JumpHop: Sendable { public let host: String; public let port: UInt16; public let user: String
+        public init(host: String, port: UInt16, user: String) { self.host = host; self.port = port; self.user = user } }
+
+    // ProxyJump tunnel: a session to the bastion + a direct-tcpip channel to the
+    // target, relayed over a socketpair so the target handshake runs end-to-end
+    // (the target host key is verified through the tunnel). Pumped on its own queue.
+    private var jumpSession: OpaquePointer?
+    private var jumpChannel: OpaquePointer?
+    private var jumpFd: Int32 = -1
+    private var jumpPumpFd: Int32 = -1
+    private let jumpQueue = DispatchQueue(label: "cc.bsns.ssh.jump")
+    private var jumpStop = false
+
     public init() {}
 
     /// Connect, authenticate through `agent`, open a PTY + shell, and start the
@@ -154,7 +168,8 @@ public final class SSHShell: @unchecked Sendable {
     public func connect(host: String, port: UInt16, user: String, agent: Agent,
                         cols: Int32 = 80, rows: Int32 = 24,
                         knownHosts: KnownHosts = KnownHosts(),
-                        password: String? = nil) async throws {
+                        password: String? = nil,
+                        jump: JumpHop? = nil) async throws {
         let usingPassword = !(password ?? "").isEmpty
         let identities = await agent.identities()
         guard usingPassword || !identities.isEmpty else { throw SSHShellError.noIdentities }
@@ -163,7 +178,7 @@ public final class SSHShell: @unchecked Sendable {
                 do {
                     try self.setup(host: host, port: port, user: user, agent: agent,
                                    identities: identities, cols: cols, rows: rows,
-                                   knownHosts: knownHosts, password: password)
+                                   knownHosts: knownHosts, password: password, jump: jump)
                     cont.resume()
                     self.runLoop()
                 } catch {
@@ -220,9 +235,18 @@ public final class SSHShell: @unchecked Sendable {
 
     private func setup(host: String, port: UInt16, user: String, agent: Agent,
                        identities: [SSHPublicKey], cols: Int32, rows: Int32, knownHosts: KnownHosts,
-                       password: String?) throws {
+                       password: String?, jump: JumpHop? = nil) throws {
         guard Self.libssh2Ready else { throw SSHShellError.libssh2Init }
-        guard let fd = Self.tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
+        // Direct, or tunneled through a bastion (ProxyJump). The tunnel fd carries
+        // the end-to-end handshake, so the target host key below is the real target's.
+        let fd: Int32
+        if let jump {
+            fd = try openJumpTunnel(jump, targetHost: host, targetPort: port,
+                                    agent: agent, identities: identities, password: password)
+        } else {
+            guard let direct = Self.tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
+            fd = direct
+        }
         self.fd = fd
         guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else { throw SSHShellError.sessionInit }
         self.session = session
@@ -297,6 +321,84 @@ public final class SSHShell: @unchecked Sendable {
             lastError = message.map { String(cString: $0) } ?? "rc=\(rc)"
         }
         throw SSHShellError.authFailed(lastError)
+    }
+
+    /// Establish the bastion session + a direct-tcpip channel to the target, relayed
+    /// over a socketpair. Returns the target-side fd for the end-to-end handshake
+    /// (so the caller's handshake + host-key check apply to the real target). The
+    /// bastion's own key is trust-on-first-use in v1; the same key/password auths it.
+    private func openJumpTunnel(_ jump: JumpHop, targetHost: String, targetPort: UInt16,
+                                agent: Agent, identities: [SSHPublicKey], password: String?) throws -> Int32 {
+        guard let bfd = Self.tcpConnect(host: jump.host, port: jump.port) else { throw SSHShellError.connectFailed }
+        guard let bsession = libssh2_session_init_ex(nil, nil, nil, nil) else { close(bfd); throw SSHShellError.sessionInit }
+        libssh2_session_set_blocking(bsession, 1)
+        do {
+            try Self.applyAlgorithmPolicy(bsession)
+            guard libssh2_session_handshake(bsession, bfd) == 0 else { throw SSHShellError.handshakeFailed }
+            if let password, !password.isEmpty {
+                try Self.passwordAuth(bsession, user: jump.user, password: password)
+            } else {
+                try Self.authenticatePublicKey(bsession, user: jump.user, identities: identities, agent: agent, host: jump.host)
+            }
+            guard let channel = targetHost.withCString({
+                libssh2_channel_direct_tcpip_ex(bsession, $0, Int32(targetPort), "127.0.0.1", 22)
+            }) else { throw SSHShellError.channelOpenFailed }
+            var sp: [Int32] = [0, 0]
+            guard socketpair(AF_UNIX, SOCK_STREAM, 0, &sp) == 0 else {
+                libssh2_channel_free(channel); throw SSHShellError.connectFailed
+            }
+            _ = fcntl(sp[1], F_SETFL, O_NONBLOCK)
+            libssh2_session_set_blocking(bsession, 0)
+            libssh2_channel_set_blocking(channel, 0)
+            jumpSession = bsession; jumpChannel = channel; jumpFd = bfd; jumpPumpFd = sp[1]
+            lock.lock(); jumpStop = false; lock.unlock()
+            jumpQueue.async { [weak self] in self?.jumpPump() }
+            return sp[0]   // target-side fd
+        } catch {
+            libssh2_session_free(bsession); close(bfd); throw error
+        }
+    }
+
+    /// Relay bytes between the local socketpair end and the bastion tunnel channel
+    /// until either side closes. Owns the bastion session exclusively while it runs.
+    private func jumpPump() {
+        guard let channel = jumpChannel else { return }
+        var buf = [UInt8](repeating: 0, count: 16384)
+        while !(lock.withLock { jumpStop }) {
+            var idle = true
+            let n = buf.withUnsafeMutableBytes {
+                libssh2_channel_read_ex(channel, 0, $0.baseAddress!.assumingMemoryBound(to: CChar.self), $0.count)
+            }
+            if n > 0 {
+                idle = false
+                var off = 0
+                while off < n {
+                    let w = buf.withUnsafeBytes { Darwin.write(jumpPumpFd, $0.baseAddress!.advanced(by: off), n - off) }
+                    if w < 0 { if errno == EINTR { continue }; lock.withLock { jumpStop = true }; break }
+                    off += w
+                }
+            } else if n != LIBSSH2_ERROR_EAGAIN && (n < 0 || libssh2_channel_eof(channel) != 0) {
+                lock.withLock { jumpStop = true }; break
+            }
+            let m = buf.withUnsafeMutableBytes { Darwin.read(jumpPumpFd, $0.baseAddress, $0.count) }
+            if m > 0 {
+                idle = false
+                var off = 0
+                while off < m {
+                    let w = buf.withUnsafeBytes {
+                        libssh2_channel_write_ex(channel, 0, $0.baseAddress!.advanced(by: off).assumingMemoryBound(to: CChar.self), m - off)
+                    }
+                    if w == LIBSSH2_ERROR_EAGAIN { continue }
+                    if w < 0 { lock.withLock { jumpStop = true }; break }
+                    off += w
+                }
+            } else if m == 0 {
+                lock.withLock { jumpStop = true }; break
+            } else if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR {
+                lock.withLock { jumpStop = true }; break
+            }
+            if idle { usleep(2000) }
+        }
     }
 
     static func passwordAuth(_ session: OpaquePointer, user: String, password: String) throws {
@@ -763,6 +865,16 @@ public final class SSHShell: @unchecked Sendable {
         if fd >= 0 { close(fd); fd = -1 }
         if wakeRead >= 0 { close(wakeRead); wakeRead = -1 }
         if wakeWrite >= 0 { close(wakeWrite); wakeWrite = -1 }
+        // Tear down the ProxyJump tunnel: stop the pump (drain its queue so it has
+        // exited), then free the bastion channel + session.
+        if jumpSession != nil || jumpChannel != nil {
+            lock.lock(); jumpStop = true; lock.unlock()
+            jumpQueue.sync {}
+            if let jumpChannel { libssh2_channel_free(jumpChannel); self.jumpChannel = nil }
+            if let jumpSession { libssh2_session_free(jumpSession); self.jumpSession = nil }
+            if jumpPumpFd >= 0 { close(jumpPumpFd); jumpPumpFd = -1 }
+            if jumpFd >= 0 { close(jumpFd); jumpFd = -1 }
+        }
         // No libssh2_exit() here — the global init is process-wide (see libssh2Ready).
         bridge = nil
     }
