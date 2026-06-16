@@ -13,9 +13,13 @@ class SshBridge {
      *  object exposing `fun sign(data: ByteArray): ByteArray`), then exec `cmd`. */
     external fun nativeAuthAndExec(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cmd: String): String?
 
+    /** Connect + handshake only; returns the server's host-key blob for TOFU. */
+    external fun nativeHostKeyBlob(host: String, port: Int): ByteArray?
+
     // Interactive PTY session — open returns an opaque handle (0 on failure); the
     // caller drives it from a single owner thread (libssh2 isn't thread-safe).
-    external fun nativeOpenShell(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cols: Int, rows: Int): Long
+    // expectedHostKey (if non-null) must match the server's host key, or open fails.
+    external fun nativeOpenShell(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cols: Int, rows: Int, expectedHostKey: ByteArray?): Long
     external fun nativeWrite(handle: Long, data: ByteArray)
     /** Bytes read (>0), 0 if none available now, or -1 on EOF/error. */
     external fun nativeRead(handle: Long, buf: ByteArray): Int

@@ -47,7 +47,7 @@ class SshBridgeTest {
         val bridge = SshBridge()
         assertTrue("install", bridge.nativeInstallKey("10.0.2.2", 2222, "tester", "testpw", authLine))
 
-        val handle = bridge.nativeOpenShell("10.0.2.2", 2222, "tester", signer.publicKeyBlob, signer, 80, 24)
+        val handle = bridge.nativeOpenShell("10.0.2.2", 2222, "tester", signer.publicKeyBlob, signer, 80, 24, null)
         assertTrue("nativeOpenShell returned a null handle", handle != 0L)
         try {
             bridge.nativeWrite(handle, "echo HELLO_INTERACTIVE_PTY\n".toByteArray())

@@ -15,6 +15,7 @@ class SshSession(
     private val user: String,
     private val pubBlob: ByteArray,
     private val signer: Any,
+    private val expectedHostKey: ByteArray? = null,
 ) {
     // Output that arrives before a consumer attaches `onOutput` is buffered and
     // flushed when it's set, so the initial banner/prompt is never dropped (the
@@ -39,7 +40,7 @@ class SshSession(
     /** Connect + authenticate (via the Keystore signer) + open a PTY shell, then
      *  start the I/O loop. Returns false if the session couldn't be opened. */
     fun open(cols: Int, rows: Int): Boolean {
-        handle = bridge.nativeOpenShell(host, port, user, pubBlob, signer, cols, rows)
+        handle = bridge.nativeOpenShell(host, port, user, pubBlob, signer, cols, rows, expectedHostKey)
         if (handle == 0L) return false
         running.set(true)
         Thread({ loop() }, "ssh-session").apply { isDaemon = true }.start()

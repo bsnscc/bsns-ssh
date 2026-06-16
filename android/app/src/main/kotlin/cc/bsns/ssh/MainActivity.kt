@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.termux.terminal.TerminalSession
 import com.termux.view.TerminalView
+import cc.bsns.ssh.core.SshKeyFormat
 import cc.bsns.ssh.transport.KeystoreSigner
 import cc.bsns.ssh.transport.SshBridge
 import cc.bsns.ssh.transport.SshSession
@@ -87,6 +89,17 @@ fun ConnectScreen(signer: KeystoreSigner, onConnected: (SshSession) -> Unit) {
     val context = LocalContext.current
     val hostStore = remember { HostStore(context) }
     var savedHosts by remember { mutableStateOf(hostStore.load()) }
+    val knownHosts = remember { KnownHostsStore(context) }
+    var pendingTofu by remember { mutableStateOf<TofuInfo?>(null) }
+
+    fun openWith(p: Int, blob: ByteArray) {
+        busy = true; status = "connecting…"
+        thread {
+            val s = SshSession(host, p, user, signer.publicKeyBlob, signer, expectedHostKey = blob)
+            if (s.open(80, 24)) main.post { busy = false; onConnected(s) }
+            else main.post { busy = false; status = "couldn't open the session (is your key installed?)" }
+        }
+    }
 
     Scaffold { pad ->
         Column(
@@ -125,12 +138,20 @@ fun ConnectScreen(signer: KeystoreSigner, onConnected: (SshSession) -> Unit) {
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy, onClick = {
-                    busy = true; status = "connecting…"
+                    busy = true; status = "verifying host…"
                     thread {
                         val p = port.toIntOrNull() ?: 22
-                        val s = SshSession(host, p, user, signer.publicKeyBlob, signer)
-                        if (s.open(80, 24)) main.post { busy = false; onConnected(s) }
-                        else main.post { busy = false; status = "couldn't open the session (is your key installed?)" }
+                        val blob = SshBridge().nativeHostKeyBlob(host, p)
+                        val trusted = if (blob != null) knownHosts.trustedBlob(host, p) else null
+                        when {
+                            blob == null -> main.post { busy = false; status = "couldn't reach $host:$p" }
+                            trusted == null -> main.post { busy = false; pendingTofu = TofuInfo(p, blob) }
+                            !trusted.contentEquals(blob) -> main.post {
+                                busy = false
+                                status = "⚠ host key CHANGED for $host — refusing (possible interception)"
+                            }
+                            else -> main.post { openWith(p, blob) }
+                        }
                     }
                 }) { Text("Connect") }
 
@@ -157,9 +178,34 @@ fun ConnectScreen(signer: KeystoreSigner, onConnected: (SshSession) -> Unit) {
             SelectionContainer {
                 Text(authLine, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
             }
+
+            pendingTofu?.let { tofu ->
+                val fp = remember(tofu) { SshKeyFormat.fingerprintOfPublicKeyBlob(tofu.blob) }
+                AlertDialog(
+                    onDismissRequest = { pendingTofu = null },
+                    title = { Text("Verify host key") },
+                    text = {
+                        Text(
+                            "First connection to $user@$host:${tofu.port}.\n\n$fp\n\n" +
+                                "Only trust this if the fingerprint matches what the server's admin gave you out of band.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            knownHosts.trust(host, tofu.port, tofu.blob)
+                            val info = tofu
+                            pendingTofu = null
+                            openWith(info.port, info.blob)
+                        }) { Text("Trust") }
+                    },
+                    dismissButton = { TextButton(onClick = { pendingTofu = null }) { Text("Cancel") } },
+                )
+            }
         }
     }
 }
+
+private class TofuInfo(val port: Int, val blob: ByteArray)
 
 
 /**

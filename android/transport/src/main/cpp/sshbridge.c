@@ -169,6 +169,35 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExec(
     return result;
 }
 
+// Connect + handshake only, return the server's host-key blob (SSH wire format)
+// so the app can fingerprint it (TOFU). Returns null if unreachable.
+JNIEXPORT jbyteArray JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeHostKeyBlob(
+    JNIEnv* env, jobject thiz, jstring jhost, jint port) {
+    (void)thiz;
+    if (libssh2_init(0)) return NULL;
+    const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
+    jbyteArray result = NULL;
+    int fd = tcp_connect(host, port);
+    if (fd >= 0) {
+        LIBSSH2_SESSION* s = open_session(fd);   // performs the handshake
+        if (s) {
+            size_t len = 0;
+            int type = 0;
+            const char* key = libssh2_session_hostkey(s, &len, &type);
+            if (key && len > 0) {
+                result = (*env)->NewByteArray(env, (jsize)len);
+                (*env)->SetByteArrayRegion(env, result, 0, (jsize)len, (const jbyte*)key);
+            }
+            libssh2_session_disconnect(s, "bye");
+            libssh2_session_free(s);
+        }
+        close(fd);
+    }
+    (*env)->ReleaseStringUTFChars(env, jhost, host);
+    return result;
+}
+
 // ---- Interactive PTY session ---------------------------------------------
 // A session handle (returned as a jlong) the UI drives with write/read/resize.
 // Auth + setup run blocking; then the channel goes non-blocking so reads don't
@@ -180,7 +209,7 @@ typedef struct { int fd; LIBSSH2_SESSION* session; LIBSSH2_CHANNEL* channel; } S
 JNIEXPORT jlong JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
     JNIEnv* env, jobject thiz, jstring jhost, jint port, jstring juser,
-    jbyteArray jpubblob, jobject signer, jint cols, jint rows) {
+    jbyteArray jpubblob, jobject signer, jint cols, jint rows, jbyteArray jexpectedHostKey) {
     (void)thiz;
     if (libssh2_init(0)) return 0;
     const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
@@ -191,6 +220,22 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
     int fd = tcp_connect(host, port);
     if (fd >= 0) {
         LIBSSH2_SESSION* s = open_session(fd);
+        if (s && jexpectedHostKey != NULL) {
+            // Defense in depth: the session's actual host key must match what the
+            // app trusted (guards against a swap between the TOFU check and now).
+            size_t hklen = 0; int hktype = 0;
+            const char* hk = libssh2_session_hostkey(s, &hklen, &hktype);
+            jsize explen = (*env)->GetArrayLength(env, jexpectedHostKey);
+            jbyte* exp = (*env)->GetByteArrayElements(env, jexpectedHostKey, 0);
+            int mismatch = (!hk || (jsize)hklen != explen || memcmp(hk, exp, hklen) != 0);
+            (*env)->ReleaseByteArrayElements(env, jexpectedHostKey, exp, JNI_ABORT);
+            if (mismatch) {
+                LOG("host key mismatch — refusing");
+                libssh2_session_disconnect(s, "host key mismatch");
+                libssh2_session_free(s);
+                s = NULL;
+            }
+        }
         if (s) {
             jclass cls = (*env)->GetObjectClass(env, signer);
             jmethodID sign = (*env)->GetMethodID(env, cls, "sign", "([B)[B");
