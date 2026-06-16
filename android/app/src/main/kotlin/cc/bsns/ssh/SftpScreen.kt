@@ -99,9 +99,12 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
         val entry = pendingDownload; pendingDownload = null
         if (uri != null && entry != null) scope.launch {
             status = "downloading ${entry.name}…"
+            // Stream the remote file straight into the SAF output stream — no
+            // whole-file buffer, so a multi-GB file won't OOM.
             val ok = withContext(Dispatchers.IO) {
-                val bytes = client.download(childPath(entry.name)) ?: return@withContext false
-                context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } != null
+                context.contentResolver.openOutputStream(uri)?.use {
+                    client.downloadTo(childPath(entry.name), it)
+                } ?: false
             }
             status = if (ok) "saved ${entry.name}" else "download failed"
         }
@@ -111,9 +114,9 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
             val name = queryName(context, uri) ?: "upload"
             status = "uploading $name…"
             val ok = withContext(Dispatchers.IO) {
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: return@withContext false
-                client.upload(childPath(name), bytes)
+                context.contentResolver.openInputStream(uri)?.use {
+                    client.uploadFrom(childPath(name), it)
+                } ?: false
             }
             if (ok) { status = null; reload() } else status = "upload failed"
         }

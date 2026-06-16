@@ -750,6 +750,79 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeSftpWrite(
     return ok;
 }
 
+// ---- Streaming SFTP transfer ---------------------------------------------
+// Open a remote file and read/write it in chunks via a remote-file handle, so a
+// large transfer flows through a fixed buffer instead of materializing the whole
+// file in memory. All calls must stay on the SftpClient's single owner thread.
+
+JNIEXPORT jlong JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeSftpOpenRead(
+    JNIEnv* env, jobject thiz, jlong handle, jstring jpath) {
+    (void)thiz;
+    SftpClient* c = (SftpClient*)(intptr_t)handle;
+    if (!c) return 0;
+    const char* path = (*env)->GetStringUTFChars(env, jpath, 0);
+    LIBSSH2_SFTP_HANDLE* h = sftp_open_retry(c, path, LIBSSH2_FXF_READ, 0, LIBSSH2_SFTP_OPENFILE);
+    if (!h) LOG("sftp read open '%s' failed sftperr=%lu", path, libssh2_sftp_last_error(c->sftp));
+    (*env)->ReleaseStringUTFChars(env, jpath, path);
+    return (jlong)(intptr_t)h;
+}
+
+JNIEXPORT jlong JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeSftpOpenWrite(
+    JNIEnv* env, jobject thiz, jlong handle, jstring jpath) {
+    (void)thiz;
+    SftpClient* c = (SftpClient*)(intptr_t)handle;
+    if (!c) return 0;
+    const char* path = (*env)->GetStringUTFChars(env, jpath, 0);
+    unsigned long flags = LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC;
+    LIBSSH2_SFTP_HANDLE* h = sftp_open_retry(c, path, flags, 0644, LIBSSH2_SFTP_OPENFILE);
+    (*env)->ReleaseStringUTFChars(env, jpath, path);
+    return (jlong)(intptr_t)h;
+}
+
+// Read up to buf.length bytes into buf. Returns bytes read (>0), 0 at EOF, -1 on error.
+JNIEXPORT jint JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeSftpReadChunk(
+    JNIEnv* env, jobject thiz, jlong fileHandle, jbyteArray jbuf) {
+    (void)thiz;
+    LIBSSH2_SFTP_HANDLE* h = (LIBSSH2_SFTP_HANDLE*)(intptr_t)fileHandle;
+    if (!h) return -1;
+    jsize cap = (*env)->GetArrayLength(env, jbuf);
+    jbyte* buf = (*env)->GetByteArrayElements(env, jbuf, 0);
+    ssize_t n = libssh2_sftp_read(h, (char*)buf, (size_t)cap);
+    (*env)->ReleaseByteArrayElements(env, jbuf, buf, n > 0 ? 0 : JNI_ABORT);
+    if (n > 0) return (jint)n;
+    return n == 0 ? 0 : -1;
+}
+
+// Write exactly `len` bytes from buf. Returns true if all bytes were written.
+JNIEXPORT jboolean JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeSftpWriteChunk(
+    JNIEnv* env, jobject thiz, jlong fileHandle, jbyteArray jbuf, jint len) {
+    (void)thiz;
+    LIBSSH2_SFTP_HANDLE* h = (LIBSSH2_SFTP_HANDLE*)(intptr_t)fileHandle;
+    if (!h) return JNI_FALSE;
+    jbyte* buf = (*env)->GetByteArrayElements(env, jbuf, 0);
+    jboolean ok = JNI_TRUE;
+    jint off = 0;
+    while (off < len) {
+        ssize_t n = libssh2_sftp_write(h, (const char*)buf + off, (size_t)(len - off));
+        if (n == LIBSSH2_ERROR_EAGAIN) continue;
+        if (n < 0) { ok = JNI_FALSE; break; }
+        off += (jint)n;
+    }
+    (*env)->ReleaseByteArrayElements(env, jbuf, buf, JNI_ABORT);
+    return ok;
+}
+
+JNIEXPORT void JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeSftpCloseFile(JNIEnv* env, jobject thiz, jlong fileHandle) {
+    (void)env; (void)thiz;
+    LIBSSH2_SFTP_HANDLE* h = (LIBSSH2_SFTP_HANDLE*)(intptr_t)fileHandle;
+    if (h) libssh2_sftp_close_handle(h);
+}
+
 JNIEXPORT jboolean JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeSftpMkdir(
     JNIEnv* env, jobject thiz, jlong handle, jstring jpath) {

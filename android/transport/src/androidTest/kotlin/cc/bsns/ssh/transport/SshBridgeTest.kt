@@ -72,6 +72,30 @@ class SshBridgeTest {
     }
 
     @Test
+    fun sftpStreamingRoundTrip() {
+        val signer = KeystoreSigner("bsns-spike-key")
+        val bridge = SshBridge()
+        val hostKey = bridge.nativeHostKeyBlob("10.0.2.2", 2222)
+        val authLine = "ecdsa-sha2-nistp256 " +
+            Base64.getEncoder().encodeToString(signer.publicKeyBlob) + " bsns-spike"
+        assertTrue("install", bridge.nativeInstallKey("10.0.2.2", 2222, "tester", "testpw", authLine, hostKey))
+
+        val client = SftpClient("10.0.2.2", 2222, "tester", signer.publicKeyBlob, signer, hostKey)
+        assertTrue("sftp connect", client.connect())
+        try {
+            // Larger than the 32 KiB streaming chunk, so it spans many read/write chunks.
+            val payload = ByteArray(200_000) { (it % 251).toByte() }
+            assertTrue("upload", client.uploadFrom("bsns-sftp-stream.bin", payload.inputStream()))
+            val out = java.io.ByteArrayOutputStream()
+            assertTrue("download", client.downloadTo("bsns-sftp-stream.bin", out))
+            org.junit.Assert.assertArrayEquals("byte-exact round trip", payload, out.toByteArray())
+            client.remove("bsns-sftp-stream.bin", false)
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
     fun sshSessionStreamsInteractiveOutput() {
         val signer = KeystoreSigner("bsns-spike-key")
         val authLine = "ecdsa-sha2-nistp256 " +

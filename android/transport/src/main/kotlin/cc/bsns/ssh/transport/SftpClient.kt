@@ -41,8 +41,38 @@ class SftpClient(
         }.sortedWith(compareByDescending<SftpEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
     }
 
-    fun download(path: String): ByteArray? = on { bridge.nativeSftpRead(handle, path) }
-    fun upload(path: String, data: ByteArray): Boolean = on { bridge.nativeSftpWrite(handle, path, data) }
+    /** Stream a remote file into `out` in fixed-size chunks (bounded memory,
+     *  no whole-file buffering). Runs entirely on the session's owner thread. */
+    fun downloadTo(path: String, out: java.io.OutputStream): Boolean = on {
+        val fh = bridge.nativeSftpOpenRead(handle, path)
+        if (fh == 0L) return@on false
+        try {
+            val buf = ByteArray(32768)
+            while (true) {
+                val n = bridge.nativeSftpReadChunk(fh, buf)
+                if (n > 0) out.write(buf, 0, n)
+                else if (n == 0) break
+                else return@on false        // read error
+            }
+            out.flush(); true
+        } finally { bridge.nativeSftpCloseFile(fh) }
+    }
+
+    /** Stream `input` to a remote file in fixed-size chunks (bounded memory). */
+    fun uploadFrom(path: String, input: java.io.InputStream): Boolean = on {
+        val fh = bridge.nativeSftpOpenWrite(handle, path)
+        if (fh == 0L) return@on false
+        try {
+            val buf = ByteArray(32768)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                if (n > 0 && !bridge.nativeSftpWriteChunk(fh, buf, n)) return@on false
+            }
+            true
+        } finally { bridge.nativeSftpCloseFile(fh) }
+    }
+
     fun mkdir(path: String): Boolean = on { bridge.nativeSftpMkdir(handle, path) }
     fun remove(path: String, isDir: Boolean): Boolean = on { bridge.nativeSftpRemove(handle, path, isDir) }
 

@@ -38,6 +38,14 @@ class SshBridge {
     external fun nativeSftpList(handle: Long, path: String): Array<String>?
     external fun nativeSftpRead(handle: Long, path: String): ByteArray?
     external fun nativeSftpWrite(handle: Long, path: String, data: ByteArray): Boolean
+    // Streaming transfer: open a remote file → read/write chunks → close, so a
+    // large file flows through a fixed buffer instead of buffering entirely.
+    external fun nativeSftpOpenRead(handle: Long, path: String): Long
+    external fun nativeSftpOpenWrite(handle: Long, path: String): Long
+    /** Bytes read (>0), 0 at EOF, -1 on error. */
+    external fun nativeSftpReadChunk(fileHandle: Long, buf: ByteArray): Int
+    external fun nativeSftpWriteChunk(fileHandle: Long, buf: ByteArray, len: Int): Boolean
+    external fun nativeSftpCloseFile(fileHandle: Long)
     external fun nativeSftpMkdir(handle: Long, path: String): Boolean
     external fun nativeSftpRemove(handle: Long, path: String, isDir: Boolean): Boolean
     external fun nativeSftpClose(handle: Long)
