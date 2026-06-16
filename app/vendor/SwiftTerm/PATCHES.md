@@ -30,11 +30,15 @@ Keyboard / trackpad (or any indirect pointer) there was no way to click and drag
 highlight text for copy.
 
 The patch adds a `UIPanGestureRecognizer` restricted to
-`UITouch.TouchType.indirectPointer` that drives the existing `selection` engine
-(`startSelection` / `pivotExtend` / `showContextMenu`). To stop a trackpad drag from
-*scrolling* instead of selecting, the scroll view's own `panGestureRecognizer` is
-restricted to `UITouch.TouchType.direct` (finger) touches. Finger long-press selection
-and two-finger scrolling are unchanged.
+`UITouch.TouchType.indirectPointer` that drives the existing `selection` engine:
+`.began` → `startSelection` (anchor at the start cell), `.changed` → `dragExtend`
+(move the END to follow the pointer), `.ended` → `showContextMenu`. Note it uses
+`dragExtend`, **not** `pivotExtend` — `pivotExtend` no-ops unless `selection.pivot`
+is set (which `startSelection` doesn't do), so an early version selected a single
+cell but never extended on drag. To stop a trackpad drag from *scrolling* instead
+of selecting, the scroll view's own `panGestureRecognizer` is restricted to
+`UITouch.TouchType.direct` (finger) touches. Finger long-press selection and
+two-finger scrolling are unchanged.
 
 ### 2. PageUp / PageDown forwarded to the remote (tmux scrollback)
 

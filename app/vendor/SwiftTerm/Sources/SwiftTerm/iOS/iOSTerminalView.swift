@@ -1054,7 +1054,11 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             selection.selectionMode = .character
             requestDisplay()
         case .changed:
-            selection.pivotExtend(bufferPosition: hit)
+            // dragExtend (not pivotExtend): a click-drag anchors at the start cell
+            // and moves the END to follow the pointer. pivotExtend no-ops here
+            // because startSelection never sets `pivot` — which is why dragging
+            // selected a point but never extended it.
+            selection.dragExtend(bufferPosition: hit)
             requestDisplay()
         case .ended:
             if selection.active {
