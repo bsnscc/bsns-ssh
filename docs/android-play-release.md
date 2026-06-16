@@ -60,12 +60,16 @@ pipeline notes). bsns-ssh is a **new app** under that same account.
    (the only network traffic is the user's own SSH + chosen sync). That matches
    the product's whole pitch and is the easiest possible data-safety declaration.
 
-## Pre-public cleanup (before a real listing, not internal testing)
+## Pre-public cleanup — status
 
-- Connect form defaults (`10.0.2.2` / `tester`) and the password-install spike
-  (`tester`/`testpw`) are demo scaffolding — remove/neutralize for release.
-- Real VT terminal widget (Termux terminal-view) before public, not just the
-  ANSI-stripped text view.
-- R8/minify: add a keep rule for `KeystoreSigner.sign` (called from native by
-  name) before enabling minification.
-- App icon / branding assets (the `bsns.$_` mark).
+- ✅ Connect form defaults (`10.0.2.2` / `tester`) are gated behind
+  `BuildConfig.DEBUG`; release builds start blank with port 22.
+- ✅ Real VT terminal widget — vendored Termux terminal-emulator/-view.
+- ✅ R8/minify enabled on release with keep rules (`proguard-rules.pro`) for the
+  JNI entry points + the by-name `sign` callback. (Uses the non-optimizing config:
+  the aggressive optimizer miscompiled the ECDSA signature path.)
+- ✅ App icon + `bsns.$_` branding shipped; launcher name is `bsns.SSH`.
+- ✅ Gradle dependency locking (`gradle.lockfile` per module).
+
+Remaining before going fully public: the no-telemetry verification artifact
+(`docs/no-telemetry-verification.md`) and a final review pass.

@@ -20,8 +20,22 @@ terms of the GPL.
 | [Protocol Buffers (lite)](https://github.com/protocolbuffers/protobuf) | 3.20.3 | BSD-3-Clause | mosh wire format |
 | [swift-argument-parser](https://github.com/apple/swift-argument-parser) | 1.8.2 | Apache-2.0 | transitive (yubikit-swift) |
 
-The MIT, BSD-3-Clause, and Apache-2.0 components are all GPLv3-compatible, so
-they combine cleanly into the GPLv3 whole.
+### Android app additionally
+
+`libssh2`, `OpenSSL`, `mosh`, and `protobuf-lite` above are shared (built from the
+same pinned source for the NDK). The Android app also links:
+
+| Component | License | Use |
+|-----------|---------|-----|
+| [Termux terminal-emulator / terminal-view](https://github.com/termux/termux-app) | **GPL-3.0** | vendored VT terminal (forked) |
+| [AndroidX + Jetpack Compose](https://developer.android.com/jetpack/androidx) | Apache-2.0 | UI, activity, biometric, documentfile |
+| [Kotlin stdlib + kotlinx.serialization](https://kotlinlang.org) | Apache-2.0 | language runtime, config envelope |
+| [Bouncy Castle](https://www.bouncycastle.org/java.html) (bcprov-jdk18on 1.78.1) | MIT-style (BC) | software-key math (not the transport) |
+| [yubikit-android](https://github.com/Yubico/yubikit-android) 2.5.0 | Apache-2.0 | YubiKey PIV over NFC / USB-C |
+
+Termux's terminal modules are GPL-3.0 — same license as the combined app, so no
+conflict. The MIT, BSD-3-Clause, and Apache-2.0 components are all
+GPLv3-compatible, so everything combines cleanly into the GPLv3 whole.
 
 ## mosh and the App Store
 
@@ -49,3 +63,7 @@ What this means for distribution:
   `app/vendor/mosh/fetch-mosh.sh`.
 - SwiftTerm, yubikit-swift, and swift-argument-parser are pinned to exact
   versions in `app/project.yml`.
+- For Android, libssh2 + OpenSSL are built from the same pinned source by
+  `android/jni/build-libssh2.sh` and mosh by `android/jni/build-mosh.sh`; the
+  Gradle/Maven dependencies (AndroidX, Compose, Bouncy Castle, yubikit-android)
+  are version-locked in per-module `android/**/gradle.lockfile`.

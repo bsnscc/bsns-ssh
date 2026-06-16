@@ -6,21 +6,27 @@ the architecture and decisions.
 
 ## Modules
 
-- **`:core`** — pure Kotlin/JVM, platform-independent: SSH wire codec (done),
-  and (incoming) signature framing, known_hosts, and the config-bundle envelope.
-  Ported from Swift `BsnsSSHCore` and held byte-identical to it by **shared
-  parity test vectors** (`core/src/test/...` mirror the iOS `SSHWireTests`). This
-  is the cross-platform contract: signatures and sync bundles must match exactly.
+- **`:core`** — pure Kotlin/JVM, platform-independent: SSH wire codec, signature
+  framing, known_hosts, the config-bundle envelope (PBKDF2 + AES-256-GCM), and the
+  `ssh_config` / `known_hosts` / OpenSSH-key import parsers. Ported from Swift
+  `BsnsSSHCore` and held byte-identical to it by **shared parity test vectors** —
+  the cross-platform contract: signatures and sync bundles must match exactly.
 
   ```sh
   ./gradlew :core:test
   ```
 
-Planned (need the Android NDK + an emulator/device, not yet set up here):
+- **`:transport`** — libssh2 + OpenSSL built from source over the NDK (via
+  `jni/build-libssh2.sh`, same pinned SHAs as iOS) + mosh (`jni/build-mosh.sh`).
+  The SSH sign callback bridges over JNI to the platform signer (a non-extractable
+  Android Keystore / StrongBox key, or a YubiKey PIV slot) — one auditable crypto
+  stack across both platforms; the private key never reaches the transport. Also
+  hosts SFTP, local port forwarding, and ProxyJump tunneling.
 
-- **`:transport`** — libssh2 + OpenSSL over the NDK (reusing `../app/vendor/build-cssh.sh`
-  with NDK slices), the SSH sign callback bridging over JNI to the platform
-  signer. This is the chosen transport (one auditable crypto stack across both
-  platforms); the JNI sign-bridge to a StrongBox key is the spike to prove first.
 - **`:app`** — Jetpack Compose UI; Keystore/StrongBox + YubiKey (yubikit-android)
-  key backends; Storage Access Framework sync.
+  key backends; Storage Access Framework for import and encrypted auto-sync;
+  vendored Termux terminal-emulator/-view for the VT.
+
+Build a release bundle: `./gradlew :app:bundleRelease` (R8-shrunk, signed from
+`keystore.properties`). Dependency versions are pinned in per-module
+`gradle.lockfile`.
