@@ -28,6 +28,18 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Divider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -442,11 +454,15 @@ fun TabStrip(titles: List<String>, active: Int, onSelect: (Int) -> Unit, onClose
                     color = if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            TextButton(onClick = { onClose(i) }, contentPadding = PaddingValues(2.dp)) {
-                Text("✕", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            IconButton(onClick = { onClose(i) }, modifier = Modifier.size(28.dp)) {
+                Icon(Icons.Default.Close, "close tab", modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        TextButton(onClick = onNew) { Text("+ new", fontSize = 13.sp) }
+        TextButton(onClick = onNew) {
+            Icon(Icons.Default.Add, "new", modifier = Modifier.size(18.dp))
+            Text("new", fontSize = 13.sp)
+        }
     }
 }
 
@@ -499,9 +515,9 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 6.dp),
                 )
-                TextButton(onClick = { step(-1) }, contentPadding = PaddingValues(4.dp)) { Text("↑") }
-                TextButton(onClick = { step(1) }, contentPadding = PaddingValues(4.dp)) { Text("↓") }
-                TextButton(onClick = { closeSearch() }, contentPadding = PaddingValues(4.dp)) { Text("✕") }
+                IconButton(onClick = { step(-1) }) { Icon(Icons.Default.KeyboardArrowUp, "previous match") }
+                IconButton(onClick = { step(1) }) { Icon(Icons.Default.KeyboardArrowDown, "next match") }
+                IconButton(onClick = { closeSearch() }) { Icon(Icons.Default.Close, "close search") }
             }
         } else {
             Row(
@@ -511,9 +527,9 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
             ) {
                 Text(holder.title, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { showHistory = true }) { Text("⟳") }
-                    TextButton(onClick = { showSnippets = true }) { Text("⌗") }
-                    TextButton(onClick = { searching = true }) { Text("⌕") }
+                    IconButton(onClick = { showHistory = true }) { Icon(Icons.Default.History, "command history") }
+                    IconButton(onClick = { showSnippets = true }) { Icon(Icons.Default.Code, "snippets") }
+                    IconButton(onClick = { searching = true }) { Icon(Icons.Default.Search, "find") }
                     OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
                 }
             }
@@ -781,7 +797,9 @@ fun ConnectScreen(
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.weight(1f),
                             )
-                            TextButton(onClick = { savedHosts = hostStore.remove(h) }) { Text("✕") }
+                            IconButton(onClick = { savedHosts = hostStore.remove(h) }) {
+                                Icon(Icons.Default.Close, "remove", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
@@ -882,11 +900,27 @@ fun ConnectScreen(
 
             status?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }
 
-            Text("Your public key (add to the server's ~/.ssh/authorized_keys):",
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp))
-            SelectionContainer {
-                Text(authLine, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+            // The public key is a wall of base64, rarely needed — keep it collapsed.
+            var showPublicKey by remember { mutableStateOf(false) }
+            Divider(Modifier.padding(top = 6.dp))
+            Row(
+                Modifier.fillMaxWidth().clickable { showPublicKey = !showPublicKey }.padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("My public key", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { copyToClipboard(context, "public key", authLine) }) { Text("Copy") }
+                    Icon(if (showPublicKey) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (showPublicKey) "hide" else "show",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (showPublicKey) {
+                Text("Add to the server's ~/.ssh/authorized_keys:", fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SelectionContainer {
+                    Text(authLine, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                }
             }
 
             pendingTofu?.let { tofu ->

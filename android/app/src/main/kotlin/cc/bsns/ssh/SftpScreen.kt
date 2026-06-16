@@ -14,7 +14,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -149,15 +159,19 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (stack.isEmpty()) TextButton(onClick = onClose) { Text("Done") }
-                else TextButton(onClick = { goUp() }) { Text("↑ up") }
+                else IconButton(onClick = { goUp() }) { Icon(Icons.Default.ArrowUpward, "up") }
                 Text(
                     if (path == ".") "~" else path.substringAfterLast('/'),
                     fontFamily = FontFamily.Monospace, fontSize = 15.sp,
                     color = MaterialTheme.colorScheme.primary,
                 )
                 Row {
-                    TextButton(enabled = connected, onClick = { askNewFolder = true }) { Text("+dir") }
-                    TextButton(enabled = connected, onClick = { pickUpload.launch("*/*") }) { Text("↑file") }
+                    IconButton(enabled = connected, onClick = { askNewFolder = true }) {
+                        Icon(Icons.Default.CreateNewFolder, "new folder")
+                    }
+                    IconButton(enabled = connected, onClick = { pickUpload.launch("*/*") }) {
+                        Icon(Icons.Default.UploadFile, "upload a file")
+                    }
                 }
             }
             status?.let {
@@ -167,21 +181,29 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
             LazyColumn(Modifier.fillMaxSize()) {
                 items(entries, key = { it.name }) { e ->
                     Row(
-                        Modifier.fillMaxWidth().clickable { openEntry(e) }.padding(vertical = 10.dp),
+                        Modifier.fillMaxWidth().clickable { openEntry(e) }.padding(vertical = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            (if (e.isDirectory) "📁 " else "📄 ") + e.name,
-                            fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-                            modifier = Modifier.padding(end = 8.dp),
-                        )
+                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                if (e.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                contentDescription = null,
+                                tint = if (e.isDirectory) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(end = 10.dp).size(20.dp),
+                            )
+                            Text(e.name, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 if (e.isDirectory) "" else byteSize(e.size),
                                 fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            TextButton(onClick = { pendingDelete = e }) { Text("✕", fontSize = 12.sp) }
+                            IconButton(onClick = { pendingDelete = e }) {
+                                Icon(Icons.Default.DeleteOutline, "delete",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                     Divider()

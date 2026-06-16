@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cc.bsns.ssh.core.KeyAlgorithm
 
-private fun copyToClipboard(context: Context, label: String, text: String) {
+fun copyToClipboard(context: Context, label: String, text: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
     Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()

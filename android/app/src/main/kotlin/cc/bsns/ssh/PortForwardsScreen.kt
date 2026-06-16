@@ -11,6 +11,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -90,8 +94,9 @@ fun PortForwardsScreen(session: ForwardSession, onStopAll: () -> Unit, onClose: 
                                 color = if (f.error != null) MaterialTheme.colorScheme.error
                                         else MaterialTheme.colorScheme.primary)
                         }
-                        TextButton(onClick = { session.removeForward(f.listenPort); forwards = session.list() }) {
-                            Text("✕")
+                        IconButton(onClick = { session.removeForward(f.listenPort); forwards = session.list() }) {
+                            Icon(Icons.Default.Close, "remove forward",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
