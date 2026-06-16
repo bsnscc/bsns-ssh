@@ -99,7 +99,7 @@ private val main = Handler(Looper.getMainLooper())
  *  fallback to 22 that could connect to / trust / save the wrong endpoint. */
 fun validPort(text: String): Int? = text.trim().toIntOrNull()?.takeIf { it in 1..65535 }
 
-private enum class Route { Connect, Keys, Hosts, Settings, Backup, Import }
+private enum class Route { Connect, Keys, Hosts, Settings, Backup, Import, Snippets }
 
 @Composable
 fun App() {
@@ -177,12 +177,18 @@ fun App() {
                 onReopenForwards = { showForwards = true },
                 onForwards = { fs -> forwardSession?.close(); forwardSession = fs; showForwards = true },
             ) { session, title, factory ->
-                sessions.add(TerminalHolder(context, session, title, factory,
+                val holder = TerminalHolder(context, session, title, factory,
                     fontSizeSp = settings.fontSize, scrollback = settings.scrollback,
                     keepAwake = settings.keepAwake, cursorBlink = settings.cursorBlink,
                     theme = Appearance.themeById(settings.theme), cursorStyle = settings.cursorStyle,
-                    bellHaptic = settings.bellHaptic))
+                    bellHaptic = settings.bellHaptic)
+                sessions.add(holder)
                 activeIndex = sessions.size - 1
+                // Fire "run on connect" snippets once the shell has settled.
+                val startup = SnippetStore(context).runOnConnect()
+                if (startup.isNotEmpty()) main.postDelayed({
+                    startup.forEach { holder.runSnippet(it.command) }
+                }, 400)
             }
             Route.Keys -> KeysScreen(keyManager) {
                 keys = keyManager.keys()
@@ -193,11 +199,13 @@ fun App() {
             Route.Settings -> SettingsScreen(
                 settings, biometricAvailable = biometricAvailable(context),
                 onBackup = { route = Route.Backup },
+                onSnippets = { route = Route.Snippets },
             ) {
                 showKeyBar = settings.showKeyBar
                 route = Route.Connect
             }
             Route.Backup -> BackupScreen { route = Route.Settings }
+            Route.Snippets -> SnippetsScreen { route = Route.Settings }
             // Returning recreates ConnectScreen, which reloads saved hosts from disk.
             Route.Import -> ImportConfigScreen { route = Route.Connect }
         }
@@ -276,6 +284,14 @@ class TerminalHolder(
         vibrator?.vibrate(android.os.VibrationEffect.createOneShot(30, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
     }
 
+    /** Send a snippet's command(s) to the session, with a trailing newline so the
+     *  last line executes. Multi-line snippets run as a sequence. */
+    fun runSnippet(command: String) {
+        if (status != ConnStatus.Connected) return
+        val text = if (command.endsWith("\n")) command else command + "\n"
+        session.write(text.toByteArray(Charsets.UTF_8))
+    }
+
     private fun wireOutput(s: TerminalTransport) {
         s.onOutput = { bytes -> main.post { termSession.appendToEmulator(bytes, bytes.size) } }
         when (s) {
@@ -338,6 +354,7 @@ fun TabStrip(titles: List<String>, active: Int, onSelect: (Int) -> Unit, onClose
 @Composable
 fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnect: () -> Unit) {
     var searching by remember { mutableStateOf(false) }
+    var showSnippets by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var hits by remember { mutableStateOf<List<Int>>(emptyList()) }
     var hitIdx by remember { mutableStateOf(0) }
@@ -394,6 +411,7 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
             ) {
                 Text(holder.title, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { showSnippets = true }) { Text("⌗") }
                     TextButton(onClick = { searching = true }) { Text("⌕") }
                     OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
                 }
@@ -429,6 +447,11 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
         )
         if (showKeyBar) KeyBar { holder.session.write(it) }
     }
+
+    if (showSnippets) SnippetPickerDialog(
+        onPick = { holder.runSnippet(it.command); showSnippets = false },
+        onDismiss = { showSnippets = false },
+    )
 }
 
 @Composable

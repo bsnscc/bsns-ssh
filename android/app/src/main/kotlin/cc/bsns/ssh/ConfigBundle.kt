@@ -34,6 +34,13 @@ object ConfigBundle {
         }
         root.put("knownHosts", known)
 
+        val snippets = JSONArray()
+        SnippetStore(context).load().forEach {
+            snippets.put(JSONObject().put("id", it.id).put("name", it.name)
+                .put("command", it.command).put("runOnConnect", it.runOnConnect))
+        }
+        root.put("snippets", snippets)
+
         val s = SettingsStore(context)
         root.put("settings", JSONObject()
             .put("fontSize", s.fontSize)
@@ -74,13 +81,14 @@ object ConfigBundle {
     )
 
     /** What an import actually merged — so the UI reports the truth, not "imported". */
-    class Applied(val hosts: Int, val knownHosts: Int, val keys: Int, val settings: Boolean) {
-        val isEmpty: Boolean get() = hosts == 0 && knownHosts == 0 && keys == 0 && !settings
+    class Applied(val hosts: Int, val knownHosts: Int, val keys: Int, val settings: Boolean, val snippets: Int = 0) {
+        val isEmpty: Boolean get() = hosts == 0 && knownHosts == 0 && keys == 0 && !settings && snippets == 0
         val summary: String get() {
             val parts = buildList {
                 if (hosts > 0) add("$hosts host(s)")
                 if (knownHosts > 0) add("$knownHosts trusted key(s)")
                 if (keys > 0) add("$keys private key(s)")
+                if (snippets > 0) add("$snippets snippet(s)")
                 if (settings) add("settings")
             }
             return if (parts.isEmpty()) "nothing applied" else "imported ${parts.joinToString(", ")}"
@@ -91,7 +99,7 @@ object ConfigBundle {
      *  Every untrusted field is validated/clamped before it touches a store, and the
      *  caller is told exactly what was applied. Malformed entries are skipped, not fatal. */
     fun apply(context: Context, o: JSONObject, sel: Selection): Applied {
-        var hosts = 0; var known = 0; var keys = 0; var settings = false
+        var hosts = 0; var known = 0; var keys = 0; var settings = false; var snippets = 0
 
         if (sel.hosts) o.optJSONArray("hosts")?.let { arr ->
             val hostStore = HostStore(context)
@@ -122,6 +130,19 @@ object ConfigBundle {
             st.showKeyBar = s.optBoolean("showKeyBar", st.showKeyBar)
             settings = true
         }
+        // Snippets carry no secrets — they ride the (default-on) settings opt-in.
+        if (sel.settings) o.optJSONArray("snippets")?.let { arr ->
+            val store = SnippetStore(context)
+            for (i in 0 until arr.length()) {
+                val sn = arr.optJSONObject(i) ?: continue
+                val name = sn.optString("name").trim()
+                val command = sn.optString("command")
+                if (name.isEmpty() || command.isEmpty()) continue
+                store.upsert(Snippet(sn.optString("id").ifEmpty { java.util.UUID.randomUUID().toString() },
+                    name, command, sn.optBoolean("runOnConnect", false)))
+                snippets++
+            }
+        }
         if (sel.keys) o.optJSONArray("keys")?.let { arr ->
             val km = KeyManager(context)
             for (i in 0 until arr.length()) {
@@ -132,7 +153,7 @@ object ConfigBundle {
                 }.onSuccess { keys++ }
             }
         }
-        return Applied(hosts, known, keys, settings)
+        return Applied(hosts, known, keys, settings, snippets)
     }
 
     /** A trusted host-key blob must at least decode to a sane leading algorithm

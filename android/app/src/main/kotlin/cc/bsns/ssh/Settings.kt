@@ -68,7 +68,7 @@ private fun SettingToggle(label: String, value: Boolean, enabled: Boolean = true
 
 /** Settings: terminal appearance/behaviour + the app-lock toggle. */
 @Composable
-fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: () -> Unit, onBack: () -> Unit) {
+fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: () -> Unit, onSnippets: () -> Unit, onBack: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var fontSize by remember { mutableStateOf(store.fontSize) }
     var scrollback by remember { mutableStateOf(store.scrollback) }
@@ -159,6 +159,10 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
                 // Apply screenshot/recents protection NOW, not on the next resume.
                 (context as? android.app.Activity)?.let { a -> applySecureFlag(a.window, it) }
             }
+
+            Divider()
+            Text("Snippets", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+            OutlinedButton(onClick = onSnippets) { Text("Manage snippets") }
 
             Divider()
             Text("Backup", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
