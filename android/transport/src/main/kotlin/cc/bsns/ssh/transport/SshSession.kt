@@ -33,6 +33,7 @@ class SshSession(
     private val bridge = SshBridge()
     private var handle = 0L
     private val running = AtomicBoolean(false)
+    private val userClosed = AtomicBoolean(false)
     private val lock = Any()
     private val writeQueue = ArrayList<ByteArray>()
     private var pendingResize: Pair<Int, Int>? = null
@@ -56,6 +57,7 @@ class SshSession(
     }
 
     override fun close() {
+        userClosed.set(true)
         running.set(false)
     }
 
@@ -86,6 +88,8 @@ class SshSession(
             }
         }
         bridge.nativeClose(handle)
-        onClosed?.invoke(null)
+        // A non-null reason means the peer dropped us (vs. a user-initiated close),
+        // so the UI can offer to reconnect.
+        onClosed?.invoke(if (userClosed.get()) null else "connection dropped")
     }
 }

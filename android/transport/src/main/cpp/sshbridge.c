@@ -126,7 +126,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeInstallKey(
 JNIEXPORT jstring JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExec(
     JNIEnv* env, jobject thiz, jstring jhost, jint port, jstring juser,
-    jbyteArray jpubblob, jobject signer, jstring jcmd) {
+    jbyteArray jpubblob, jobject signer, jstring jcmd, jbyteArray jexpectedHostKey) {
     (void)thiz;
     if (libssh2_init(0)) return NULL;
     const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
@@ -138,6 +138,22 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExec(
     int fd = tcp_connect(host, port);
     if (fd >= 0) {
         LIBSSH2_SESSION* s = open_session(fd);
+        if (s && jexpectedHostKey != NULL) {
+            // Pin the host key (the mosh bootstrap runs after the connect screen's
+            // TOFU check — refuse if the key changed underneath us).
+            size_t hklen = 0; int hktype = 0;
+            const char* hk = libssh2_session_hostkey(s, &hklen, &hktype);
+            jsize explen = (*env)->GetArrayLength(env, jexpectedHostKey);
+            jbyte* exp = (*env)->GetByteArrayElements(env, jexpectedHostKey, 0);
+            int mismatch = (!hk || (jsize)hklen != explen || memcmp(hk, exp, hklen) != 0);
+            (*env)->ReleaseByteArrayElements(env, jexpectedHostKey, exp, JNI_ABORT);
+            if (mismatch) {
+                LOG("authAndExec: host key mismatch — refusing");
+                libssh2_session_disconnect(s, "host key mismatch");
+                libssh2_session_free(s);
+                s = NULL;
+            }
+        }
         if (s) {
             jclass cls = (*env)->GetObjectClass(env, signer);
             jmethodID sign = (*env)->GetMethodID(env, cls, "sign", "([B)[B");

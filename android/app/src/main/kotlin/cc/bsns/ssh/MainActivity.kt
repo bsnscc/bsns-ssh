@@ -151,10 +151,12 @@ fun App() {
                 forwardsActive = forwardSession != null,
                 onReopenForwards = { showForwards = true },
                 onForwards = { fs -> forwardSession?.close(); forwardSession = fs; showForwards = true },
-            ) { session, title ->
-                sessions.add(TerminalHolder(context, session, title,
+            ) { session, title, factory ->
+                sessions.add(TerminalHolder(context, session, title, factory,
                     fontSizeSp = settings.fontSize, scrollback = settings.scrollback,
-                    keepAwake = settings.keepAwake, cursorBlink = settings.cursorBlink))
+                    keepAwake = settings.keepAwake, cursorBlink = settings.cursorBlink,
+                    theme = Appearance.themeById(settings.theme), cursorStyle = settings.cursorStyle,
+                    bellHaptic = settings.bellHaptic))
                 activeIndex = sessions.size - 1
             }
             Route.Keys -> KeysScreen(keyManager) {
@@ -185,26 +187,41 @@ fun App() {
     }
 }
 
+enum class ConnStatus { Connected, Reconnecting, Disconnected }
+
 /**
  * Holds one session's TerminalView + emulator outside composition so the buffer
- * survives tab switches. Created once when a session connects (iOS surface-cache
- * analogue).
+ * survives tab switches. On a dropped connection it exposes [status] = Disconnected
+ * and [reconnect] rebuilds the transport behind the same terminal (iOS reconnect
+ * parity). Also applies the colour theme / cursor shape / bell at session start.
  */
 class TerminalHolder(
     context: android.content.Context,
-    val session: TerminalTransport,
+    initialSession: TerminalTransport,
     val title: String,
+    private val reconnectFactory: () -> TerminalTransport?,
     fontSizeSp: Int = 14,
     scrollback: Int = 5000,
     keepAwake: Boolean = true,
     cursorBlink: Boolean = true,
+    theme: TerminalTheme = Appearance.themes[0],
+    cursorStyle: String = "block",
+    bellHaptic: Boolean = false,
 ) {
+    var session: TerminalTransport = initialSession
+        private set
+    var status by mutableStateOf(ConnStatus.Connected)
+    private var userClosing = false
+
     val terminalView = TerminalView(context, null).apply {
         setTextSize((fontSizeSp * resources.displayMetrics.scaledDensity).toInt())
         setTypeface(Typeface.MONOSPACE)
         keepScreenOn = keepAwake
         isFocusableInTouchMode = true
     }
+    private val vibrator =
+        if (bellHaptic) context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator else null
+    private val termSession: TerminalSession
 
     init {
         val io = object : TerminalSession.ExternalIo {
@@ -212,18 +229,57 @@ class TerminalHolder(
                 session.write(data.copyOfRange(offset, offset + count))
             override fun onResize(columns: Int, rows: Int) = session.resize(columns, rows)
         }
-        val termSession = TerminalSession(scrollback, BsnsSessionClient { terminalView.onScreenUpdated() }, io)
+        termSession = TerminalSession(scrollback,
+            BsnsSessionClient({ terminalView.onScreenUpdated() }, { vibrate() }), io)
         terminalView.setTerminalViewClient(BsnsViewClient(view = { terminalView }, onEmulatorReady = {
-            session.onOutput = { bytes -> main.post { termSession.appendToEmulator(bytes, bytes.size) } }
+            wireOutput(initialSession)
+            terminalView.mEmulator?.let { Appearance.apply(it, theme) }
+            val esc = Appearance.cursorStyleEscape(cursorStyle)
+            termSession.appendToEmulator(esc, esc.size)
             if (cursorBlink) {
                 terminalView.setTerminalCursorBlinkerRate(500)
                 terminalView.setTerminalCursorBlinkerState(true, true)
             }
+            terminalView.invalidate()
         }))
         terminalView.attachSession(termSession)
     }
 
+    private fun vibrate() {
+        vibrator?.vibrate(android.os.VibrationEffect.createOneShot(30, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+    }
+
+    private fun wireOutput(s: TerminalTransport) {
+        s.onOutput = { bytes -> main.post { termSession.appendToEmulator(bytes, bytes.size) } }
+        when (s) {
+            is SshSession -> s.onClosed = { _ -> onDropped() }
+            is MoshSession -> s.onClosed = { _ -> onDropped() }
+        }
+    }
+
+    private fun onDropped() {
+        if (!userClosing) main.post { if (status == ConnStatus.Connected) status = ConnStatus.Disconnected }
+    }
+
+    /** Rebuild the transport behind the same terminal view (the buffer persists). */
+    fun reconnect() {
+        if (status == ConnStatus.Reconnecting) return
+        status = ConnStatus.Reconnecting
+        thread {
+            val s = reconnectFactory()
+            main.post {
+                if (s != null) {
+                    session = s
+                    wireOutput(s)
+                    terminalView.mEmulator?.let { s.resize(it.mColumns, it.mRows) }
+                    status = ConnStatus.Connected
+                } else status = ConnStatus.Disconnected
+            }
+        }
+    }
+
     fun close() {
+        userClosing = true
         session.onOutput = null
         session.close()
     }
@@ -316,6 +372,21 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                 }
             }
         }
+        if (holder.status != ConnStatus.Connected) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (holder.status == ConnStatus.Reconnecting) "Reconnecting…" else "Disconnected",
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.error,
+                )
+                if (holder.status == ConnStatus.Disconnected) {
+                    Button(onClick = { holder.reconnect() }) { Text("Reconnect") }
+                }
+            }
+        }
         AndroidView(
             factory = { FrameLayout(it) },
             update = { container ->
@@ -345,7 +416,7 @@ fun ConnectScreen(
     forwardsActive: Boolean,
     onReopenForwards: () -> Unit,
     onForwards: (cc.bsns.ssh.transport.ForwardSession) -> Unit,
-    onConnected: (TerminalTransport, String) -> Unit,
+    onConnected: (TerminalTransport, String, () -> TerminalTransport?) -> Unit,
 ) {
     var host by remember { mutableStateOf("10.0.2.2") }
     var port by remember { mutableStateOf("2222") }
@@ -374,9 +445,14 @@ fun ConnectScreen(
 
     fun openWith(p: Int, blob: ByteArray) {
         busy = true; status = "connecting…"
-        thread {
+        // The same factory does the initial open and any later reconnect-on-drop.
+        val factory: () -> TerminalTransport? = {
             val s = SshSession(host, p, user, key.publicKeyBlob, key.signer, expectedHostKey = blob)
-            if (s.open(80, 24)) main.post { busy = false; onConnected(s, "$user@$host:$p") }
+            if (s.open(80, 24)) s else null
+        }
+        thread {
+            val s = factory()
+            if (s != null) main.post { busy = false; onConnected(s, "$user@$host:$p", factory) }
             else main.post { busy = false; status = "couldn't open the session (is your key installed?)" }
         }
     }
@@ -391,21 +467,23 @@ fun ConnectScreen(
         }
     }
 
-    // mosh: SSH in (host-key already verified) → run mosh-server → parse MOSH
-    // CONNECT → open the UDP transport to host:<udp-port> with that key.
-    fun openMosh(p: Int) {
+    // mosh: SSH in (host-key pinned) → run mosh-server → parse MOSH CONNECT → open
+    // the UDP transport. The factory re-bootstraps on a dropped/expired session.
+    fun openMosh(p: Int, blob: ByteArray) {
         busy = true; status = "starting mosh-server…"
-        thread {
-            val out = SshBridge().nativeAuthAndExec(host, p, user, key.publicKeyBlob, key.signer, MoshBootstrap.SERVER_CMD)
+        val factory: () -> TerminalTransport? = {
+            val out = SshBridge().nativeAuthAndExec(host, p, user, key.publicKeyBlob, key.signer,
+                MoshBootstrap.SERVER_CMD, blob)
             val conn = MoshBootstrap.parse(out)
-            if (conn == null) {
-                main.post { busy = false; status = "mosh-server didn't start (is mosh on the host?)" }
-                return@thread
-            }
-            main.post { status = "opening mosh udp ${conn.port}…" }
-            val m = MoshSession(host, conn.port, conn.key)
-            if (m.open(80, 24)) main.post { busy = false; onConnected(m, "mosh·$user@$host") }
-            else main.post { busy = false; status = "couldn't open the mosh UDP transport" }
+            if (conn != null) {
+                val m = MoshSession(host, conn.port, conn.key)
+                if (m.open(80, 24)) m else null
+            } else null
+        }
+        thread {
+            val m = factory()
+            if (m != null) main.post { busy = false; onConnected(m, "mosh·$user@$host", factory) }
+            else main.post { busy = false; status = "mosh-server didn't start (is mosh on the host?)" }
         }
     }
 
@@ -488,7 +566,7 @@ fun ConnectScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Button(enabled = !busy, onClick = {
-                    withYubiPin { verifyThen { p, blob -> if (useMosh) openMosh(p) else openWith(p, blob) } }
+                    withYubiPin { verifyThen { p, blob -> if (useMosh) openMosh(p, blob) else openWith(p, blob) } }
                 }) { Text(if (useMosh) "Connect (mosh)" else "Connect") }
 
                 OutlinedButton(enabled = !busy, onClick = {

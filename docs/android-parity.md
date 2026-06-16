@@ -30,14 +30,14 @@ ported + cross-verified) is now wired into the app across passes P3–P6 below.
 | Saved hosts | ✅ | ✅ `HostStore` + connect-screen Saved section | **DONE** |
 | TOFU host-key verify prompt | ✅ | ✅ verify + dialog + mismatch refuse | **DONE** |
 | Multiple sessions + tabs | ✅ | ✅ tab strip + per-session terminal cache | **DONE** |
-| Reconnect-on-drop | ✅ | ❌ | P2 |
+| Reconnect-on-drop | ✅ | ✅ Disconnected banner + Reconnect rebuilds the transport | **DONE** |
 | Key management (list/generate/delete) | ✅ `KeysView` | ✅ `KeysScreen` (hardware + software, fingerprints, copy/delete) | **P3 DONE** |
 | Software keys (ed25519/ecdsa) | ✅ | ✅ `KeyManager` + `FileKey`, encrypted at rest, e2e auth-verified | **DONE** |
 | Install key on host (ssh-copy-id) | ✅ | 🟡 password path in connect | P3 |
 | Known-hosts manager UI | ✅ | ✅ `KnownHostsScreen` (list trusted + forget) | **DONE** |
 | Per-connection key picker | ✅ | ✅ `KeyPicker` on connect screen | **DONE** |
 | SFTP file browser | ✅ | ✅ `SftpScreen` + `SftpClient` + JNI SFTP subsystem | **P4 DONE** (list/nav/download/upload/mkdir/delete) |
-| Settings (theme/font/cursor/bell/keepawake) | ✅ | ✅ `SettingsScreen` (font/scrollback/cursor-blink/keep-awake/key-bar) | **P5 DONE** (theme/bell deferred) |
+| Settings (theme/font/cursor/bell/keepawake) | ✅ | ✅ `SettingsScreen` (theme/font/scrollback/cursor-shape+blink/bell/keep-awake/key-bar) | **DONE** |
 | App lock (biometric/passcode) | ✅ | ✅ `LockScreen` + BiometricPrompt, re-lock on background | **DONE** |
 | Encrypted config export/import + review | ✅ | ✅ `BackupScreen` + `ConfigBundle` + `:core` `ConfigEnvelope` | **P6 DONE** |
 | Cross-device sync (Files/SAF) | ✅ | ✅ SAF export/import (Android↔Android verified) | **DONE** |

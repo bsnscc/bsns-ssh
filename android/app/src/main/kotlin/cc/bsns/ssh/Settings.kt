@@ -45,6 +45,12 @@ class SettingsStore(context: Context) {
         get() = p.getBoolean("cursorBlink", true); set(v) { p.edit().putBoolean("cursorBlink", v).apply() }
     var appLock: Boolean
         get() = p.getBoolean("appLock", false); set(v) { p.edit().putBoolean("appLock", v).apply() }
+    var theme: String
+        get() = p.getString("theme", "bsns Dark") ?: "bsns Dark"; set(v) { p.edit().putString("theme", v).apply() }
+    var cursorStyle: String
+        get() = p.getString("cursorStyle", "block") ?: "block"; set(v) { p.edit().putString("cursorStyle", v).apply() }
+    var bellHaptic: Boolean
+        get() = p.getBoolean("bellHaptic", true); set(v) { p.edit().putBoolean("bellHaptic", v).apply() }
 }
 
 @Composable
@@ -69,7 +75,11 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
     var showKeyBar by remember { mutableStateOf(store.showKeyBar) }
     var cursorBlink by remember { mutableStateOf(store.cursorBlink) }
     var appLock by remember { mutableStateOf(store.appLock) }
+    var theme by remember { mutableStateOf(store.theme) }
+    var cursorStyle by remember { mutableStateOf(store.cursorStyle) }
+    var bellHaptic by remember { mutableStateOf(store.bellHaptic) }
     val scrollbackOptions = listOf(500, 1000, 2000, 5000, 10000)
+    val themeIds = Appearance.themes.map { it.id }
 
     Scaffold { pad ->
         Column(
@@ -112,7 +122,28 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
                     color = MaterialTheme.colorScheme.primary)
             }
 
+            Row(Modifier.fillMaxWidth().clickable {
+                val next = themeIds[(themeIds.indexOf(theme).coerceAtLeast(0) + 1) % themeIds.size]
+                theme = next; store.theme = next
+            }.padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Theme", fontSize = 15.sp)
+                Text(theme, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.primary)
+            }
+
+            Row(Modifier.fillMaxWidth().clickable {
+                val next = Appearance.cursorStyles[(Appearance.cursorStyles.indexOf(cursorStyle).coerceAtLeast(0) + 1) % Appearance.cursorStyles.size]
+                cursorStyle = next; store.cursorStyle = next
+            }.padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Cursor shape", fontSize = 15.sp)
+                Text(cursorStyle, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.primary)
+            }
+
             SettingToggle("Cursor blink", cursorBlink) { cursorBlink = it; store.cursorBlink = it }
+            SettingToggle("Bell vibrates (haptic)", bellHaptic) { bellHaptic = it; store.bellHaptic = it }
             SettingToggle("Keep screen awake while connected", keepAwake) { keepAwake = it; store.keepAwake = it }
             SettingToggle("Show key bar", showKeyBar) { showKeyBar = it; store.showKeyBar = it }
 

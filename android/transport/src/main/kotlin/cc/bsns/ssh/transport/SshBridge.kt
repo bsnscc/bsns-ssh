@@ -11,7 +11,7 @@ class SshBridge {
 
     /** Public-key auth where signing is delegated to `signer` (a Keystore-backed
      *  object exposing `fun sign(data: ByteArray): ByteArray`), then exec `cmd`. */
-    external fun nativeAuthAndExec(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cmd: String): String?
+    external fun nativeAuthAndExec(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cmd: String, expectedHostKey: ByteArray?): String?
 
     /** Connect + handshake only; returns the server's host-key blob for TOFU. */
     external fun nativeHostKeyBlob(host: String, port: Int): ByteArray?

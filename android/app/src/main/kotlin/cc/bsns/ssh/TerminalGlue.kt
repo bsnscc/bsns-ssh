@@ -10,13 +10,16 @@ import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 
 /** Minimal TerminalSessionClient — bridges emulator screen updates to a redraw. */
-class BsnsSessionClient(private val redraw: () -> Unit) : TerminalSessionClient {
+class BsnsSessionClient(
+    private val redraw: () -> Unit,
+    private val onBellRung: () -> Unit = {},
+) : TerminalSessionClient {
     override fun onTextChanged(changedSession: TerminalSession) = redraw()
     override fun onTitleChanged(changedSession: TerminalSession) {}
     override fun onSessionFinished(finishedSession: TerminalSession) {}
     override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {}
     override fun onPasteTextFromClipboard(session: TerminalSession?) {}
-    override fun onBell(session: TerminalSession) {}
+    override fun onBell(session: TerminalSession) = onBellRung()
     override fun onColorsChanged(session: TerminalSession) {}
     override fun onTerminalCursorStateChange(state: Boolean) {}
     override fun getTerminalCursorStyle(): Int? = null
