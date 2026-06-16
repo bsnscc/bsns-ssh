@@ -69,6 +69,7 @@ private fun SettingToggle(label: String, value: Boolean, enabled: Boolean = true
 /** Settings: terminal appearance/behaviour + the app-lock toggle. */
 @Composable
 fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: () -> Unit, onBack: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var fontSize by remember { mutableStateOf(store.fontSize) }
     var scrollback by remember { mutableStateOf(store.scrollback) }
     var keepAwake by remember { mutableStateOf(store.keepAwake) }
@@ -166,6 +167,20 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
             )
+
+            Divider()
+            Text("About", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+            val info = remember {
+                runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
+            }
+            val versionName = info?.versionName ?: "?"
+            val versionCode = info?.let {
+                if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode else it.versionCode.toLong()
+            } ?: 0L
+            Text("bsns.\$_  ·  version $versionName (build $versionCode)",
+                fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+            Text("GPLv3 · OpenSSL 3.5 + libssh2, built from source",
+                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
