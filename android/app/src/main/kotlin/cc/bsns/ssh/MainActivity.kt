@@ -474,6 +474,7 @@ fun ConnectScreen(
     var host by remember { mutableStateOf(if (BuildConfig.DEBUG) "10.0.2.2" else "") }
     var port by remember { mutableStateOf(if (BuildConfig.DEBUG) "2222" else "22") }
     var user by remember { mutableStateOf(if (BuildConfig.DEBUG) "tester" else "") }
+    var group by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
@@ -584,24 +585,31 @@ fun ConnectScreen(
             TextButton(onClick = onImport) { Text("Import from ~/.ssh (config · known_hosts · keys)", fontSize = 12.sp) }
 
             if (savedHosts.isNotEmpty()) {
-                Text("Saved", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                savedHosts.forEach { h ->
-                    Row(
-                        // Whole row loads the host (a bigger, reliable tap target than
-                        // just the text); the ✕ removes it.
-                        Modifier.fillMaxWidth().clickable {
-                            host = h.host; port = h.port.toString(); user = h.user
-                            status = "loaded ${h.label}"
-                        }.padding(vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            h.label, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = { savedHosts = hostStore.remove(h) }) { Text("✕") }
+                // Group by folder: named groups first (alphabetical), ungrouped last.
+                val grouped = savedHosts.groupBy { it.group?.trim()?.ifEmpty { null } }
+                val sections = grouped.keys.filterNotNull().sorted() + (if (grouped.containsKey(null)) listOf<String?>(null) else emptyList())
+                sections.forEach { g ->
+                    Text(g ?: "Saved", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    grouped[g]!!.forEach { h ->
+                        Row(
+                            // Whole row loads the host (a bigger, reliable tap target than
+                            // just the text); the ✕ removes it.
+                            Modifier.fillMaxWidth().clickable {
+                                host = h.host; port = h.port.toString(); user = h.user
+                                group = h.group ?: ""
+                                status = "loaded ${h.label}"
+                            }.padding(vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                h.label + (h.jump?.let { "  ⇢ $it" } ?: ""),
+                                fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { savedHosts = hostStore.remove(h) }) { Text("✕") }
+                        }
                     }
                 }
             }
@@ -609,6 +617,8 @@ fun ConnectScreen(
             OutlinedTextField(host, { host = it }, label = { Text("host") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(port, { port = it }, label = { Text("port") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(user, { user = it }, label = { Text("user") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(group, { group = it }, label = { Text("group (optional)") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(
                 password, { password = it },
                 label = { Text("password (only to install your key)") },
@@ -630,7 +640,7 @@ fun ConnectScreen(
                 onClick = {
                     val p = validPort(port)
                     if (p == null) { status = "port must be a number from 1 to 65535"; return@OutlinedButton }
-                    savedHosts = hostStore.add(SavedHost(host, p, user))
+                    savedHosts = hostStore.add(SavedHost(host, p, user, group = group.trim().ifEmpty { null }))
                     status = "saved $user@$host"
                 },
             ) { Text("Save this host") }

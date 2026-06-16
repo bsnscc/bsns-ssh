@@ -5,8 +5,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** A saved connection target. `jump` is an optional ProxyJump spec
- *  ("user@bastion[:port][,user@bastion2…]") used by the host-chain connect path. */
-data class SavedHost(val host: String, val port: Int, val user: String, val jump: String? = null) {
+ *  ("user@bastion[:port][,user@bastion2…]") used by the host-chain connect path;
+ *  `group` is an optional folder label for organizing the saved list. */
+data class SavedHost(
+    val host: String,
+    val port: Int,
+    val user: String,
+    val jump: String? = null,
+    val group: String? = null,
+) {
     val label: String get() = "$user@$host${if (port == 22) "" else ":$port"}"
 }
 
@@ -19,7 +26,7 @@ class HostStore(context: Context) {
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             SavedHost(o.getString("host"), o.getInt("port"), o.getString("user"),
-                o.optString("jump").ifEmpty { null })
+                o.optString("jump").ifEmpty { null }, o.optString("group").ifEmpty { null })
         }
     } catch (e: Exception) {
         emptyList()   // never crash the connect screen on a corrupt store
@@ -30,6 +37,7 @@ class HostStore(context: Context) {
         hosts.forEach {
             val o = JSONObject().put("host", it.host).put("port", it.port).put("user", it.user)
             if (it.jump != null) o.put("jump", it.jump)
+            if (it.group != null) o.put("group", it.group)
             arr.put(o)
         }
         // commit() (synchronous) so a saved host survives even if the process is
@@ -37,9 +45,12 @@ class HostStore(context: Context) {
         prefs.edit().putString("list", arr.toString()).commit()
     }
 
+    /** Add or update by label — re-saving an existing host refreshes its
+     *  group / jump rather than silently keeping the old entry. */
     fun add(host: SavedHost): List<SavedHost> {
         val list = load().toMutableList()
-        if (list.none { it.label == host.label }) list.add(host)
+        val i = list.indexOfFirst { it.label == host.label }
+        if (i >= 0) list[i] = host else list.add(host)
         save(list)
         return list
     }

@@ -24,6 +24,7 @@ object ConfigBundle {
         HostStore(context).load().forEach {
             val o = JSONObject().put("host", it.host).put("port", it.port).put("user", it.user)
             if (it.jump != null) o.put("jump", it.jump)
+            if (it.group != null) o.put("group", it.group)
             hosts.put(o)
         }
         root.put("hosts", hosts)
@@ -109,7 +110,8 @@ object ConfigBundle {
                 val port = h.optInt("port", 22)
                 val user = h.optString("user").trim()
                 if (host.isEmpty() || user.isEmpty() || port !in 1..65535) continue
-                hostStore.add(SavedHost(host, port, user, h.optString("jump").ifEmpty { null })); hosts++
+                hostStore.add(SavedHost(host, port, user,
+                    h.optString("jump").ifEmpty { null }, h.optString("group").ifEmpty { null })); hosts++
             }
         }
         if (sel.knownHosts) o.optJSONObject("knownHosts")?.let { kh ->
