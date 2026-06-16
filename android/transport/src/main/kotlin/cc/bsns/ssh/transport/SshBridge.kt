@@ -37,6 +37,16 @@ class SshBridge {
     external fun nativeSftpRemove(handle: Long, path: String, isDir: Boolean): Boolean
     external fun nativeSftpClose(handle: Long)
 
+    // Local (-L) port forwarding — one connection hosts several forwards. open()
+    // returns a handle; service() must run on one owner thread; add/remove are
+    // safe from any thread. add returns 0 or an errno (e.g. 98 = EADDRINUSE).
+    external fun nativeForwardOpen(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, expectedHostKey: ByteArray?): Long
+    external fun nativeForwardAdd(handle: Long, listenPort: Int, destHost: String, destPort: Int): Int
+    external fun nativeForwardRemove(handle: Long, listenPort: Int)
+    /** Accept + pump; returns active connection count, or -1 if the session died. */
+    external fun nativeForwardService(handle: Long, timeoutMs: Int): Int
+    external fun nativeForwardClose(handle: Long)
+
     companion object {
         init { System.loadLibrary("sshbridge") }
     }

@@ -102,6 +102,8 @@ fun App() {
     var activeIndex by remember { mutableStateOf(-1) }   // -1 = the connect screen
     var route by remember { mutableStateOf(Route.Connect) }
     var sftpTarget by remember { mutableStateOf<SftpTarget?>(null) }
+    var forwardSession by remember { mutableStateOf<cc.bsns.ssh.transport.ForwardSession?>(null) }
+    var showForwards by remember { mutableStateOf(false) }
 
     fun closeAt(i: Int) {
         sessions[i].close()
@@ -120,7 +122,14 @@ fun App() {
             )
         }
         val target = sftpTarget
-        if (target != null) {
+        val fwd = forwardSession
+        if (showForwards && fwd != null) {
+            PortForwardsScreen(
+                fwd,
+                onStopAll = { fwd.close(); forwardSession = null; showForwards = false },
+                onClose = { showForwards = false },
+            )
+        } else if (target != null) {
             SftpScreen(target) { sftpTarget = null }
         } else if (activeIndex in sessions.indices) {
             TerminalPane(sessions[activeIndex], showKeyBar = showKeyBar) { closeAt(activeIndex) }
@@ -133,6 +142,9 @@ fun App() {
                 onManageHosts = { route = Route.Hosts },
                 onSettings = { route = Route.Settings },
                 onSftp = { sftpTarget = it },
+                forwardsActive = forwardSession != null,
+                onReopenForwards = { showForwards = true },
+                onForwards = { fs -> forwardSession?.close(); forwardSession = fs; showForwards = true },
             ) { session, title ->
                 sessions.add(TerminalHolder(context, session, title,
                     fontSizeSp = settings.fontSize, scrollback = settings.scrollback,
@@ -314,6 +326,9 @@ fun ConnectScreen(
     onManageHosts: () -> Unit,
     onSettings: () -> Unit,
     onSftp: (SftpTarget) -> Unit,
+    forwardsActive: Boolean,
+    onReopenForwards: () -> Unit,
+    onForwards: (cc.bsns.ssh.transport.ForwardSession) -> Unit,
     onConnected: (TerminalTransport, String) -> Unit,
 ) {
     var host by remember { mutableStateOf("10.0.2.2") }
@@ -339,6 +354,16 @@ fun ConnectScreen(
             val s = SshSession(host, p, user, key.publicKeyBlob, key.signer, expectedHostKey = blob)
             if (s.open(80, 24)) main.post { busy = false; onConnected(s, "$user@$host:$p") }
             else main.post { busy = false; status = "couldn't open the session (is your key installed?)" }
+        }
+    }
+
+    // Open a dedicated forwarding connection (host key already verified).
+    fun openForwards(p: Int, blob: ByteArray) {
+        busy = true; status = "opening tunnel connection…"
+        thread {
+            val fs = cc.bsns.ssh.transport.ForwardSession(host, p, user, key.publicKeyBlob, key.signer, expectedHostKey = blob)
+            if (fs.open()) main.post { busy = false; onForwards(fs) }
+            else main.post { busy = false; status = "couldn't open the tunnel connection" }
         }
     }
 
@@ -434,7 +459,10 @@ fun ConnectScreen(
                 androidx.compose.material3.Switch(checked = useMosh, onCheckedChange = { useMosh = it })
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Button(enabled = !busy, onClick = {
                     verifyThen { p, blob -> if (useMosh) openMosh(p) else openWith(p, blob) }
                 }) { Text(if (useMosh) "Connect (mosh)" else "Connect") }
@@ -444,6 +472,11 @@ fun ConnectScreen(
                         onSftp(SftpTarget(host, p, user, key.publicKeyBlob, key.signer, blob))
                     }
                 }) { Text("Files") }
+
+                OutlinedButton(enabled = !busy, onClick = {
+                    if (forwardsActive) onReopenForwards()
+                    else verifyThen { p, blob -> openForwards(p, blob) }
+                }) { Text(if (forwardsActive) "Tunnels ●" else "Tunnels") }
 
                 OutlinedButton(enabled = !busy && password.isNotEmpty(), onClick = {
                     busy = true; status = "installing key…"

@@ -41,7 +41,7 @@ ported + cross-verified) is now wired into the app across passes P3–P6 below.
 | App lock (biometric/passcode) | ✅ | ✅ `LockScreen` + BiometricPrompt, re-lock on background | **DONE** |
 | Encrypted config export/import + review | ✅ | ✅ `BackupScreen` + `ConfigBundle` + `:core` `ConfigEnvelope` | **P6 DONE** |
 | Cross-device sync (Files/SAF) | ✅ | ✅ SAF export/import (Android↔Android verified) | **DONE** |
-| Port forwarding (-L) | ✅ | ❌ | ⏭ |
+| Port forwarding (-L) | ✅ | ✅ `ForwardSession` + JNI direct-tcpip + `PortForwardsScreen` | **DONE** (verified end-to-end) |
 | Find-in-scrollback | ✅ | ✅ `TerminalSearch` + search bar in `TerminalPane` | **DONE** (scan buffer, scroll-to-match, ↑/↓, counter) |
 | mosh | ✅ | 🟡 built + transport-proven, live session on-device-pending | NDK `libmosh.a` + JNI + `MoshSession` + connect toggle |
 | YubiKey (NFC/USB PIV) | ✅ | ❌ | ⏭ (on-device) |
@@ -116,7 +116,20 @@ ported + cross-verified) is now wired into the app across passes P3–P6 below.
   counter, and ↑/↓ navigation. Scrolling to a match sets `mTopRow` + `invalidate()`
   — NOT `onScreenUpdated()`, which auto-scrolls back to the bottom. Verified on
   the emulator: `seq 1 90` → find "42" scrolls the scrollback to that line.
-- **Deferred:** port forwarding, YubiKey.
+- **Port forwarding (-L) — DONE.** One dedicated `ForwardSession` (its own SSH
+  connection, isolated from the PTY path) hosts several local forwards. The JNI
+  (`nativeForwardOpen/Add/Remove/Service/Close`, owner-thread poll + accept +
+  non-blocking pump with half-close) binds a loopback listener per forward and
+  opens a `direct-tcpip` channel per inbound connection. `PortForwardsScreen`
+  (a "Tunnels" button on the connect screen; the session is hoisted to `App()`
+  so tunnels survive navigation) adds/removes forwards and shows status.
+  Verified end-to-end: `localhost:7777 → 127.0.0.1:9000` tunnelled a real
+  response through the server (the server must allow `AllowTcpForwarding`).
+- **Deferred:** YubiKey (needs a physical key + yubikit-android).
+
+> Lifecycle: `MainActivity` declares `configChanges` (orientation/screenSize/
+> etc.) so resizing the window, rotating, or entering multi-window does NOT
+> recreate the Activity and drop live sessions — Compose just re-lays-out.
 
 > Build note: `BiometricPrompt` needs a `FragmentActivity`, but `biometric:1.1.0`
 > pulls an old `fragment` whose `startActivityForResult` clashes with the Compose

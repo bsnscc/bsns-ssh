@@ -11,6 +11,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <pthread.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "sshbridge", __VA_ARGS__)
 
@@ -562,4 +569,252 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeSftpClose(JNIEnv* env, jobject thiz, 
     if (c->session) { libssh2_session_disconnect(c->session, "bye"); libssh2_session_free(c->session); }
     if (c->fd >= 0) close(c->fd);
     free(c);
+}
+
+// ---- Local (-L) port forwarding -----------------------------------------
+// One dedicated SSH connection hosts several local forwards. Each forward binds
+// a loopback listen socket on the device; an inbound connection becomes a
+// `direct-tcpip` channel to dest:port (reached from the server). All libssh2
+// work runs on the owner thread (nativeForwardService); add/remove only touch
+// the forward list under a mutex, so the UI can call them from any thread.
+
+#define FWD_MAX 16
+#define FWD_CONN_MAX 64
+#define FWD_BUF 16384
+
+typedef struct {
+    int sock;                 // accepted loopback socket (-1 = free slot)
+    LIBSSH2_CHANNEL* channel; // direct-tcpip channel to dest
+    int sock_eof;             // local side closed its write
+    int chan_eof;             // remote side closed its write
+} FwdConn;
+
+typedef struct {
+    int listen_fd;            // -1 = free slot / removed
+    int listen_port;
+    char dest_host[256];
+    int dest_port;
+    int error;                // bind/listen errno, 0 = listening
+    int remove_flag;          // owner thread tears it down on next service
+    FwdConn conns[FWD_CONN_MAX];
+} Forward;
+
+typedef struct {
+    int fd;
+    LIBSSH2_SESSION* session;
+    pthread_mutex_t lock;
+    Forward fwds[FWD_MAX];
+} ForwardClient;
+
+static void fwd_conn_close(FwdConn* c) {
+    if (c->channel) { libssh2_channel_close(c->channel); libssh2_channel_free(c->channel); c->channel = NULL; }
+    if (c->sock >= 0) { close(c->sock); c->sock = -1; }
+    c->sock_eof = c->chan_eof = 0;
+}
+
+JNIEXPORT jlong JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeForwardOpen(
+    JNIEnv* env, jobject thiz, jstring jhost, jint port, jstring juser,
+    jbyteArray jpubblob, jobject signer, jbyteArray jexpectedHostKey) {
+    (void)thiz;
+    if (libssh2_init(0)) return 0;
+    const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
+    const char* user = (*env)->GetStringUTFChars(env, juser, 0);
+    jsize bloblen = (*env)->GetArrayLength(env, jpubblob);
+    jbyte* blob = (*env)->GetByteArrayElements(env, jpubblob, 0);
+    ForwardClient* fc = NULL;
+    int fd = -1;
+    LIBSSH2_SESSION* s = connect_and_auth(env, host, port, user,
+        (const unsigned char*)blob, (size_t)bloblen, signer, jexpectedHostKey, &fd);
+    if (s) {
+        libssh2_session_set_blocking(s, 0);   // non-blocking channel I/O
+        fc = (ForwardClient*)calloc(1, sizeof(ForwardClient));
+        fc->fd = fd; fc->session = s;
+        pthread_mutex_init(&fc->lock, NULL);
+        for (int i = 0; i < FWD_MAX; i++) {
+            fc->fwds[i].listen_fd = -1;
+            for (int j = 0; j < FWD_CONN_MAX; j++) fc->fwds[i].conns[j].sock = -1;
+        }
+    }
+    (*env)->ReleaseStringUTFChars(env, jhost, host);
+    (*env)->ReleaseStringUTFChars(env, juser, user);
+    (*env)->ReleaseByteArrayElements(env, jpubblob, blob, JNI_ABORT);
+    return (jlong)(intptr_t)fc;
+}
+
+// Bind a loopback listener for a new forward. Returns 0, or an errno on failure
+// (e.g. EADDRINUSE). Safe from any thread.
+JNIEXPORT jint JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeForwardAdd(
+    JNIEnv* env, jobject thiz, jlong handle, jint listenPort, jstring jdestHost, jint destPort) {
+    (void)thiz;
+    ForwardClient* fc = (ForwardClient*)(intptr_t)handle;
+    if (!fc) return -1;
+    const char* dest = (*env)->GetStringUTFChars(env, jdestHost, 0);
+    int rc = 0;
+    pthread_mutex_lock(&fc->lock);
+    int slot = -1;
+    for (int i = 0; i < FWD_MAX; i++) if (fc->fwds[i].listen_fd < 0 && !fc->fwds[i].remove_flag) { slot = i; break; }
+    if (slot < 0) { rc = -1; goto out; }
+    int lfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (lfd < 0) { rc = errno ? errno : -1; goto out; }
+    int yes = 1; setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);   // 127.0.0.1 only
+    addr.sin_port = htons((uint16_t)listenPort);
+    if (bind(lfd, (struct sockaddr*)&addr, sizeof(addr)) < 0 || listen(lfd, 8) < 0) {
+        rc = errno ? errno : -1; close(lfd); goto out;
+    }
+    fcntl(lfd, F_SETFL, O_NONBLOCK);
+    Forward* f = &fc->fwds[slot];
+    f->listen_fd = lfd; f->listen_port = listenPort; f->dest_port = destPort;
+    f->error = 0; f->remove_flag = 0;
+    strncpy(f->dest_host, dest, sizeof(f->dest_host) - 1); f->dest_host[sizeof(f->dest_host) - 1] = 0;
+out:
+    pthread_mutex_unlock(&fc->lock);
+    (*env)->ReleaseStringUTFChars(env, jdestHost, dest);
+    return rc;
+}
+
+// Mark a forward for teardown; the owner thread frees its channels next service.
+JNIEXPORT void JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeForwardRemove(
+    JNIEnv* env, jobject thiz, jlong handle, jint listenPort) {
+    (void)env; (void)thiz;
+    ForwardClient* fc = (ForwardClient*)(intptr_t)handle;
+    if (!fc) return;
+    pthread_mutex_lock(&fc->lock);
+    for (int i = 0; i < FWD_MAX; i++)
+        if (fc->fwds[i].listen_fd >= 0 && fc->fwds[i].listen_port == listenPort) fc->fwds[i].remove_flag = 1;
+    pthread_mutex_unlock(&fc->lock);
+}
+
+// Accept new connections, pump every active conn both ways, tear down removed
+// forwards. Returns active connection count, or -1 if the session died. Owner
+// thread only.
+JNIEXPORT jint JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeForwardService(
+    JNIEnv* env, jobject thiz, jlong handle, jint timeoutMs) {
+    (void)env; (void)thiz;
+    ForwardClient* fc = (ForwardClient*)(intptr_t)handle;
+    if (!fc) return -1;
+
+    struct pollfd pfds[1 + FWD_MAX + FWD_MAX * FWD_CONN_MAX];
+    int n = 0;
+    pfds[n].fd = fc->fd; pfds[n].events = POLLIN; pfds[n].revents = 0; n++;   // session (incoming channel data)
+
+    pthread_mutex_lock(&fc->lock);
+    for (int i = 0; i < FWD_MAX; i++) {
+        Forward* f = &fc->fwds[i];
+        if (f->listen_fd < 0) continue;
+        if (!f->remove_flag) { pfds[n].fd = f->listen_fd; pfds[n].events = POLLIN; pfds[n].revents = 0; n++; }
+        for (int j = 0; j < FWD_CONN_MAX; j++)
+            if (f->conns[j].sock >= 0 && !f->conns[j].sock_eof) {
+                pfds[n].fd = f->conns[j].sock; pfds[n].events = POLLIN; pfds[n].revents = 0; n++;
+            }
+    }
+    pthread_mutex_unlock(&fc->lock);
+
+    poll(pfds, n, timeoutMs);
+
+    char buf[FWD_BUF];
+    int active = 0;
+    pthread_mutex_lock(&fc->lock);
+    for (int i = 0; i < FWD_MAX; i++) {
+        Forward* f = &fc->fwds[i];
+        if (f->listen_fd < 0) continue;
+
+        if (f->remove_flag) {
+            for (int j = 0; j < FWD_CONN_MAX; j++) if (f->conns[j].sock >= 0) fwd_conn_close(&f->conns[j]);
+            close(f->listen_fd); f->listen_fd = -1; f->remove_flag = 0;
+            continue;
+        }
+
+        // Accept new local connections → open a direct-tcpip channel each.
+        int csock;
+        while ((csock = accept(f->listen_fd, NULL, NULL)) >= 0) {
+            fcntl(csock, F_SETFL, O_NONBLOCK);
+            LIBSSH2_CHANNEL* ch = NULL;
+            for (int tries = 0; tries < 200; tries++) {
+                ch = libssh2_channel_direct_tcpip_ex(fc->session, f->dest_host, f->dest_port,
+                                                     "127.0.0.1", f->listen_port);
+                if (ch) break;
+                if (libssh2_session_last_errno(fc->session) != LIBSSH2_ERROR_EAGAIN) break;
+                usleep(2000);
+            }
+            if (!ch) {
+                char* msg = NULL; libssh2_session_last_error(fc->session, &msg, NULL, 0);
+                LOG("fwd: direct-tcpip to %s:%d refused: %s", f->dest_host, f->dest_port, msg ? msg : "");
+                close(csock); continue;
+            }
+            int slot = -1;
+            for (int j = 0; j < FWD_CONN_MAX; j++) if (f->conns[j].sock < 0) { slot = j; break; }
+            if (slot < 0) { libssh2_channel_close(ch); libssh2_channel_free(ch); close(csock); continue; }
+            f->conns[slot].sock = csock; f->conns[slot].channel = ch;
+            f->conns[slot].sock_eof = f->conns[slot].chan_eof = 0;
+        }
+
+        // Pump each active connection both directions (non-blocking).
+        for (int j = 0; j < FWD_CONN_MAX; j++) {
+            FwdConn* c = &f->conns[j];
+            if (c->sock < 0) continue;
+            active++;
+            // local socket → remote channel
+            if (!c->sock_eof) {
+                ssize_t r = recv(c->sock, buf, sizeof(buf), 0);
+                if (r > 0) {
+                    ssize_t off = 0;
+                    while (off < r) {
+                        ssize_t w = libssh2_channel_write(c->channel, buf + off, (size_t)(r - off));
+                        if (w == LIBSSH2_ERROR_EAGAIN) continue;
+                        if (w < 0) { c->sock_eof = 1; break; }
+                        off += w;
+                    }
+                } else if (r == 0) {
+                    c->sock_eof = 1; libssh2_channel_send_eof(c->channel);
+                } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    c->sock_eof = 1; libssh2_channel_send_eof(c->channel);
+                }
+            }
+            // remote channel → local socket
+            if (!c->chan_eof) {
+                ssize_t r = libssh2_channel_read(c->channel, buf, sizeof(buf));
+                if (r > 0) {
+                    ssize_t off = 0;
+                    while (off < r) {
+                        ssize_t w = send(c->sock, buf + off, (size_t)(r - off), 0);
+                        if (w < 0) { if (errno == EAGAIN || errno == EWOULDBLOCK) continue; c->chan_eof = 1; break; }
+                        off += w;
+                    }
+                } else if (r == 0 && libssh2_channel_eof(c->channel)) {
+                    c->chan_eof = 1; shutdown(c->sock, SHUT_WR);
+                } else if (r < 0 && r != LIBSSH2_ERROR_EAGAIN) {
+                    c->chan_eof = 1;
+                }
+            }
+            if (c->sock_eof && c->chan_eof) { fwd_conn_close(c); active--; }
+        }
+    }
+    pthread_mutex_unlock(&fc->lock);
+    return active;
+}
+
+JNIEXPORT void JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeForwardClose(JNIEnv* env, jobject thiz, jlong handle) {
+    (void)env; (void)thiz;
+    ForwardClient* fc = (ForwardClient*)(intptr_t)handle;
+    if (!fc) return;
+    pthread_mutex_lock(&fc->lock);
+    for (int i = 0; i < FWD_MAX; i++) {
+        Forward* f = &fc->fwds[i];
+        if (f->listen_fd < 0) continue;
+        for (int j = 0; j < FWD_CONN_MAX; j++) if (f->conns[j].sock >= 0) fwd_conn_close(&f->conns[j]);
+        close(f->listen_fd); f->listen_fd = -1;
+    }
+    pthread_mutex_unlock(&fc->lock);
+    pthread_mutex_destroy(&fc->lock);
+    if (fc->session) { libssh2_session_disconnect(fc->session, "bye"); libssh2_session_free(fc->session); }
+    if (fc->fd >= 0) close(fc->fd);
+    free(fc);
 }
