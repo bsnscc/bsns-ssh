@@ -25,10 +25,10 @@ yet — wiring them in is most of the "feature" work below.
 
 | Feature | iOS | Android | Plan |
 |---|---|---|---|
-| **Real VT terminal** (cursor/colors/vim/htop) | ✅ SwiftTerm | ❌ (ANSI-stripped text + command box) | **P1** Termux terminal-view/emulator, SSH-backed |
-| Special-keys bar (esc/ctrl/tab/arrows) | ✅ | ❌ | P1 (with terminal) |
-| Copy / paste / select | ✅ | ❌ | P1 (terminal view provides it) |
-| Saved hosts | ✅ | 🟡 `HostStore` added, not wired | **P2** |
+| **Real VT terminal** (cursor/colors/vim/htop) | ✅ SwiftTerm | ✅ Termux terminal-view, SSH-backed | **P1 DONE** |
+| Special-keys bar (esc/ctrl/tab/arrows) | ✅ | ✅ KeyBar over the keyboard | **DONE** |
+| Copy / paste / select | ✅ | ✅ (terminal-view textselection) | DONE |
+| Saved hosts | ✅ | ✅ `HostStore` + connect-screen Saved section | **DONE** |
 | TOFU host-key verify prompt | ✅ | ❌ (auto-accepts) | P2 (use `:core` KnownHosts) |
 | Multiple sessions + tabs | ✅ | ❌ (single) | P2 |
 | Reconnect-on-drop | ✅ | ❌ | P2 |
