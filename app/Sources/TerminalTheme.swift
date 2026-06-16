@@ -1,5 +1,16 @@
 import UIKit
+import SwiftUI
 import SwiftTerm
+
+/// The one source of truth for brand color — sampled from the bsns.$_ app icon
+/// (#00C29C on #0F0F0F). Used for the app tint/accent, active states, and the
+/// terminal `bsns Dark` theme, so chrome and terminal read as one product and
+/// match the icon. Kept identical (same hex) to the Android `Brand`.
+enum Brand {
+    static let accent = SwiftUI.Color(red: 0x00 / 255, green: 0xC2 / 255, blue: 0x9C / 255)   // #00C29C
+    static let accentUI = UIColor(red: 0x00 / 255, green: 0xC2 / 255, blue: 0x9C / 255, alpha: 1)
+    static let background = SwiftUI.Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x0F / 255) // #0F0F0F
+}
 
 /// A terminal color scheme: background / foreground / cursor + the 16-color
 /// ANSI palette. Applied to a SwiftTerm `TerminalView`.
@@ -15,8 +26,8 @@ struct TerminalTheme: Identifiable, Hashable {
         var uiColor: UIColor {
             UIColor(red: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: 1)
         }
-        var swiftTermColor: Color {
-            Color(red: UInt16(r) * 257, green: UInt16(g) * 257, blue: UInt16(b) * 257)
+        var swiftTermColor: SwiftTerm.Color {
+            SwiftTerm.Color(red: UInt16(r) * 257, green: UInt16(g) * 257, blue: UInt16(b) * 257)
         }
     }
 
@@ -34,7 +45,8 @@ struct TerminalTheme: Identifiable, Hashable {
 
     static let bsnsDark = TerminalTheme(
         id: "bsns Dark",
-        background: rgb(13, 17, 23), foreground: rgb(199, 204, 209), cursor: rgb(74, 222, 128),
+        // Brand palette: #0F0F0F bg, soft-white fg, #00C29C cursor (identical to Android).
+        background: rgb(15, 15, 15), foreground: rgb(232, 232, 232), cursor: rgb(0, 194, 156),
         ansi: [
             rgb(30, 34, 42), rgb(224, 108, 117), rgb(152, 195, 121), rgb(229, 192, 123),
             rgb(97, 175, 239), rgb(198, 120, 221), rgb(86, 182, 194), rgb(171, 178, 191),

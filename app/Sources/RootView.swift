@@ -31,6 +31,7 @@ struct RootView: View {
                 }
             }
         }
+        .tint(Brand.accent)   // brand accent on every control, link, and selection
         .task { await maybeDevAutoConnect() }
         // Auto-sync: pull + merge the user's folder on launch; push when backgrounded.
         .task { await ConfigSync.autoPull(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store) }

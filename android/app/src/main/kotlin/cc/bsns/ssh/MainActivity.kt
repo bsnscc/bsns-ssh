@@ -69,7 +69,19 @@ class MainActivity : FragmentActivity() {
         // Set the secure flag up front so the very first recents snapshot is
         // protected — don't wait for a resume round-trip (a privacy guarantee).
         applySecureFlag(window, SettingsStore(this).appLock)
-        setContent { MaterialTheme(colorScheme = darkColorScheme()) { App() } }
+        // Brand-tinted dark scheme: the icon's #00C29C accent on the #0F0F0F near-black,
+        // so buttons, switches, and selected states match the icon + the iOS app.
+        setContent {
+            MaterialTheme(colorScheme = darkColorScheme(
+                primary = Brand.accent,
+                secondary = Brand.accent,
+                tertiary = Brand.accent,
+                background = Brand.nearBlack,
+                surface = Brand.nearBlack,
+                surfaceVariant = Brand.surface,
+                onPrimary = Brand.nearBlack,
+            )) { App() }
+        }
     }
 
     override fun onResume() {
