@@ -29,7 +29,7 @@ yet — wiring them in is most of the "feature" work below.
 | Special-keys bar (esc/ctrl/tab/arrows) | ✅ | ✅ KeyBar over the keyboard | **DONE** |
 | Copy / paste / select | ✅ | ✅ (terminal-view textselection) | DONE |
 | Saved hosts | ✅ | ✅ `HostStore` + connect-screen Saved section | **DONE** |
-| TOFU host-key verify prompt | ✅ | ❌ (auto-accepts) | P2 (use `:core` KnownHosts) |
+| TOFU host-key verify prompt | ✅ | ✅ verify + dialog + mismatch refuse | **DONE** |
 | Multiple sessions + tabs | ✅ | ❌ (single) | P2 |
 | Reconnect-on-drop | ✅ | ❌ | P2 |
 | Key management (list/generate/delete) | ✅ `KeysView` | ❌ (one fixed Keystore key) | **P3** (use `:core` Agent + FileKey + Keystore) |
