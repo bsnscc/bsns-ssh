@@ -26,14 +26,17 @@ class SshBridgeTest {
             Base64.getEncoder().encodeToString(signer.publicKeyBlob) + " bsns-spike"
 
         val bridge = SshBridge()
+        // Pin the real host key so install + exec also exercise the TOFU path.
+        val hostKey = bridge.nativeHostKeyBlob("10.0.2.2", 2222)
+        assertNotNull("couldn't read the server host key", hostKey)
         assertTrue(
             "failed to install the Keystore public key on the server",
-            bridge.nativeInstallKey("10.0.2.2", 2222, "tester", "testpw", authLine),
+            bridge.nativeInstallKey("10.0.2.2", 2222, "tester", "testpw", authLine, hostKey),
         )
 
         val out = bridge.nativeAuthAndExec(
             "10.0.2.2", 2222, "tester", signer.publicKeyBlob, signer,
-            "echo KEYSTORE_AUTH_OK; uname -m",
+            "echo KEYSTORE_AUTH_OK; uname -m", hostKey,
         )
         assertNotNull("public-key auth via the Keystore returned null", out)
         assertTrue("unexpected output: $out", out!!.contains("KEYSTORE_AUTH_OK"))
@@ -45,9 +48,10 @@ class SshBridgeTest {
         val authLine = "ecdsa-sha2-nistp256 " +
             Base64.getEncoder().encodeToString(signer.publicKeyBlob) + " bsns-spike"
         val bridge = SshBridge()
-        assertTrue("install", bridge.nativeInstallKey("10.0.2.2", 2222, "tester", "testpw", authLine))
+        val hostKey = bridge.nativeHostKeyBlob("10.0.2.2", 2222)
+        assertTrue("install", bridge.nativeInstallKey("10.0.2.2", 2222, "tester", "testpw", authLine, hostKey))
 
-        val handle = bridge.nativeOpenShell("10.0.2.2", 2222, "tester", signer.publicKeyBlob, signer, 80, 24, null)
+        val handle = bridge.nativeOpenShell("10.0.2.2", 2222, "tester", signer.publicKeyBlob, signer, 80, 24, hostKey)
         assertTrue("nativeOpenShell returned a null handle", handle != 0L)
         try {
             bridge.nativeWrite(handle, "echo HELLO_INTERACTIVE_PTY\n".toByteArray())
@@ -72,9 +76,11 @@ class SshBridgeTest {
         val signer = KeystoreSigner("bsns-spike-key")
         val authLine = "ecdsa-sha2-nistp256 " +
             Base64.getEncoder().encodeToString(signer.publicKeyBlob) + " bsns-spike"
-        assertTrue("install", SshBridge().nativeInstallKey("10.0.2.2", 2222, "tester", "testpw", authLine))
+        val bridge = SshBridge()
+        val hostKey = bridge.nativeHostKeyBlob("10.0.2.2", 2222)
+        assertTrue("install", bridge.nativeInstallKey("10.0.2.2", 2222, "tester", "testpw", authLine, hostKey))
 
-        val session = SshSession("10.0.2.2", 2222, "tester", signer.publicKeyBlob, signer)
+        val session = SshSession("10.0.2.2", 2222, "tester", signer.publicKeyBlob, signer, hostKey)
         val output = StringBuilder()
         session.onOutput = { bytes -> synchronized(output) { output.append(String(bytes, Charsets.UTF_8)) } }
         assertTrue("open session", session.open(80, 24))

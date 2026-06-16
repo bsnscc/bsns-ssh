@@ -154,7 +154,11 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
                 if (biometricAvailable) "Require fingerprint / face to unlock"
                 else "Require fingerprint / face (none enrolled)",
                 appLock, enabled = biometricAvailable,
-            ) { appLock = it; store.appLock = it }
+            ) {
+                appLock = it; store.appLock = it
+                // Apply screenshot/recents protection NOW, not on the next resume.
+                (context as? android.app.Activity)?.let { a -> applySecureFlag(a.window, it) }
+            }
 
             Divider()
             Text("Backup", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
@@ -163,7 +167,8 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
             Divider()
             Text(
                 "No accounts. No analytics. No telemetry. Your keys stay on this device; " +
-                    "the hardware-backed one can never be exported.",
+                    "the device key lives in the Android Keystore and can never be exported " +
+                    "(see Keys for whether it's StrongBox- or TEE-backed on your hardware).",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
             )

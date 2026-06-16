@@ -64,7 +64,8 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                 Text("Keys", fontFamily = FontFamily.Monospace, fontSize = 20.sp)
                 TextButton(onClick = onBack) { Text("Done") }
             }
-            Text("Your hardware key never leaves the Keystore. Software keys are encrypted at rest.",
+            Text("Your device key stays in the Android Keystore and can't be exported. " +
+                "Software keys are encrypted at rest. Each key shows how it's backed.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             keys.forEach { k ->
@@ -83,7 +84,7 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                     }
                     if (k.yubiKey) {
                         OutlinedButton(onClick = { keyManager.forgetYubiKey(k.id); refresh() }) { Text("Forget") }
-                    } else if (!k.hardware) {
+                    } else if (!k.builtIn) {
                         OutlinedButton(onClick = { confirmDelete = k }) { Text("Delete") }
                     }
                 }

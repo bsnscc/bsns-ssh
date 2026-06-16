@@ -1,6 +1,7 @@
 package cc.bsns.ssh
 
 import android.content.Context
+import cc.bsns.ssh.core.SshDecoder
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Base64
@@ -70,33 +71,72 @@ object ConfigBundle {
         val keys: Boolean,
     )
 
-    /** Merge the opted-in categories into the local stores (additive; dups skipped). */
-    fun apply(context: Context, o: JSONObject, sel: Selection) {
+    /** What an import actually merged — so the UI reports the truth, not "imported". */
+    class Applied(val hosts: Int, val knownHosts: Int, val keys: Int, val settings: Boolean) {
+        val isEmpty: Boolean get() = hosts == 0 && knownHosts == 0 && keys == 0 && !settings
+        val summary: String get() {
+            val parts = buildList {
+                if (hosts > 0) add("$hosts host(s)")
+                if (knownHosts > 0) add("$knownHosts trusted key(s)")
+                if (keys > 0) add("$keys private key(s)")
+                if (settings) add("settings")
+            }
+            return if (parts.isEmpty()) "nothing applied" else "imported ${parts.joinToString(", ")}"
+        }
+    }
+
+    /** Merge the opted-in categories into the local stores (additive; dups skipped).
+     *  Every untrusted field is validated/clamped before it touches a store, and the
+     *  caller is told exactly what was applied. Malformed entries are skipped, not fatal. */
+    fun apply(context: Context, o: JSONObject, sel: Selection): Applied {
+        var hosts = 0; var known = 0; var keys = 0; var settings = false
+
         if (sel.hosts) o.optJSONArray("hosts")?.let { arr ->
             val hostStore = HostStore(context)
             for (i in 0 until arr.length()) {
-                val h = arr.getJSONObject(i)
-                hostStore.add(SavedHost(h.getString("host"), h.getInt("port"), h.getString("user")))
+                val h = arr.optJSONObject(i) ?: continue
+                val host = h.optString("host").trim()
+                val port = h.optInt("port", 22)
+                val user = h.optString("user").trim()
+                if (host.isEmpty() || user.isEmpty() || port !in 1..65535) continue
+                hostStore.add(SavedHost(host, port, user)); hosts++
             }
         }
         if (sel.knownHosts) o.optJSONObject("knownHosts")?.let { kh ->
-            kh.keys().forEach { id -> kh.getString(id).let { KnownHostsStore(context).trustRaw(id, Base64.getDecoder().decode(it)) } }
+            val store = KnownHostsStore(context)
+            kh.keys().forEach { id ->
+                val blob = runCatching { Base64.getDecoder().decode(kh.getString(id)) }.getOrNull()
+                if (id.isNotBlank() && blob != null && isPlausibleHostKey(blob)) {
+                    store.trustRaw(id, blob); known++
+                }
+            }
         }
         if (sel.settings) o.optJSONObject("settings")?.let { s ->
             val st = SettingsStore(context)
             st.fontSize = s.optInt("fontSize", st.fontSize).coerceIn(8, 30)
-            st.scrollback = s.optInt("scrollback", st.scrollback)
+            st.scrollback = s.optInt("scrollback", st.scrollback).coerceIn(100, 100_000)
             st.cursorBlink = s.optBoolean("cursorBlink", st.cursorBlink)
             st.keepAwake = s.optBoolean("keepAwake", st.keepAwake)
             st.showKeyBar = s.optBoolean("showKeyBar", st.showKeyBar)
+            settings = true
         }
         if (sel.keys) o.optJSONArray("keys")?.let { arr ->
             val km = KeyManager(context)
             for (i in 0 until arr.length()) {
-                val k = arr.getJSONObject(i)
-                km.importSoftware(k.getString("algorithm"),
-                    Base64.getDecoder().decode(k.getString("material")), k.optString("comment", "bsns"))
+                val k = arr.optJSONObject(i) ?: continue
+                val material = runCatching { Base64.getDecoder().decode(k.getString("material")) }.getOrNull() ?: continue
+                runCatching {
+                    km.importSoftware(k.getString("algorithm"), material, k.optString("comment", "bsns"))
+                }.onSuccess { keys++ }
             }
         }
+        return Applied(hosts, known, keys, settings)
     }
+
+    /** A trusted host-key blob must at least decode to a sane leading algorithm
+     *  name (SSH `string`) — rejects truncated/garbage entries from a bad bundle. */
+    private fun isPlausibleHostKey(blob: ByteArray): Boolean = runCatching {
+        val algo = SshDecoder(blob).readStringUtf8()
+        algo.isNotEmpty() && algo.length <= 64 && algo.all { it in ' '..'~' }
+    }.getOrDefault(false)
 }

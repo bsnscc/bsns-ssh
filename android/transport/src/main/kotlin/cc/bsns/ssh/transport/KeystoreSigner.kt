@@ -1,9 +1,11 @@
 package cc.bsns.ssh.transport
 
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import cc.bsns.ssh.core.SshKeyFormat
 import java.math.BigInteger
+import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
@@ -28,6 +30,14 @@ class KeystoreSigner(alias: String) {
     private val privateKey: PrivateKey
     val publicKeyBlob: ByteArray
 
+    /** The key's actual backing, inspected from KeyInfo — so the UI states the
+     *  truth ("StrongBox" / "TEE" / "software") instead of assuming hardware. */
+    enum class Backing(val label: String) {
+        STRONGBOX("StrongBox"), TEE("hardware (TEE)"), SOFTWARE("software"), UNKNOWN("Keystore")
+    }
+    val backing: Backing
+    val isHardwareBacked: Boolean get() = backing == Backing.STRONGBOX || backing == Backing.TEE
+
     init {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         if (!ks.containsAlias(alias)) {
@@ -48,6 +58,27 @@ class KeystoreSigner(alias: String) {
         val ec = entry.certificate.publicKey as ECPublicKey
         val x963 = byteArrayOf(0x04) + fixed32(ec.w.affineX) + fixed32(ec.w.affineY)
         publicKeyBlob = SshKeyFormat.ecdsaP256PublicBlob(x963)
+        backing = detectBacking(privateKey)
+    }
+
+    /** Ask the Keystore what actually backs the key (API 31+ gives the precise
+     *  security level; older devices only tell us secure-hardware yes/no). */
+    private fun detectBacking(key: PrivateKey): Backing = try {
+        val info = KeyFactory.getInstance(key.algorithm, "AndroidKeyStore")
+            .getKeySpec(key, KeyInfo::class.java) as KeyInfo
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            when (info.securityLevel) {
+                KeyProperties.SECURITY_LEVEL_STRONGBOX -> Backing.STRONGBOX
+                KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> Backing.TEE
+                KeyProperties.SECURITY_LEVEL_SOFTWARE -> Backing.SOFTWARE
+                else -> Backing.UNKNOWN
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            if (info.isInsideSecureHardware) Backing.TEE else Backing.SOFTWARE
+        }
+    } catch (e: Exception) {
+        Backing.UNKNOWN
     }
 
     /** Called from JNI: SHA-256 + ECDSA in the Keystore, framed as the SSH body. */

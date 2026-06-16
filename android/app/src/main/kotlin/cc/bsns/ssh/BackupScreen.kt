@@ -155,13 +155,19 @@ fun BackupScreen(onBack: () -> Unit) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
+                val anySelected = impHosts || impSettings || impKnown || (impKeys && keysAllowed)
+                TextButton(enabled = anySelected, onClick = {
                     val bundle = o.bundle
                     val sel = ConfigBundle.Selection(impHosts, impKnown, impSettings, impKeys && keysAllowed)
                     pendingImport = null
                     scope.launch {
-                        withContext(Dispatchers.IO) { runCatching { ConfigBundle.apply(context, bundle, sel) } }
-                        status = "imported"
+                        val result = withContext(Dispatchers.IO) {
+                            runCatching { ConfigBundle.apply(context, bundle, sel) }
+                        }
+                        status = result.fold(
+                            onSuccess = { if (it.isEmpty) "nothing to import" else it.summary },
+                            onFailure = { "import failed — the backup may be damaged" },
+                        )
                     }
                 }) { Text("Import") }
             },

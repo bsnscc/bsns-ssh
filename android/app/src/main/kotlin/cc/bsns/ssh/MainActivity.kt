@@ -64,19 +64,15 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         YubiKeyManager.attach(this)   // for NFC reader-mode + USB discovery
+        // Set the secure flag up front so the very first recents snapshot is
+        // protected — don't wait for a resume round-trip (a privacy guarantee).
+        applySecureFlag(window, SettingsStore(this).appLock)
         setContent { MaterialTheme(colorScheme = darkColorScheme()) { App() } }
     }
 
     override fun onResume() {
         super.onResume()
-        // With app lock on, mark the window secure so terminal output is excluded
-        // from the recents/app-switcher snapshot and screenshots.
-        if (SettingsStore(this).appLock) {
-            window.setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE,
-                android.view.WindowManager.LayoutParams.FLAG_SECURE)
-        } else {
-            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
-        }
+        applySecureFlag(window, SettingsStore(this).appLock)
     }
 
     override fun onStop() {
@@ -85,7 +81,23 @@ class MainActivity : FragmentActivity() {
     }
 }
 
+/** Toggle FLAG_SECURE so terminal/key content is excluded from the recents
+ *  snapshot and screenshots whenever app lock is on. Applied at create, on
+ *  resume, and the instant the setting changes — never gated on a lifecycle trip. */
+fun applySecureFlag(window: android.view.Window, secure: Boolean) {
+    if (secure) {
+        window.setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE,
+            android.view.WindowManager.LayoutParams.FLAG_SECURE)
+    } else {
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+    }
+}
+
 private val main = Handler(Looper.getMainLooper())
+
+/** Parse a port, returning null unless it's a valid 1..65535 — no silent
+ *  fallback to 22 that could connect to / trust / save the wrong endpoint. */
+fun validPort(text: String): Int? = text.trim().toIntOrNull()?.takeIf { it in 1..65535 }
 
 private enum class Route { Connect, Keys, Hosts, Settings, Backup }
 
@@ -430,9 +442,11 @@ fun ConnectScreen(
     onForwards: (cc.bsns.ssh.transport.ForwardSession) -> Unit,
     onConnected: (TerminalTransport, String, () -> TerminalTransport?) -> Unit,
 ) {
-    var host by remember { mutableStateOf("10.0.2.2") }
-    var port by remember { mutableStateOf("2222") }
-    var user by remember { mutableStateOf("tester") }
+    // Debug builds prefill the local emulator sshd for fast iteration; release
+    // builds start blank with the standard SSH port.
+    var host by remember { mutableStateOf(if (BuildConfig.DEBUG) "10.0.2.2" else "") }
+    var port by remember { mutableStateOf(if (BuildConfig.DEBUG) "2222" else "22") }
+    var user by remember { mutableStateOf(if (BuildConfig.DEBUG) "tester" else "") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
@@ -502,9 +516,10 @@ fun ConnectScreen(
 
     // Verify the host key (TOFU) once, then run the chosen action (shell or SFTP).
     fun verifyThen(action: (Int, ByteArray) -> Unit) {
+        val p = validPort(port)
+        if (p == null) { status = "port must be a number from 1 to 65535"; return }
         busy = true; status = "verifying host…"
         thread {
-            val p = port.toIntOrNull() ?: 22
             val blob = SshBridge().nativeHostKeyBlob(host, p)
             val trusted = if (blob != null) knownHosts.trustedBlob(host, p) else null
             when {
@@ -512,7 +527,10 @@ fun ConnectScreen(
                 trusted == null -> main.post { busy = false; pendingAction = action; pendingTofu = TofuInfo(p, blob) }
                 !trusted.contentEquals(blob) -> main.post {
                     busy = false
-                    status = "⚠ host key CHANGED for $host — refusing (possible interception)"
+                    // Could be an attack — or a host that legitimately rotated its key
+                    // (our newer algorithm allowlist can also surface a different key type).
+                    status = "⚠ host key CHANGED for $host:$p — refusing. If you expected this, " +
+                        "verify the new fingerprint out of band, then forget the host under Hosts and reconnect."
                 }
                 else -> main.post { busy = false; action(p, blob) }
             }
@@ -581,7 +599,9 @@ fun ConnectScreen(
             OutlinedButton(
                 enabled = host.isNotBlank() && user.isNotBlank(),
                 onClick = {
-                    savedHosts = hostStore.add(SavedHost(host, port.toIntOrNull() ?: 22, user))
+                    val p = validPort(port)
+                    if (p == null) { status = "port must be a number from 1 to 65535"; return@OutlinedButton }
+                    savedHosts = hostStore.add(SavedHost(host, p, user))
                     status = "saved $user@$host"
                 },
             ) { Text("Save this host") }

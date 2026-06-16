@@ -41,6 +41,7 @@ class AppKey(
     val hardware: Boolean,
     val signer: Any,         // object exposing sign([B): [B + publicKeyBlob
     val yubiKey: Boolean = false,
+    val builtIn: Boolean = false,   // the always-present device Keystore key (not deletable)
 ) {
     val fingerprint: String get() = SshKeyFormat.fingerprintOfPublicKeyBlob(publicKeyBlob)
     val authLine: String get() = "$algorithm ${Base64.getEncoder().encodeToString(publicKeyBlob)} bsns"
@@ -93,9 +94,11 @@ class KeyManager(context: Context) {
     private val yubiPrefs = context.getSharedPreferences("yubikeys", Context.MODE_PRIVATE)
 
     fun keys(): List<AppKey> {
+        // Label by the key's *actual* backing, not an assumption.
         val hw = AppKey(
-            HARDWARE_ALIAS, "Hardware key (Keystore)", hardwareSigner.publicKeyBlob,
-            "ecdsa-sha2-nistp256", hardware = true, signer = hardwareSigner,
+            HARDWARE_ALIAS, "Device key (${hardwareSigner.backing.label})", hardwareSigner.publicKeyBlob,
+            "ecdsa-sha2-nistp256", hardware = hardwareSigner.isHardwareBacked, signer = hardwareSigner,
+            builtIn = true,
         )
         val soft = store.loadAll().map { (id, algo, material) ->
             val fk = FileKey.from(KeyAlgorithm.fromWire(algo)!!, material, "bsns")
