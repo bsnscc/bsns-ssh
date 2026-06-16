@@ -19,6 +19,12 @@ final class MoshConnectTests: XCTestCase {
         XCTAssertEqual(MoshConnect.parse(out)?.port, "1234")
     }
 
+    func testRejectsConnectMarkerBuriedMidLine() {
+        // The marker must START the (trimmed) line — a "MOSH CONNECT …" substring
+        // inside a larger line must NOT match. Keeps Android's parser in parity.
+        XCTAssertNil(MoshConnect.parse("note: MOSH CONNECT 60001 iX0Cr6iwnGdazeAKfSEzQg\n"))
+    }
+
     func testRejectsMissingConnectLine() {
         XCTAssertNil(MoshConnect.parse("bash: mosh-server: command not found\n"))
         XCTAssertNil(MoshConnect.parse(""))
