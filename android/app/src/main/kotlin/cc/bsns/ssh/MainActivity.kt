@@ -4,6 +4,8 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
@@ -13,8 +15,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -31,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,20 +66,124 @@ private val main = Handler(Looper.getMainLooper())
 
 @Composable
 fun App() {
+    val context = LocalContext.current
     // The app's identity: a non-extractable Keystore key (TEE; StrongBox on device).
     val signer = remember { KeystoreSigner("bsns-app-key") }
-    var session by remember { mutableStateOf<SshSession?>(null) }
+    val sessions = remember { mutableStateListOf<TerminalHolder>() }
+    var activeIndex by remember { mutableStateOf(-1) }   // -1 = the connect screen
 
-    val active = session
-    if (active == null) {
-        ConnectScreen(signer) { session = it }
-    } else {
-        TerminalScreen(active) { active.close(); session = null }
+    fun closeAt(i: Int) {
+        sessions[i].close()
+        sessions.removeAt(i)
+        activeIndex = if (sessions.isEmpty()) -1 else activeIndex.coerceAtMost(sessions.size - 1)
+    }
+
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        if (sessions.isNotEmpty()) {
+            TabStrip(
+                titles = sessions.map { it.title },
+                active = activeIndex,
+                onSelect = { activeIndex = it },
+                onClose = { closeAt(it) },
+                onNew = { activeIndex = -1 },
+            )
+        }
+        if (activeIndex in sessions.indices) {
+            TerminalPane(sessions[activeIndex]) { closeAt(activeIndex) }
+        } else {
+            ConnectScreen(signer) { session, title ->
+                sessions.add(TerminalHolder(context, session, title))
+                activeIndex = sessions.size - 1
+            }
+        }
+    }
+}
+
+/**
+ * Holds one session's TerminalView + emulator outside composition so the buffer
+ * survives tab switches. Created once when a session connects (iOS surface-cache
+ * analogue).
+ */
+class TerminalHolder(context: android.content.Context, val session: SshSession, val title: String) {
+    val terminalView = TerminalView(context, null).apply {
+        setTextSize((14 * resources.displayMetrics.scaledDensity).toInt())
+        setTypeface(Typeface.MONOSPACE)
+        keepScreenOn = true
+        isFocusableInTouchMode = true
+    }
+
+    init {
+        val io = object : TerminalSession.ExternalIo {
+            override fun write(data: ByteArray, offset: Int, count: Int) =
+                session.write(data.copyOfRange(offset, offset + count))
+            override fun onResize(columns: Int, rows: Int) = session.resize(columns, rows)
+        }
+        val termSession = TerminalSession(5000, BsnsSessionClient { terminalView.onScreenUpdated() }, io)
+        terminalView.setTerminalViewClient(BsnsViewClient(view = { terminalView }, onEmulatorReady = {
+            session.onOutput = { bytes -> main.post { termSession.appendToEmulator(bytes, bytes.size) } }
+        }))
+        terminalView.attachSession(termSession)
+    }
+
+    fun close() {
+        session.onOutput = null
+        session.close()
     }
 }
 
 @Composable
-fun ConnectScreen(signer: KeystoreSigner, onConnected: (SshSession) -> Unit) {
+fun TabStrip(titles: List<String>, active: Int, onSelect: (Int) -> Unit, onClose: (Int) -> Unit, onNew: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        titles.forEachIndexed { i, title ->
+            val sel = i == active
+            TextButton(onClick = { onSelect(i) }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
+                Text(
+                    (if (sel) "● " else "") + title.substringAfter('@').take(18),
+                    fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                    color = if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = { onClose(i) }, contentPadding = PaddingValues(2.dp)) {
+                Text("✕", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        TextButton(onClick = onNew) { Text("+ new", fontSize = 13.sp) }
+    }
+}
+
+@Composable
+fun TerminalPane(holder: TerminalHolder, onDisconnect: () -> Unit) {
+    Column(Modifier.fillMaxSize().imePadding()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(holder.title, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+            OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
+        }
+        AndroidView(
+            factory = { FrameLayout(it) },
+            update = { container ->
+                val v = holder.terminalView
+                if (v.parent !== container) {
+                    (v.parent as? ViewGroup)?.removeView(v)
+                    container.removeAllViews()
+                    container.addView(v)
+                }
+                v.requestFocus()
+            },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        )
+        KeyBar { holder.session.write(it) }
+    }
+}
+
+@Composable
+fun ConnectScreen(signer: KeystoreSigner, onConnected: (SshSession, String) -> Unit) {
     var host by remember { mutableStateOf("10.0.2.2") }
     var port by remember { mutableStateOf("2222") }
     var user by remember { mutableStateOf("tester") }
@@ -96,7 +205,7 @@ fun ConnectScreen(signer: KeystoreSigner, onConnected: (SshSession) -> Unit) {
         busy = true; status = "connecting…"
         thread {
             val s = SshSession(host, p, user, signer.publicKeyBlob, signer, expectedHostKey = blob)
-            if (s.open(80, 24)) main.post { busy = false; onConnected(s) }
+            if (s.open(80, 24)) main.post { busy = false; onConnected(s, "$user@$host:$p") }
             else main.post { busy = false; status = "couldn't open the session (is your key installed?)" }
         }
     }
@@ -207,55 +316,6 @@ fun ConnectScreen(signer: KeystoreSigner, onConnected: (SshSession) -> Unit) {
 
 private class TofuInfo(val port: Int, val blob: ByteArray)
 
-
-/**
- * Real VT terminal: a vendored Termux TerminalView, SSH-backed via our forked
- * TerminalSession. The view renders the screen (cursor, colors, vim/htop) and
- * handles keyboard/IME input directly — type and see at once, no command box.
- */
-@Composable
-fun TerminalScreen(session: SshSession, onDisconnect: () -> Unit) {
-    val context = LocalContext.current
-    val terminalView = remember(session) {
-        TerminalView(context, null).apply {
-            setTextSize((14 * resources.displayMetrics.scaledDensity).toInt())
-            setTypeface(Typeface.MONOSPACE)
-            keepScreenOn = true
-            isFocusableInTouchMode = true
-        }
-    }
-
-    DisposableEffect(session) {
-        val io = object : TerminalSession.ExternalIo {
-            override fun write(data: ByteArray, offset: Int, count: Int) =
-                session.write(data.copyOfRange(offset, offset + count))
-            override fun onResize(columns: Int, rows: Int) = session.resize(columns, rows)
-        }
-        val termSession = TerminalSession(5000, BsnsSessionClient { terminalView.onScreenUpdated() }, io)
-        terminalView.setTerminalViewClient(BsnsViewClient(view = { terminalView }, onEmulatorReady = {
-            // Emulator is ready — start feeding remote output (the SshSession
-            // buffered anything that arrived before now).
-            session.onOutput = { bytes -> main.post { termSession.appendToEmulator(bytes, bytes.size) } }
-        }))
-        terminalView.attachSession(termSession)
-        terminalView.requestFocus()
-        onDispose { session.onOutput = null }
-    }
-
-    Scaffold { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text("bsns.\$_", fontFamily = FontFamily.Monospace, fontSize = 16.sp)
-                OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
-            }
-            AndroidView(factory = { terminalView }, modifier = Modifier.weight(1f).fillMaxWidth())
-            KeyBar { session.write(it) }
-        }
-    }
-}
 
 private fun seq(vararg b: Int) = ByteArray(b.size) { b[it].toByte() }
 
