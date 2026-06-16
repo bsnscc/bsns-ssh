@@ -3,6 +3,7 @@
 // framebuffer to ANSI via our Display.
 #include "moshclient.h"
 
+#include <clocale>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -38,6 +39,14 @@ struct MoshClient {
 extern "C" {
 
 MoshClient* mosh_client_create(const char* ip, const char* port, const char* key, int cols, int rows) {
+  // mosh stores cell contents as wide chars and re-encodes them to UTF-8 with the
+  // C library (Cell::print_grapheme → wcrtomb), which is LOCALE-DEPENDENT. Our app
+  // process never calls setlocale, so it sits in the default "C" locale and every
+  // multibyte glyph re-encodes as U+FFFD (�). Force a UTF-8 ctype locale here so
+  // the framebuffer renders real glyphs. (Both iOS and Android go through here.)
+  if (!setlocale(LC_CTYPE, "en_US.UTF-8")) {
+    setlocale(LC_CTYPE, "UTF-8");
+  }
   MoshClient* c = new MoshClient(cols > 0 ? cols : 80, rows > 0 ? rows : 24);
   try {
     c->transport = new ClientTransport(c->local, c->remote, key, ip, port);
