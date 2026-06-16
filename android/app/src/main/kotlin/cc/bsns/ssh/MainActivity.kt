@@ -434,6 +434,7 @@ fun ConnectScreen(
     var port by remember { mutableStateOf("2222") }
     var user by remember { mutableStateOf("tester") }
     var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var useMosh by remember { mutableStateOf(false) }
@@ -561,8 +562,29 @@ fun ConnectScreen(
             OutlinedTextField(host, { host = it }, label = { Text("host") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(port, { port = it }, label = { Text("port") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(user, { user = it }, label = { Text("user") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(password, { password = it }, label = { Text("password (only to install your key)") },
-                modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(
+                password, { password = it },
+                label = { Text("password (only to install your key)") },
+                singleLine = true,
+                visualTransformation = if (showPassword) androidx.compose.ui.text.input.VisualTransformation.None
+                    else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                trailingIcon = {
+                    TextButton(onClick = { showPassword = !showPassword }) {
+                        Text(if (showPassword) "hide" else "show", fontSize = 12.sp)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            // Always-visible Save (the action row below is scrollable, so a button
+            // there can sit off-screen on a phone).
+            OutlinedButton(
+                enabled = host.isNotBlank() && user.isNotBlank(),
+                onClick = {
+                    savedHosts = hostStore.add(SavedHost(host, port.toIntOrNull() ?: 22, user))
+                    status = "saved $user@$host"
+                },
+            ) { Text("Save this host") }
 
             if (keys.size > 1) KeyPicker(keys, key.id, onSelectKey)
 
@@ -608,11 +630,6 @@ fun ConnectScreen(
                         }
                     }
                 }) { Text("Install key") }
-
-                OutlinedButton(
-                    enabled = host.isNotBlank() && user.isNotBlank(),
-                    onClick = { savedHosts = hostStore.add(SavedHost(host, port.toIntOrNull() ?: 22, user)) },
-                ) { Text("Save") }
             }
 
             status?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }
