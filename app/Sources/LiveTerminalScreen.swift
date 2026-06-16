@@ -39,6 +39,7 @@ struct LiveTerminalScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            controlRow            // tabs + actions on ONE row (no separate nav bar)
             if showFind { findBar }
             statusBanner
             TerminalSurfaceView(surface: surface,
@@ -56,8 +57,7 @@ struct LiveTerminalScreen: View {
             }
         }
             .ignoresSafeArea(.container, edges: .bottom)
-            .navigationTitle("")   // the tab bar shows the session name
-            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)   // our controlRow replaces the nav bar
             .onAppear { hwKeyboard.start(); devFindTest(); UIApplication.shared.isIdleTimerDisabled = keepAwake }
             // Leaving the terminal (e.g. switching tabs) must NOT disconnect —
             // the session lives in the store until explicitly closed.
@@ -76,14 +76,28 @@ struct LiveTerminalScreen: View {
             .sheet(isPresented: $showHistory) {
                 CommandHistoryPicker { cmd in session.runCommand(cmd) }
             }
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { toggleFind() } label: { Image(systemName: "magnifyingglass") }
-                    Button { setZoom(CGFloat(fontSize) - 1) } label: { Image(systemName: "textformat.size.smaller") }
-                    Button { setZoom(CGFloat(fontSize) + 1) } label: { Image(systemName: "textformat.size.larger") }
-                    settingsMenu
-                }
-            }
+    }
+
+    /// One row: the session tabs (scrollable, left) and the terminal actions
+    /// (right) — replaces the otherwise half-empty nav bar + its own tab row.
+    private var controlRow: some View {
+        HStack(spacing: 2) {
+            SessionTabBar(activeID: session.id)
+            terminalActions
+                .padding(.trailing, 6)
+        }
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var terminalActions: some View {
+        HStack(spacing: 2) {
+            Button { toggleFind() } label: { Image(systemName: "magnifyingglass") }
+            Button { setZoom(CGFloat(fontSize) - 1) } label: { Image(systemName: "textformat.size.smaller") }
+            Button { setZoom(CGFloat(fontSize) + 1) } label: { Image(systemName: "textformat.size.larger") }
+            settingsMenu
+        }
+        .labelStyle(.iconOnly)
     }
 
     @ViewBuilder private var statusBanner: some View {

@@ -13,12 +13,11 @@ struct RootView: View {
     var body: some View {
         Group {
             if let active = sessions.active {
+                // LiveTerminalScreen renders its own control row (tabs + actions), so
+                // no separate nav bar / tab row here.
                 NavigationStack {
-                    VStack(spacing: 0) {
-                        SessionTabBar(activeID: active.id)
-                        LiveTerminalScreen(session: active)
-                            .id(active.id)
-                    }
+                    LiveTerminalScreen(session: active)
+                        .id(active.id)
                 }
             } else {
                 TabView(selection: $homeTab) {
@@ -171,8 +170,7 @@ struct SessionTabBar: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
         }
-        .background(.bar)
-        .overlay(alignment: .bottom) { Divider() }
+        // Background + divider are owned by the enclosing control row (LiveTerminalScreen).
     }
 
     private func tab(_ s: TerminalSession) -> some View {
