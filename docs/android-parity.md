@@ -30,7 +30,7 @@ yet — wiring them in is most of the "feature" work below.
 | Copy / paste / select | ✅ | ✅ (terminal-view textselection) | DONE |
 | Saved hosts | ✅ | ✅ `HostStore` + connect-screen Saved section | **DONE** |
 | TOFU host-key verify prompt | ✅ | ✅ verify + dialog + mismatch refuse | **DONE** |
-| Multiple sessions + tabs | ✅ | ❌ (single) | P2 |
+| Multiple sessions + tabs | ✅ | ✅ tab strip + per-session terminal cache | **DONE** |
 | Reconnect-on-drop | ✅ | ❌ | P2 |
 | Key management (list/generate/delete) | ✅ `KeysView` | ❌ (one fixed Keystore key) | **P3** (use `:core` Agent + FileKey + Keystore) |
 | Software keys (ed25519/ecdsa) | ✅ | ❌ (`:core` ready) | P3 |
