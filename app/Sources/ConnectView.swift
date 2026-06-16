@@ -13,9 +13,12 @@ struct ConnectView: View {
     @State private var host = ""
     @State private var port = "22"
     @State private var user = ""
+    @State private var group = ""
+    @State private var jump = ""
     @State private var password = ""
     @State private var useMosh = false
     @State private var showSFTP = false
+    @State private var showImport = false
     @State private var busy = false
     @State private var error: String?
     @State private var notice: String?
@@ -44,32 +47,12 @@ struct ConnectView: View {
                 }
             }
 
-            if !hostStore.hosts.isEmpty {
-                Section("Saved") {
-                    ForEach(hostStore.hosts) { saved in
-                        Button {
-                            host = saved.host; port = String(saved.port); user = saved.user
-                            useMosh = saved.useMosh ?? false
-                        } label: {
-                            VStack(alignment: .leading) {
-                                HStack(spacing: 6) {
-                                    Text(saved.label.isEmpty ? "\(saved.user)@\(saved.host)" : saved.label)
-                                        .foregroundStyle(.primary)
-                                    if saved.useMosh == true {
-                                        Text("mosh").font(.caption2.weight(.semibold))
-                                            .padding(.horizontal, 6).padding(.vertical, 2)
-                                            .background(Color.green.opacity(0.18), in: Capsule())
-                                            .foregroundStyle(.green)
-                                    }
-                                }
-                                Text("\(saved.user)@\(saved.host):\(saved.port)")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
+            ForEach(groupedHosts, id: \.0) { groupName, groupHosts in
+                Section(groupName ?? "Saved") {
+                    ForEach(groupHosts) { entry in
+                        Button { loadHost(entry) } label: { savedRow(entry) }
                     }
-                    .onDelete { offsets in
-                        offsets.map { hostStore.hosts[$0] }.forEach(hostStore.remove)
-                    }
+                    .onDelete { offsets in offsets.map { groupHosts[$0] }.forEach(hostStore.remove) }
                 }
             }
 
@@ -78,6 +61,10 @@ struct ConnectView: View {
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                 TextField("port", text: $port).keyboardType(.numberPad)
                 TextField("user", text: $user)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+                TextField("group (optional)", text: $group)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+                TextField("jump / bastion (optional: user@host[:port])", text: $jump)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                 Toggle("Use mosh (UDP, survives roaming)", isOn: $useMosh)
                 if useMosh {
@@ -107,6 +94,10 @@ struct ConnectView: View {
                     .disabled(host.isEmpty || user.isEmpty)
             }
 
+            Section {
+                Button("Import from OpenSSH (config · known_hosts · keys)") { showImport = true }
+            }
+
             if let notice {
                 Section { Text(notice).foregroundStyle(.green).font(.callout) }
             }
@@ -123,6 +114,7 @@ struct ConnectView: View {
                 SFTPBrowserView(host: host, port: p, user: user)
             }
         }
+        .sheet(isPresented: $showImport) { ImportConfigView() }
         .alert("Verify host key", isPresented: Binding(get: { pendingHostKey != nil }, set: { if !$0 { pendingHostKey = nil } })) {
             Button("Trust", role: .destructive) { trustAndContinue() }
             Button("Cancel", role: .cancel) { pendingHostKey = nil }
@@ -148,8 +140,48 @@ struct ConnectView: View {
         }
     }
 
+    /// Saved hosts grouped by folder: named groups first (alphabetical), then ungrouped.
+    private var groupedHosts: [(String?, [SavedHost])] {
+        let groups = Dictionary(grouping: hostStore.hosts) { (h: SavedHost) -> String? in
+            let g = h.group?.trimmingCharacters(in: .whitespaces)
+            return (g?.isEmpty == false) ? g : nil
+        }
+        let named = groups.keys.compactMap { $0 }.sorted().map { ($0 as String?, groups[$0]!) }
+        let ungrouped = groups[nil].map { [(String?.none, $0)] } ?? []
+        return named + ungrouped
+    }
+
+    @ViewBuilder private func savedRow(_ entry: SavedHost) -> some View {
+        let title = entry.label.isEmpty ? "\(entry.user)@\(entry.host)" : entry.label
+        let subtitle = "\(entry.user)@\(entry.host):\(entry.port)" + (entry.jump.map { " ⇢ \($0)" } ?? "")
+        VStack(alignment: .leading) {
+            HStack(spacing: 6) {
+                Text(title).foregroundStyle(.primary)
+                if entry.useMosh == true { tag("mosh", .green) }
+                if entry.jump?.isEmpty == false { tag("via jump", .orange) }
+            }
+            Text(subtitle).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func tag(_ text: String, _ color: Color) -> some View {
+        Text(text).font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(color.opacity(0.18), in: Capsule())
+            .foregroundStyle(color)
+    }
+
+    private func loadHost(_ saved: SavedHost) {
+        host = saved.host; port = String(saved.port); user = saved.user
+        useMosh = saved.useMosh ?? false
+        group = saved.group ?? ""; jump = saved.jump ?? ""
+    }
+
     private func saveHost() {
-        hostStore.add(SavedHost(label: "", host: host, port: Int(port) ?? 22, user: user, useMosh: useMosh))
+        hostStore.add(SavedHost(label: "", host: host, port: Int(port) ?? 22, user: user,
+                                useMosh: useMosh,
+                                jump: jump.trimmingCharacters(in: .whitespaces).isEmpty ? nil : jump.trimmingCharacters(in: .whitespaces),
+                                group: group.trimmingCharacters(in: .whitespaces).isEmpty ? nil : group.trimmingCharacters(in: .whitespaces)))
     }
 
     private func attemptConnect() {

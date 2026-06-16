@@ -2,8 +2,9 @@ import Foundation
 import Observation
 import BsnsSSHCore
 
-/// A saved connection target. `useMosh` is optional so older `hosts.json` files
-/// (written before per-host mosh) still decode — a missing key reads as nil.
+/// A saved connection target. Optional fields decode as nil from older
+/// `hosts.json` files (written before per-host mosh / jump / groups).
+/// `jump` is a ProxyJump spec ("user@bastion[:port]"); `group` is a folder label.
 struct SavedHost: Codable, Identifiable, Hashable {
     var id = UUID()
     var label: String
@@ -11,6 +12,8 @@ struct SavedHost: Codable, Identifiable, Hashable {
     var port: Int
     var user: String
     var useMosh: Bool?
+    var jump: String?
+    var group: String?
 }
 
 private func appSupportURL(_ name: String) -> URL {
@@ -41,6 +44,20 @@ final class HostStore {
         let existing = Set(hosts.map { "\($0.user)@\($0.host):\($0.port)" })
         for h in incoming where !existing.contains("\(h.user)@\(h.host):\(h.port)") { hosts.append(h) }
         save()
+    }
+
+    /// Import `ssh_config` Host blocks as saved hosts (carrying ProxyJump). Returns
+    /// the count imported.
+    @discardableResult
+    func importConfig(_ configHosts: [SSHConfigHost]) -> Int {
+        let mapped = configHosts.map {
+            SavedHost(label: $0.alias == $0.hostName ? "" : $0.alias,
+                      host: $0.hostName, port: $0.port, user: $0.user ?? "",
+                      jump: $0.proxyJump)
+        }
+        let before = hosts.count
+        merge(mapped)
+        return hosts.count - before
     }
 
     private func save() { try? JSONEncoder().encode(hosts).write(to: url) }
@@ -79,5 +96,22 @@ final class KnownHostsStore {
     func merge(_ incoming: KnownHosts) {
         knownHosts = KnownHosts(entries: incoming.allEntries.merging(knownHosts.allEntries) { _, mine in mine })
         try? JSONEncoder().encode(knownHosts).write(to: url)
+    }
+
+    /// Trust host keys parsed from a `known_hosts` file (existing entries win).
+    /// The key type is read from the blob's leading SSH string. Returns the count.
+    @discardableResult
+    func importEntries(_ imported: [KnownHostImport]) -> Int {
+        var entries = knownHosts.allEntries
+        var added = 0
+        for e in imported where entries[e.identifier] == nil {
+            var dec = SSHDecoder(e.blob)
+            let keyType = (try? dec.readStringUTF8()) ?? "ssh-unknown"
+            entries[e.identifier] = HostKey(keyType: keyType, blob: e.blob)
+            added += 1
+        }
+        knownHosts = KnownHosts(entries: entries)
+        try? JSONEncoder().encode(knownHosts).write(to: url)
+        return added
     }
 }
