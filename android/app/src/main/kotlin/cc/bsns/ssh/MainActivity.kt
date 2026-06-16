@@ -133,17 +133,33 @@ fun validPort(text: String): Int? = text.trim().toIntOrNull()?.takeIf { it in 1.
 /** A single ProxyJump hop. */
 data class JumpSpec(val host: String, val port: Int, val user: String)
 
+/** Outcome of parsing a ProxyJump spec. `Invalid` is distinct from `None` so an
+ *  explicit-but-malformed bastion is rejected, never silently dropped or pointed
+ *  at the wrong port. */
+sealed interface JumpParse {
+    object None : JumpParse
+    data class Ok(val spec: JumpSpec) : JumpParse
+    data class Invalid(val message: String) : JumpParse
+}
+
 /** Parse the first hop of a ProxyJump spec ("user@bastion[:port][,…]"). A missing
- *  user falls back to the target user; multi-hop chains use the first hop for now. */
-fun parseJump(spec: String?, fallbackUser: String): JumpSpec? {
-    val first = spec?.split(",")?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+ *  user falls back to the target user; multi-hop chains use the first hop for now.
+ *  A port outside 1..65535 is rejected rather than falling back to 22. */
+fun parseJump(spec: String?, fallbackUser: String): JumpParse {
+    val first = spec?.split(",")?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return JumpParse.None
     val at = first.indexOf('@')
     val who = if (at >= 0) first.substring(0, at) else fallbackUser
     val hp = if (at >= 0) first.substring(at + 1) else first
+    // Any colon that isn't the first char means an explicit port: require it to be
+    // valid (matches iOS), so "host:", "host:abc", "host:0" are rejected rather than
+    // silently treated as a hostname on port 22.
     val colon = hp.lastIndexOf(':')
-    return if (colon in 1 until hp.length - 1) {
-        JumpSpec(hp.substring(0, colon), hp.substring(colon + 1).toIntOrNull()?.takeIf { it in 1..65535 } ?: 22, who)
-    } else JumpSpec(hp, 22, who)
+    if (colon > 0) {
+        val port = hp.substring(colon + 1).toIntOrNull()?.takeIf { it in 1..65535 }
+            ?: return JumpParse.Invalid("jump host port must be a number from 1 to 65535")
+        return JumpParse.Ok(JumpSpec(hp.substring(0, colon), port, who))
+    }
+    return JumpParse.Ok(JumpSpec(hp, 22, who))
 }
 
 private enum class Route { Connect, Keys, Hosts, Settings, Backup, Import, Snippets }
@@ -666,7 +682,9 @@ fun ConnectScreen(
 
     fun openWith(p: Int, blob: ByteArray) {
         busy = true; status = "connecting…"
-        val js = parseJump(jump.trim().ifEmpty { null }, user)
+        // verifyThen already validated the jump spec, so anything but Ok is treated
+        // as no jump here.
+        val js = (parseJump(jump.trim().ifEmpty { null }, user) as? JumpParse.Ok)?.spec
         val title = if (js != null) "$user@$host:$p ⇢ ${js.host}" else "$user@$host:$p"
         // The bastion was verified by verifyThen, so its trusted key is in the store —
         // pin it on the tunnel so the bastion is re-verified on connect + reconnect.
@@ -721,7 +739,11 @@ fun ConnectScreen(
     fun verifyThen(action: (Int, ByteArray) -> Unit) {
         val p = validPort(port)
         if (p == null) { status = "port must be a number from 1 to 65535"; return }
-        val js = parseJump(jump.trim().ifEmpty { null }, user)
+        val js = when (val j = parseJump(jump.trim().ifEmpty { null }, user)) {
+            is JumpParse.Invalid -> { status = j.message; return }
+            is JumpParse.Ok -> j.spec
+            JumpParse.None -> null
+        }
         busy = true; status = if (js != null) "verifying jump host ${js.host}…" else "verifying host…"
         thread {
             // Stage 1: the bastion's own key (direct), trusted before we auth to it.
@@ -739,8 +761,9 @@ fun ConnectScreen(
             } else bastionKey = null
 
             // Stage 2: the target's key — fetched THROUGH the tunnel (re-verifying the
-            // bastion) for a jump, or directly otherwise.
-            status = if (js != null) "verifying host via ${js.host}…" else status
+            // bastion) for a jump, or directly otherwise. Compose state must change
+            // on the main thread, never this worker.
+            if (js != null) main.post { status = "verifying host via ${js.host}…" }
             val blob = if (js != null)
                 SshBridge().nativeHostKeyBlobVia(host, p, js.host, js.port, js.user, key.publicKeyBlob, key.signer, bastionKey)
             else SshBridge().nativeHostKeyBlob(host, p)

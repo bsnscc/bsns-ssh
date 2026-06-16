@@ -73,10 +73,17 @@ enum ConfigService {
             }
         }
         if selection.snippets {
-            // Imported snippets never auto-run — the user re-enables run-on-connect
-            // per snippet, so an imported/synced bundle can't inject an auto-command.
+            // A bundle (manual import OR trusted auto-sync) can never ARM run-on-
+            // connect — that would let it inject an auto-running command. We keep an
+            // existing local snippet's auto-run flag ONLY when the command is byte-
+            // identical, so a steady-state sync doesn't disarm local automation; but
+            // if the bundle changes the command for that ID (or the snippet is new),
+            // it lands with auto-run OFF.
+            let existing = Dictionary(snippets.snippets.map { ($0.id, $0) },
+                                      uniquingKeysWith: { a, _ in a })
             for s in bundle.snippets ?? [] {
-                snippets.upsert(Snippet(id: s.id, name: s.name, command: s.command, runOnConnect: false))
+                let keepRun = existing[s.id].map { $0.runOnConnect && $0.command == s.command } ?? false
+                snippets.upsert(Snippet(id: s.id, name: s.name, command: s.command, runOnConnect: keepRun))
             }
         }
     }

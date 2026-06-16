@@ -83,7 +83,7 @@ struct ConnectView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if hasJump {
-                    Text("Via a jump host, only an interactive shell is supported for now — mosh, SFTP, and key install go direct and are disabled.")
+                    Text("Via a jump host, only an interactive shell is supported for now — mosh, SFTP, and key install go direct and are disabled. The bastion authenticates with your key (agent); any password above is used only for the target.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -99,8 +99,11 @@ struct ConnectView: View {
 
             Section {
                 Button(busy ? "Working…" : "Connect") { attemptConnect() }
+                    // mosh and jump both require an agent key (mosh has no password
+                    // auth; a jump's bastion is key-only). A direct shell may use
+                    // either a password or a key.
                     .disabled(busy || host.isEmpty || user.isEmpty
-                              || (useMosh ? store.identities.isEmpty : (password.isEmpty && store.identities.isEmpty)))
+                              || (useMosh || hasJump ? store.identities.isEmpty : (password.isEmpty && store.identities.isEmpty)))
                 Button("Install my key (ssh-copy-id)") { attemptInstall() }
                     .disabled(busy || host.isEmpty || user.isEmpty || password.isEmpty || store.identities.isEmpty || hasJump)
                 Button("Browse files (SFTP)") { if let p = UInt16(port), p > 0 { showSFTP = true } }
@@ -223,9 +226,13 @@ struct ConnectView: View {
                                 group: group.trimmingCharacters(in: .whitespaces).isEmpty ? nil : group.trimmingCharacters(in: .whitespaces)))
     }
 
+    private enum JumpParseError: Error { case invalidPort }
+
     /// Parse the first hop of a ProxyJump spec ("user@bastion[:port]"); a missing
-    /// user falls back to the target user. Returns nil when no jump is set.
-    private func parsedJump() -> SSHShell.JumpHop? {
+    /// user falls back to the target user. Returns nil when no jump is set, and
+    /// throws when a port is given but isn't a valid 1...65535 (no silent fallback
+    /// to 22 that could authenticate to / trust the wrong bastion endpoint).
+    private func parsedJump() throws -> SSHShell.JumpHop? {
         let spec = jump.trimmingCharacters(in: .whitespaces)
         guard let first = spec.split(separator: ",").first.map(String.init)?.trimmingCharacters(in: .whitespaces),
               !first.isEmpty else { return nil }
@@ -235,7 +242,9 @@ struct ConnectView: View {
         } else { who = user; hostPort = first }
         if let colon = hostPort.lastIndex(of: ":"), colon != hostPort.startIndex {
             let h = String(hostPort[hostPort.startIndex..<colon])
-            let p = UInt16(hostPort[hostPort.index(after: colon)...]) ?? 22
+            guard let p = UInt16(hostPort[hostPort.index(after: colon)...]), p > 0 else {
+                throw JumpParseError.invalidPort
+            }
             return SSHShell.JumpHop(host: h, port: p, user: who)
         }
         return SSHShell.JumpHop(host: hostPort, port: 22, user: who)
@@ -244,11 +253,13 @@ struct ConnectView: View {
     private func attemptConnect() {
         guard let portValue = UInt16(port), portValue > 0 else { error = "Invalid port."; return }
         if useMosh && !hasJump { attemptConnectMosh(portValue); return }   // jump ⇒ shell only
+        let hop: SSHShell.JumpHop?
+        do { hop = try parsedJump() }
+        catch { self.error = "Jump host port must be a number from 1 to 65535."; return }
         error = nil; notice = nil; busy = true
         let shell = SSHShell()
         let known = knownHostsStore.knownHosts
         let pw = password.isEmpty ? nil : password
-        let hop = parsedJump()
         Task {
             do {
                 try await shell.connect(host: host, port: portValue, user: user, agent: store.agent,

@@ -246,8 +246,10 @@ public final class SSHShell: @unchecked Sendable {
         // the end-to-end handshake, so the target host key below is the real target's.
         let fd: Int32
         if let jump {
+            // The bastion authenticates with a key/agent only — never `password`,
+            // which is the TARGET's and must not be offered to the jump host.
             fd = try openJumpTunnel(jump, targetHost: host, targetPort: port,
-                                    agent: agent, identities: identities, password: password,
+                                    agent: agent, identities: identities,
                                     knownHosts: knownHosts)
         } else {
             guard let direct = Self.tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
@@ -334,8 +336,10 @@ public final class SSHShell: @unchecked Sendable {
     /// (so the caller's handshake + host-key check apply to the real target). The
     /// bastion's OWN host key is verified against `knownHosts` BEFORE we authenticate
     /// to it — a spoofed bastion can't collect an auth attempt before it's trusted.
+    /// The bastion authenticates by key/agent only: the target's password is never
+    /// offered to it (that password is used end-to-end against the target instead).
     private func openJumpTunnel(_ jump: JumpHop, targetHost: String, targetPort: UInt16,
-                                agent: Agent, identities: [SSHPublicKey], password: String?,
+                                agent: Agent, identities: [SSHPublicKey],
                                 knownHosts: KnownHosts) throws -> Int32 {
         guard let bfd = Self.tcpConnect(host: jump.host, port: jump.port) else { throw SSHShellError.connectFailed }
         guard let bsession = libssh2_session_init_ex(nil, nil, nil, nil) else { close(bfd); throw SSHShellError.sessionInit }
@@ -350,11 +354,7 @@ public final class SSHShell: @unchecked Sendable {
             case .unknown: throw SSHShellError.unknownJumpHostKey(bastionKey, host: jump.host, port: jump.port)
             case let .mismatch(stored, presented): throw SSHShellError.jumpHostKeyMismatch(stored, presented)
             }
-            if let password, !password.isEmpty {
-                try Self.passwordAuth(bsession, user: jump.user, password: password)
-            } else {
-                try Self.authenticatePublicKey(bsession, user: jump.user, identities: identities, agent: agent, host: jump.host)
-            }
+            try Self.authenticatePublicKey(bsession, user: jump.user, identities: identities, agent: agent, host: jump.host)
             guard let channel = targetHost.withCString({
                 libssh2_channel_direct_tcpip_ex(bsession, $0, Int32(targetPort), "127.0.0.1", 22)
             }) else { throw SSHShellError.channelOpenFailed }

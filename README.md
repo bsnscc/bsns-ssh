@@ -22,7 +22,10 @@ Active development, approaching a first release, on **both iOS and Android**
 in-process agent, so the key never touches the transport), Secure Enclave /
 Android Keystore + YubiKey (PIV) keys, software keys with encrypted config
 export + sync, a multi-session tabbed terminal with find/scrollback, local port
-forwarding, jump-host / ProxyJump, snippets, local command history, SFTP, and a
+forwarding, single-hop jump-host / ProxyJump for the interactive shell (the
+bastion is key-authenticated and host-key-verified; mosh, SFTP, port forwarding,
+and key install run direct and are disabled through a jump host for now),
+snippets, local command history, SFTP, and a
 mosh (UDP, roaming) transport. The SSH stack is built on a current, supported
 crypto backend (OpenSSL 3.5 + libssh2 1.11), compiled reproducibly from pinned
 source on both platforms.

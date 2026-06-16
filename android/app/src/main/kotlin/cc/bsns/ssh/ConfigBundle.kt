@@ -145,19 +145,24 @@ object ConfigBundle {
             settings = true
         }
         // Snippets are executable configuration (a run-on-connect snippet auto-runs
-        // on every future session), so they're a SEPARATE explicit opt-in — and
-        // imported snippets always land with runOnConnect = OFF. The user re-enables
-        // run-on-connect per snippet on their own device, so a malicious or synced
-        // bundle can never inject an auto-executing command.
+        // on every future session), so they're a SEPARATE explicit opt-in. A bundle
+        // (manual import OR trusted auto-sync) can never ARM run-on-connect — that
+        // would let it inject an auto-executing command. We keep an existing local
+        // snippet's auto-run flag ONLY when the command is byte-identical (so a
+        // steady-state sync doesn't disarm local automation); if the bundle changes
+        // the command for that ID (or the snippet is new), it lands with auto-run OFF.
         if (sel.snippets) o.optJSONArray("snippets")?.let { arr ->
             val store = SnippetStore(context)
+            val local = store.load().associateBy { it.id }
             for (i in 0 until arr.length()) {
                 val sn = arr.optJSONObject(i) ?: continue
                 val name = sn.optString("name").trim()
                 val command = sn.optString("command")
                 if (name.isEmpty() || command.isEmpty()) continue
-                store.upsert(Snippet(sn.optString("id").ifEmpty { java.util.UUID.randomUUID().toString() },
-                    name, command, runOnConnect = false))
+                val id = sn.optString("id").ifEmpty { java.util.UUID.randomUUID().toString() }
+                val existing = local[id]
+                val keepRun = existing != null && existing.runOnConnect && existing.command == command
+                store.upsert(Snippet(id, name, command, runOnConnect = keepRun))
                 snippets++
             }
         }

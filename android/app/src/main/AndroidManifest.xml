@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Short haptic on the terminal bell. Normal permission, no runtime prompt. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- YubiKey over NFC / USB-C (both optional — feature degrades if absent). -->
     <uses-permission android:name="android.permission.NFC" />
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
