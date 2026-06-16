@@ -74,8 +74,10 @@ struct SFTPBrowserView: View {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { askNewFolder = true } label: { Image(systemName: "folder.badge.plus") }
                         .disabled(!connected)
+                        .accessibilityLabel("New folder")
                     Button { showUpload = true } label: { Image(systemName: "square.and.arrow.up") }
                         .disabled(!connected)
+                        .accessibilityLabel("Upload file")
                 }
             }
         }

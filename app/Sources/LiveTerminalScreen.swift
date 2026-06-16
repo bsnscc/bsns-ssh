@@ -93,8 +93,11 @@ struct LiveTerminalScreen: View {
     private var terminalActions: some View {
         HStack(spacing: 2) {
             Button { toggleFind() } label: { Image(systemName: "magnifyingglass") }
+                .accessibilityLabel("Find")
             Button { setZoom(CGFloat(fontSize) - 1) } label: { Image(systemName: "textformat.size.smaller") }
+                .accessibilityLabel("Decrease text size")
             Button { setZoom(CGFloat(fontSize) + 1) } label: { Image(systemName: "textformat.size.larger") }
+                .accessibilityLabel("Increase text size")
             settingsMenu
         }
         .labelStyle(.iconOnly)
@@ -143,9 +146,12 @@ struct LiveTerminalScreen: View {
             }
             Button { handle.findPrev() } label: { Image(systemName: "chevron.up") }
                 .disabled(handle.matchCount == 0)
+                .accessibilityLabel("Previous match")
             Button { handle.findNext() } label: { Image(systemName: "chevron.down") }
                 .disabled(handle.matchCount == 0)
+                .accessibilityLabel("Next match")
             Button { closeFind() } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                .accessibilityLabel("Close find")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -183,6 +189,7 @@ struct LiveTerminalScreen: View {
             }
         } label: {
             Image(systemName: "ellipsis.circle")
+                .accessibilityLabel("More actions")
         }
     }
 

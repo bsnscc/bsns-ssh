@@ -167,6 +167,7 @@ struct SessionTabBar: View {
                         .background(Color.secondary.opacity(0.15), in: Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("New session")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -190,6 +191,7 @@ struct SessionTabBar: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Close \(s.title)")
         }
         .padding(.leading, 12).padding(.trailing, 9).padding(.vertical, 7)
         .background(isActive ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.10),
