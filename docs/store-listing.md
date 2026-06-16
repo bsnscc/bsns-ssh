@@ -61,7 +61,7 @@ _(alt: `SSH & mosh, keys in hardware`)_
 > YubiKey), SFTP, port forwarding, ProxyJump, OpenSSH import, and encrypted config
 > sync — with no telemetry.
 
-**Support / Marketing URL:** `https://bsns.cc` · **Privacy policy:** `https://bsns.cc/privacy`
+**Support / Marketing URL:** `https://bsns.cc` · **Privacy policy:** `https://tools.bsns.cc/open-source/privacy`
 **Privacy nutrition label:** Data Not Collected (no data is collected or linked).
 
 ---

@@ -30,8 +30,10 @@ Detail docs this references:
       idle → connect → SFTP → background → foreground. Confirm PASS criteria in
       `no-telemetry-verification.md`; commit the destination summary next to
       `no-telemetry-evidence-2026-06-16.md`.
-- [ ] **Privacy policy** live at `https://bsns.cc/privacy` (linked from both
-      listings). Confirm it matches the "Data Not Collected" label.
+- [ ] **Privacy policy** published at `https://tools.bsns.cc/open-source/privacy`
+      (mirror of the repo's [`../PRIVACY.md`](../PRIVACY.md)) and linked from both
+      listings. Keep it distinct from the SaaS `bsns.cc/privacy`; confirm it
+      matches the "Data Not Collected" label.
 - [ ] **GPLv3 source availability**: the public repo matches exactly what ships
       (the App Store/Play binary's corresponding source). Flip the repo public
       (`gh repo edit bsnscc/bsns-ssh --visibility public`) at or before launch.

@@ -24,6 +24,7 @@
 - **No telemetry, no analytics, no phone-home.** The only network traffic is
   your own SSH/mosh connections and your own chosen sync storage — and you can
   confirm it yourself ([docs/no-telemetry-verification.md](docs/no-telemetry-verification.md)).
+  We collect nothing: [Privacy Policy](PRIVACY.md).
 - **Migrate in seconds** — import your existing `~/.ssh/config`, `known_hosts`,
   and keys.
 
