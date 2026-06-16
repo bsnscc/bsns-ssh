@@ -69,12 +69,42 @@ basis for trust is, in order:
 > Note: SSH and mosh are not HTTP, so an HTTP proxy alone won't show them — use a
 > packet capture (Wireshark/tcpdump) to see *all* destinations, which is the point.
 
+### Quick idle check (first line, any machine)
+
+The cheapest catch — does the app reach out to *anything* while just sitting on
+the Connect screen? List the app process's own sockets (the `-a` ANDs the process
+and network filters):
+
+```sh
+# iOS Simulator (the app runs as a host process):
+PID=$(pgrep -f "BsnsSSH.app/BsnsSSH"); lsof -nP -a -p "$PID" -i
+
+# Android: the app's UID, via the network stats / your capture:
+adb shell ss -tunp 2>/dev/null | grep "$(adb shell pm list packages -U cc.bsns.ssh)"
+```
+
+Pass = **zero** sockets while idle; sockets appear only after you tap Connect, and
+only to your host. A recorded run of this check is in
+[`no-telemetry-evidence-2026-06-16.md`](no-telemetry-evidence-2026-06-16.md).
+
 ## The pre-publish gate (what the maintainer runs)
 
 Before the "no telemetry" claim ships in store copy, run the capture above against
 a release build and confirm the only egress is the SSH host + sync provider. This
 is a release checklist item, not a one-time thing — re-run it whenever a
 dependency is added (a new SDK is the usual way telemetry sneaks in).
+
+**Pass/fail criteria (release build, on device / clean emulator):**
+
+- ✅ PASS: every captured destination is (a) a host/port you typed, (b) a
+  ProxyJump bastion you configured, or (c) your chosen sync provider's domain.
+  Idle (pre-connect) egress is zero.
+- ❌ FAIL: any SYN/UDP to a domain or IP you didn't configure — analytics,
+  crash/attribution SDKs, a CDN, or any "home" endpoint — at any point including
+  launch, background, and foreground.
+
+Capture launch → idle → connect → SFTP → background → foreground, then commit a
+short summary of observed destinations next to the dated evidence file above.
 
 ## Keeping it true (regression guard)
 
