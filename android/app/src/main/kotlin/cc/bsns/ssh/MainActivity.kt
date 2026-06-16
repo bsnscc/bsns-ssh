@@ -521,11 +521,15 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
             }
         } else {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(holder.title, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+                // Flex + ellipsize the title so a long (jumped) title never pushes the
+                // action buttons off the right edge.
+                Text(holder.title, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { showHistory = true }) { Icon(Icons.Default.History, "command history") }
                     IconButton(onClick = { showSnippets = true }) { Icon(Icons.Default.Code, "snippets") }
