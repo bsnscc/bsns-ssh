@@ -99,6 +99,22 @@ private val main = Handler(Looper.getMainLooper())
  *  fallback to 22 that could connect to / trust / save the wrong endpoint. */
 fun validPort(text: String): Int? = text.trim().toIntOrNull()?.takeIf { it in 1..65535 }
 
+/** A single ProxyJump hop. */
+data class JumpSpec(val host: String, val port: Int, val user: String)
+
+/** Parse the first hop of a ProxyJump spec ("user@bastion[:port][,…]"). A missing
+ *  user falls back to the target user; multi-hop chains use the first hop for now. */
+fun parseJump(spec: String?, fallbackUser: String): JumpSpec? {
+    val first = spec?.split(",")?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val at = first.indexOf('@')
+    val who = if (at >= 0) first.substring(0, at) else fallbackUser
+    val hp = if (at >= 0) first.substring(at + 1) else first
+    val colon = hp.lastIndexOf(':')
+    return if (colon in 1 until hp.length - 1) {
+        JumpSpec(hp.substring(0, colon), hp.substring(colon + 1).toIntOrNull()?.takeIf { it in 1..65535 } ?: 22, who)
+    } else JumpSpec(hp, 22, who)
+}
+
 private enum class Route { Connect, Keys, Hosts, Settings, Backup, Import, Snippets }
 
 @Composable
@@ -475,6 +491,7 @@ fun ConnectScreen(
     var port by remember { mutableStateOf(if (BuildConfig.DEBUG) "2222" else "22") }
     var user by remember { mutableStateOf(if (BuildConfig.DEBUG) "tester" else "") }
     var group by remember { mutableStateOf("") }
+    var jump by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
@@ -500,14 +517,17 @@ fun ConnectScreen(
 
     fun openWith(p: Int, blob: ByteArray) {
         busy = true; status = "connecting…"
+        val js = parseJump(jump.trim().ifEmpty { null }, user)
+        val title = if (js != null) "$user@$host:$p ⇢ ${js.host}" else "$user@$host:$p"
         // The same factory does the initial open and any later reconnect-on-drop.
         val factory: () -> TerminalTransport? = {
-            val s = SshSession(host, p, user, key.publicKeyBlob, key.signer, expectedHostKey = blob)
+            val s = SshSession(host, p, user, key.publicKeyBlob, key.signer, expectedHostKey = blob,
+                jumpHost = js?.host, jumpPort = js?.port ?: 22, jumpUser = js?.user)
             if (s.open(80, 24)) s else null
         }
         thread {
             val s = factory()
-            if (s != null) main.post { busy = false; onConnected(s, "$user@$host:$p", factory) }
+            if (s != null) main.post { busy = false; onConnected(s, title, factory) }
             else main.post { busy = false; status = "couldn't open the session (is your key installed?)" }
         }
     }
@@ -546,9 +566,14 @@ fun ConnectScreen(
     fun verifyThen(action: (Int, ByteArray) -> Unit) {
         val p = validPort(port)
         if (p == null) { status = "port must be a number from 1 to 65535"; return }
-        busy = true; status = "verifying host…"
+        val js = parseJump(jump.trim().ifEmpty { null }, user)
+        busy = true; status = if (js != null) "verifying host via ${js.host}…" else "verifying host…"
         thread {
-            val blob = SshBridge().nativeHostKeyBlob(host, p)
+            // Through a bastion, fetch the TARGET's key over the tunnel so TOFU still
+            // approves the real target fingerprint (the target may be unreachable directly).
+            val blob = if (js != null)
+                SshBridge().nativeHostKeyBlobVia(host, p, js.host, js.port, js.user, key.publicKeyBlob, key.signer)
+            else SshBridge().nativeHostKeyBlob(host, p)
             val trusted = if (blob != null) knownHosts.trustedBlob(host, p) else null
             when {
                 blob == null -> main.post { busy = false; status = "couldn't reach $host:$p" }
@@ -596,7 +621,7 @@ fun ConnectScreen(
                             // just the text); the ✕ removes it.
                             Modifier.fillMaxWidth().clickable {
                                 host = h.host; port = h.port.toString(); user = h.user
-                                group = h.group ?: ""
+                                group = h.group ?: ""; jump = h.jump ?: ""
                                 status = "loaded ${h.label}"
                             }.padding(vertical = 6.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -619,6 +644,8 @@ fun ConnectScreen(
             OutlinedTextField(user, { user = it }, label = { Text("user") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(group, { group = it }, label = { Text("group (optional)") },
                 singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(jump, { jump = it }, label = { Text("jump / bastion (optional: user@host[:port])") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(
                 password, { password = it },
                 label = { Text("password (only to install your key)") },
@@ -640,7 +667,8 @@ fun ConnectScreen(
                 onClick = {
                     val p = validPort(port)
                     if (p == null) { status = "port must be a number from 1 to 65535"; return@OutlinedButton }
-                    savedHosts = hostStore.add(SavedHost(host, p, user, group = group.trim().ifEmpty { null }))
+                    savedHosts = hostStore.add(SavedHost(host, p, user,
+                        jump = jump.trim().ifEmpty { null }, group = group.trim().ifEmpty { null }))
                     status = "saved $user@$host"
                 },
             ) { Text("Save this host") }

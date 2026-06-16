@@ -16,10 +16,15 @@ class SshBridge {
     /** Connect + handshake only; returns the server's host-key blob for TOFU. */
     external fun nativeHostKeyBlob(host: String, port: Int): ByteArray?
 
+    /** Same, but reaches the target through a bastion (so TOFU works for hosts only
+     *  reachable via ProxyJump). Authenticates to the bastion with `signer`. */
+    external fun nativeHostKeyBlobVia(host: String, port: Int, jumpHost: String, jumpPort: Int, jumpUser: String, pubBlob: ByteArray, signer: Any): ByteArray?
+
     // Interactive PTY session — open returns an opaque handle (0 on failure); the
     // caller drives it from a single owner thread (libssh2 isn't thread-safe).
     // expectedHostKey (if non-null) must match the server's host key, or open fails.
-    external fun nativeOpenShell(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cols: Int, rows: Int, expectedHostKey: ByteArray?): Long
+    // jumpHost (if non-null) routes the connection through that bastion (ProxyJump).
+    external fun nativeOpenShell(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cols: Int, rows: Int, expectedHostKey: ByteArray?, jumpHost: String?, jumpPort: Int, jumpUser: String?): Long
     external fun nativeWrite(handle: Long, data: ByteArray)
     /** Bytes read (>0), 0 if none available now, or -1 on EOF/error. */
     external fun nativeRead(handle: Long, buf: ByteArray): Int

@@ -273,12 +273,155 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeHostKeyBlob(
 // hang. The caller owns one thread for the session (libssh2 sessions aren't
 // thread-safe), matching the iOS SSHShell model.
 
-typedef struct { int fd; LIBSSH2_SESSION* session; LIBSSH2_CHANNEL* channel; } SshClient;
+// Defined later (the SFTP/forward path's shared connect helper).
+static LIBSSH2_SESSION* connect_and_auth(JNIEnv* env, const char* host, int port,
+        const char* user, const unsigned char* blob, size_t bloblen, jobject signer,
+        jbyteArray jexpectedHostKey, int* out_fd);
+
+// ---- ProxyJump / host chaining ------------------------------------------
+// To reach a target through a bastion, we authenticate to the bastion, open a
+// direct-tcpip channel to the target, and relay that channel over a socketpair.
+// The target SSH handshake then runs over the socketpair fd end-to-end, so the
+// target's host key is verified through the tunnel (a malicious bastion can't
+// impersonate the target). The bastion's own key is trust-on-first-use for now
+// (no UI pinning of the jump host yet — a documented v1 limitation).
+typedef struct {
+    LIBSSH2_SESSION* session;   // session to the bastion
+    LIBSSH2_CHANNEL* channel;   // direct-tcpip bastion -> target
+    int jump_fd;                // TCP socket to the bastion
+    int pump_fd;                // pump-side end of the socketpair
+    pthread_t pump;
+    volatile int stop;
+} JumpChain;
+
+typedef struct { int fd; LIBSSH2_SESSION* session; LIBSSH2_CHANNEL* channel; JumpChain* jump; } SshClient;
+
+// Relay bytes between the local socketpair end and the bastion's tunnel channel
+// until either side closes. Owns the bastion session exclusively (libssh2 isn't
+// thread-safe per session, so nothing else touches it once the pump runs).
+static void* jump_pump(void* arg) {
+    JumpChain* j = (JumpChain*)arg;
+    libssh2_session_set_blocking(j->session, 0);
+    char buf[16384];
+    while (!j->stop) {
+        int idle = 1;
+        ssize_t n = libssh2_channel_read(j->channel, buf, sizeof(buf));   // bastion -> local
+        if (n > 0) {
+            idle = 0;
+            ssize_t off = 0;
+            while (off < n) {
+                ssize_t w = write(j->pump_fd, buf + off, (size_t)(n - off));
+                if (w < 0) { if (errno == EINTR) continue; j->stop = 1; break; }
+                off += w;
+            }
+        } else if (n != LIBSSH2_ERROR_EAGAIN && (n < 0 || libssh2_channel_eof(j->channel))) {
+            j->stop = 1; break;
+        }
+        ssize_t m = read(j->pump_fd, buf, sizeof(buf));                   // local -> bastion
+        if (m > 0) {
+            idle = 0;
+            ssize_t off = 0;
+            while (off < m) {
+                ssize_t w = libssh2_channel_write(j->channel, buf + off, (size_t)(m - off));
+                if (w == LIBSSH2_ERROR_EAGAIN) continue;
+                if (w < 0) { j->stop = 1; break; }
+                off += w;
+            }
+        } else if (m == 0) {
+            j->stop = 1; break;   // local end closed
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            j->stop = 1; break;
+        }
+        if (idle) usleep(2000);   // nothing moved — yield rather than spin
+    }
+    return NULL;
+}
+
+// Build a tunneled fd to `dhost:dport` via the bastion. Returns the target-side
+// socketpair fd (hand to open_session) and the JumpChain to free on close, or -1.
+static int open_jump_fd(JNIEnv* env, const char* jhost, int jport, const char* juser,
+                        const char* dhost, int dport,
+                        const unsigned char* blob, size_t bloblen, jobject signer,
+                        JumpChain** out) {
+    int jfd = -1;
+    LIBSSH2_SESSION* js = connect_and_auth(env, jhost, jport, juser, blob, bloblen, signer, NULL, &jfd);
+    if (!js) { LOG("jump: connect/auth to bastion %s:%d failed", jhost, jport); return -1; }
+    LIBSSH2_CHANNEL* ch = libssh2_channel_direct_tcpip_ex(js, dhost, dport, "127.0.0.1", 22);
+    if (!ch) {
+        LOG("jump: direct-tcpip to %s:%d failed", dhost, dport);
+        libssh2_session_disconnect(js, "bye"); libssh2_session_free(js); close(jfd); return -1;
+    }
+    int sp[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp) != 0) {
+        libssh2_channel_free(ch); libssh2_session_disconnect(js, "bye"); libssh2_session_free(js); close(jfd); return -1;
+    }
+    fcntl(sp[1], F_SETFL, O_NONBLOCK);   // pump side non-blocking
+    JumpChain* j = (JumpChain*)calloc(1, sizeof(JumpChain));
+    j->session = js; j->channel = ch; j->jump_fd = jfd; j->pump_fd = sp[1]; j->stop = 0;
+    if (pthread_create(&j->pump, NULL, jump_pump, j) != 0) {
+        free(j); close(sp[0]); close(sp[1]);
+        libssh2_channel_free(ch); libssh2_session_disconnect(js, "bye"); libssh2_session_free(js); close(jfd); return -1;
+    }
+    *out = j;
+    return sp[0];   // target-side fd for the end-to-end handshake
+}
+
+static void jump_free(JumpChain* j) {
+    if (!j) return;
+    j->stop = 1;
+    pthread_join(j->pump, NULL);
+    if (j->channel) { libssh2_channel_close(j->channel); libssh2_channel_free(j->channel); }
+    if (j->session) { libssh2_session_disconnect(j->session, "bye"); libssh2_session_free(j->session); }
+    if (j->pump_fd >= 0) close(j->pump_fd);
+    if (j->jump_fd >= 0) close(j->jump_fd);
+    free(j);
+}
+
+// Fetch the target's host key THROUGH a bastion, so TOFU shows/approves the real
+// target fingerprint even when the target isn't directly reachable. Needs the
+// signer to authenticate to the bastion.
+JNIEXPORT jbyteArray JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeHostKeyBlobVia(
+    JNIEnv* env, jobject thiz, jstring jhost, jint port,
+    jstring jjumpHost, jint jumpPort, jstring jjumpUser,
+    jbyteArray jpubblob, jobject signer) {
+    (void)thiz;
+    if (libssh2_init(0)) return NULL;
+    const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
+    const char* jh = (*env)->GetStringUTFChars(env, jjumpHost, 0);
+    const char* ju = (*env)->GetStringUTFChars(env, jjumpUser, 0);
+    jsize bloblen = (*env)->GetArrayLength(env, jpubblob);
+    jbyte* blob = (*env)->GetByteArrayElements(env, jpubblob, 0);
+    jbyteArray result = NULL;
+    JumpChain* jump = NULL;
+    int fd = open_jump_fd(env, jh, jumpPort, ju, host, port,
+                          (const unsigned char*)blob, (size_t)bloblen, signer, &jump);
+    if (fd >= 0) {
+        LIBSSH2_SESSION* s = open_session(fd);
+        if (s) {
+            size_t len = 0; int type = 0;
+            const char* key = libssh2_session_hostkey(s, &len, &type);
+            if (key && len > 0) {
+                result = (*env)->NewByteArray(env, (jsize)len);
+                (*env)->SetByteArrayRegion(env, result, 0, (jsize)len, (const jbyte*)key);
+            }
+            libssh2_session_disconnect(s, "bye"); libssh2_session_free(s);
+        }
+        close(fd);
+        if (jump) jump_free(jump);
+    }
+    (*env)->ReleaseStringUTFChars(env, jhost, host);
+    (*env)->ReleaseStringUTFChars(env, jjumpHost, jh);
+    (*env)->ReleaseStringUTFChars(env, jjumpUser, ju);
+    (*env)->ReleaseByteArrayElements(env, jpubblob, blob, JNI_ABORT);
+    return result;
+}
 
 JNIEXPORT jlong JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
     JNIEnv* env, jobject thiz, jstring jhost, jint port, jstring juser,
-    jbyteArray jpubblob, jobject signer, jint cols, jint rows, jbyteArray jexpectedHostKey) {
+    jbyteArray jpubblob, jobject signer, jint cols, jint rows, jbyteArray jexpectedHostKey,
+    jstring jjumpHost, jint jumpPort, jstring jjumpUser) {
     (void)thiz;
     if (libssh2_init(0)) return 0;
     const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
@@ -286,7 +429,19 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
     jsize bloblen = (*env)->GetArrayLength(env, jpubblob);
     jbyte* blob = (*env)->GetByteArrayElements(env, jpubblob, 0);
     SshClient* client = NULL;
-    int fd = tcp_connect(host, port);
+    JumpChain* jump = NULL;
+    int fd;
+    if (jjumpHost != NULL) {
+        // Reach the target through a bastion (ProxyJump). Same key auths both hops.
+        const char* jh = (*env)->GetStringUTFChars(env, jjumpHost, 0);
+        const char* ju = (*env)->GetStringUTFChars(env, jjumpUser, 0);
+        fd = open_jump_fd(env, jh, jumpPort, ju, host, port,
+                          (const unsigned char*)blob, (size_t)bloblen, signer, &jump);
+        (*env)->ReleaseStringUTFChars(env, jjumpHost, jh);
+        (*env)->ReleaseStringUTFChars(env, jjumpUser, ju);
+    } else {
+        fd = tcp_connect(host, port);
+    }
     if (fd >= 0) {
         LIBSSH2_SESSION* s = open_session(fd);
         if (s && jexpectedHostKey != NULL) {
@@ -319,7 +474,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
                     libssh2_channel_process_startup(ch, "shell", 5, NULL, 0) == 0) {
                     libssh2_session_set_blocking(s, 0);   // non-blocking reads from here
                     client = (SshClient*)calloc(1, sizeof(SshClient));
-                    client->fd = fd; client->session = s; client->channel = ch;
+                    client->fd = fd; client->session = s; client->channel = ch; client->jump = jump;
                 } else {
                     if (ch) { libssh2_channel_free(ch); }
                 }
@@ -331,6 +486,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
         }
         if (!client) close(fd);
     }
+    if (!client && jump) jump_free(jump);   // tear down the bastion tunnel on failure
     (*env)->ReleaseStringUTFChars(env, jhost, host);
     (*env)->ReleaseStringUTFChars(env, juser, user);
     (*env)->ReleaseByteArrayElements(env, jpubblob, blob, JNI_ABORT);
@@ -386,7 +542,8 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeClose(JNIEnv* env, jobject thiz, jlon
     if (!c) return;
     if (c->channel) { libssh2_channel_close(c->channel); libssh2_channel_free(c->channel); }
     if (c->session) { libssh2_session_disconnect(c->session, "bye"); libssh2_session_free(c->session); }
-    if (c->fd >= 0) close(c->fd);
+    if (c->fd >= 0) close(c->fd);   // socketpair target side (signals the pump to stop)
+    if (c->jump) jump_free(c->jump);
     free(c);
 }
 
