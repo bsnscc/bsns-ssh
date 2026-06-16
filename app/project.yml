@@ -78,7 +78,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cc.bsns.ssh
         MARKETING_VERSION: "0.3.0"
-        CURRENT_PROJECT_VERSION: "27"
+        CURRENT_PROJECT_VERSION: "28"
         # App UI layer stays Swift 5 mode for now; the BsnsSSHCore package is
         # already Swift 6 strict-concurrency clean on its own.
         SWIFT_VERSION: "5.0"
