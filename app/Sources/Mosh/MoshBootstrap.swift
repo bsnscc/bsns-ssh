@@ -23,9 +23,12 @@ enum MoshBootstrap {
     }
 
     /// The command `mosh` runs on the server. `-s` binds to the SSH connection's
-    /// address; `-c 256` advertises 256-color support. The locale keeps UTF-8
-    /// rendering correct on the server side.
-    static let serverCommand = "mosh-server new -s -c 256 -l LANG=en_US.UTF-8"
+    /// address; `-c 256` advertises 256-color support. Both `LANG` and `LC_ALL`
+    /// are forced to UTF-8: `LC_ALL` overrides any inherited/forwarded `LC_CTYPE`
+    /// (e.g. macOS's invalid `LC_CTYPE=UTF-8`), without which mosh-server drops to
+    /// non-UTF-8 mode and renders every multibyte char (smart quotes, dashes,
+    /// spinner glyphs) as `?`. Mirrors the Android bootstrap.
+    static let serverCommand = "mosh-server new -s -c 256 -l LANG=en_US.UTF-8 -l LC_ALL=en_US.UTF-8"
 
     /// SSH to `spec.host` and obtain the mosh connect parameters. `SSHShellError`
     /// (host-key, auth, …) is rethrown as-is so the caller's TOFU/auth handling
