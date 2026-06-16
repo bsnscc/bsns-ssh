@@ -36,9 +36,14 @@ android {
     }
     buildTypes {
         release {
-            // R8 off for now: KeystoreSigner.sign is called from native by name —
-            // add a keep rule before enabling minification.
-            isMinifyEnabled = false
+            // R8 on for dead-code shrinking. Keep rules in proguard-rules.pro protect
+            // the JNI entry points + the by-name `sign` callback (no obfuscation goal —
+            // the app is open source). Use the NON-optimizing config: the aggressive
+            // optimizer (proguard-android-optimize.txt) miscompiled the ECDSA signature
+            // bit-twiddling in KeystoreSigner.sign → pubkey auth failed (rc=-18). Plain
+            // shrinking keeps the signing path correct (verified: live Keystore-key connect).
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
         }
     }
