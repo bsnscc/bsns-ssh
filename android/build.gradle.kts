@@ -1,3 +1,15 @@
+// Declare every plugin version ONCE here (apply false) so the Kotlin/AGP plugins
+// aren't loaded repeatedly across modules (Gradle warns + it's slower). Modules
+// apply them without a version.
+plugins {
+    id("com.android.application") version "8.7.2" apply false
+    id("com.android.library") version "8.7.2" apply false
+    id("org.jetbrains.kotlin.android") version "2.1.0" apply false
+    id("org.jetbrains.kotlin.jvm") version "2.1.0" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.1.0" apply false
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.1.0" apply false
+}
+
 // Supply-chain hardening: pin the exact resolved version of every dependency
 // (direct + transitive) into a per-module `gradle.lockfile`, so every build
 // resolves an identical graph and a swapped/republished artifact is caught.

@@ -1,4 +1,4 @@
-plugins { id("com.android.library") version "8.7.2" }
+plugins { id("com.android.library") }
 android {
     namespace = "com.termux.view"
     compileSdk = 35

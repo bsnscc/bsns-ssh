@@ -1,5 +1,10 @@
 # Android ↔ iOS parity
 
+> **Historical (2026-06):** parity is REACHED — Android has the full feature set
+> (terminal, keys incl. YubiKey, known-hosts/TOFU, SFTP, port forwarding, mosh,
+> ProxyJump, snippets, command history, import, encrypted sync). Any "pending"
+> notes below are superseded; this is the audit/plan record, not current status.
+
 Audit of the iOS feature set and the plan to replicate it on Android, so we
 build toward parity in a few deliberate passes rather than many piecemeal builds.
 

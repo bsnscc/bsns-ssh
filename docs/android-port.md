@@ -1,5 +1,10 @@
 # Android port — transport & hardware-key design
 
+> **Historical (2026-06):** these decisions are SHIPPED — the Android app is built
+> and at feature parity with iOS (libssh2-NDK transport, JNI sign-bridge to a
+> Keystore/StrongBox or YubiKey key, mosh, SFTP, ProxyJump, sync). Kept as the
+> design record; for current state see `../README.md` and `../android/README.md`.
+
 Status: **decision doc, pre-code.** Decide the transport and hardware-key
 direction here before scaffolding, because those two choices shape every layer
 above them.

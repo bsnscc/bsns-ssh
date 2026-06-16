@@ -1,8 +1,16 @@
 # Architecture
 
-bsns-ssh is a native iOS SSH client built around one idea: **your keys and
-config are yours, hardware-protected, with no vendor in the middle.** This
-document is the map for contributors.
+bsns.SSH is a native iOS **and Android** SSH/mosh client built around one idea:
+**your keys and config are yours, hardware-protected, with no vendor in the
+middle.** This document is the map for contributors.
+
+The two apps share their design and contracts: a platform-independent core
+(`Sources/BsnsSSHCore` in Swift, `android/core` in Kotlin) holds the SSH wire
+codec, agent protocol, key formats, known_hosts, the config-bundle crypto
+envelope, and the import parsers — held byte-identical across platforms by shared
+parity test vectors. Both build the SSH/mosh transport from the same pinned
+source (OpenSSL 3.5 + libssh2 1.11 + mosh), with the sign callback bridging to a
+non-extractable platform key (Secure Enclave / Android Keystore-StrongBox / YubiKey).
 
 ## Hard product rules
 
