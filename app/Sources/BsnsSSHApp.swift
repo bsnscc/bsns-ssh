@@ -8,6 +8,7 @@ struct BsnsSSHApp: App {
     @State private var sessions = SessionStore()
     @State private var surfaces = TerminalSurfaceCache()
     @State private var sync = SyncStore()
+    @State private var snippets = SnippetStore()
 
     init() { SettingsKey.registerDefaults() }
 
@@ -21,6 +22,7 @@ struct BsnsSSHApp: App {
                     .environment(sessions)
                     .environment(surfaces)
                     .environment(sync)
+                    .environment(snippets)
             }
         }
     }

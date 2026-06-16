@@ -96,7 +96,42 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         setStatus(.connected)
     }
 
-    func write(_ bytes: ArraySlice<UInt8>) { currentTransport?.write(bytes) }
+    func write(_ bytes: ArraySlice<UInt8>) {
+        trackInput(bytes)
+        currentTransport?.write(bytes)
+    }
+
+    /// Send a snippet / history command into the session, with a trailing newline
+    /// so the last line executes. Multi-line commands run as a sequence.
+    func runCommand(_ command: String) {
+        guard case .connected = status else { return }
+        let text = command.hasSuffix("\n") ? command : command + "\n"
+        write(Array(text.utf8)[...])
+    }
+
+    // Local command history: watch the keystroke byte-stream, accumulate a line
+    // buffer, and record it on Enter. Best-effort (skips escape sequences); feeds
+    // the on-device history only, never leaves the device.
+    private var lineBuf = ""
+    private var inEscape = false
+    private func trackInput(_ bytes: ArraySlice<UInt8>) {
+        lock.lock()
+        for b in bytes {
+            switch b {
+            case _ where inEscape: if (0x40...0x7e).contains(b) { inEscape = false }
+            case 0x1b: inEscape = true
+            case 0x0d, 0x0a:
+                let line = lineBuf.trimmingCharacters(in: .whitespaces)
+                lineBuf = ""
+                if !line.isEmpty { CommandHistory.shared.record(line) }
+            case 0x03, 0x15: lineBuf = ""                          // Ctrl-C / Ctrl-U
+            case 0x7f, 0x08: if !lineBuf.isEmpty { lineBuf.removeLast() }
+            case 0x20...0x7e: lineBuf.append(Character(UnicodeScalar(b)))
+            default: break
+            }
+        }
+        lock.unlock()
+    }
 
     func resize(cols: Int32, rows: Int32) {
         lock.lock(); self.cols = cols; self.rows = rows; let t = transport; lock.unlock()

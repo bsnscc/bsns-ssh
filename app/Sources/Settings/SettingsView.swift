@@ -81,6 +81,12 @@ struct SettingsView: View {
                 Text("Security")
             }
 
+            Section("Snippets") {
+                NavigationLink { SnippetsView() } label: {
+                    Label("Snippets", systemImage: "text.badge.plus")
+                }
+            }
+
             Section("Backup") {
                 NavigationLink { ConfigBackupView() } label: {
                     Label("Import / Export", systemImage: "square.and.arrow.up.on.square")

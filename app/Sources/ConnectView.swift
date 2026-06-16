@@ -7,6 +7,7 @@ struct ConnectView: View {
     @Environment(KnownHostsStore.self) private var knownHostsStore
     @Environment(SessionStore.self) private var sessions
     @Environment(TerminalSurfaceCache.self) private var surfaces
+    @Environment(SnippetStore.self) private var snippetStore
 
     private enum PendingAction { case connect, install }
 
@@ -177,6 +178,15 @@ struct ConnectView: View {
         group = saved.group ?? ""; jump = saved.jump ?? ""
     }
 
+    /// Fire "run on connect" snippets once the shell has settled.
+    private func runStartupSnippets(on session: TerminalSession) {
+        let startup = snippetStore.runOnConnect
+        guard !startup.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            for s in startup { session.runCommand(s.command) }
+        }
+    }
+
     private func saveHost() {
         hostStore.add(SavedHost(label: "", host: host, port: Int(port) ?? 22, user: user,
                                 useMosh: useMosh,
@@ -203,6 +213,7 @@ struct ConnectView: View {
                     let s = TerminalSession(spec: spec, title: "\(user)@\(host)")
                     s.adopt(shell)
                     sessions.add(s)
+                    runStartupSnippets(on: s)
                     password = ""
                 }
             } catch let e as SSHShellError {
@@ -230,6 +241,7 @@ struct ConnectView: View {
                     let s = TerminalSession(spec: spec, title: "\(userName)@\(hostName) · mosh")
                     s.adopt(mosh)
                     sessions.add(s)
+                    runStartupSnippets(on: s)
                     password = ""
                 }
             } catch let e as SSHShellError {

@@ -27,6 +27,8 @@ struct LiveTerminalScreen: View {
     @State private var showFind = false
     @State private var findQuery = ""
     @State private var showForwards = false
+    @State private var showSnippets = false
+    @State private var showHistory = false
     @FocusState private var findFocused: Bool
 
     private var theme: TerminalTheme { TerminalTheme.named(themeId) }
@@ -68,6 +70,12 @@ struct LiveTerminalScreen: View {
                 keyboardUp = false
             }
             .sheet(isPresented: $showForwards) { PortForwardsView(session: session) }
+            .sheet(isPresented: $showSnippets) {
+                SnippetPicker { snip in session.runCommand(snip.command) }
+            }
+            .sheet(isPresented: $showHistory) {
+                CommandHistoryPicker { cmd in session.runCommand(cmd) }
+            }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { toggleFind() } label: { Image(systemName: "magnifyingglass") }
@@ -150,6 +158,8 @@ struct LiveTerminalScreen: View {
                 Label(count == 0 ? "Port Forwarding…" : "Port Forwarding (\(count))…",
                       systemImage: "arrow.left.arrow.right")
             }
+            Button { showSnippets = true } label: { Label("Run a snippet…", systemImage: "text.badge.plus") }
+            Button { showHistory = true } label: { Label("Command history…", systemImage: "clock.arrow.circlepath") }
 
             Picker("Theme", selection: $themeId) {
                 ForEach(TerminalTheme.all) { Text($0.id).tag($0.id) }
