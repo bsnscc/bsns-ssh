@@ -21,6 +21,10 @@ class SshSession(
     private val jumpPort: Int = 22,
     private val jumpUser: String? = null,
     private val expectedBastionHostKey: ByteArray? = null,
+    // When set, this is a FIDO2 security key: authenticate via the sk path using
+    // this OpenSSH-format sk private key (the credential handle, not a secret) and
+    // `signer.signSk`. sk keys are direct-only (no ProxyJump), so jump* are ignored.
+    private val skPrivatePem: String? = null,
 ) : TerminalTransport {
     // Output that arrives before a consumer attaches `onOutput` is buffered and
     // flushed when it's set, so the initial banner/prompt is never dropped (the
@@ -46,8 +50,12 @@ class SshSession(
     /** Connect + authenticate (via the Keystore signer) + open a PTY shell, then
      *  start the I/O loop. Returns false if the session couldn't be opened. */
     fun open(cols: Int, rows: Int): Boolean {
-        handle = bridge.nativeOpenShell(host, port, user, pubBlob, signer, cols, rows, expectedHostKey,
-            jumpHost, jumpPort, jumpUser, expectedBastionHostKey)
+        handle = if (skPrivatePem != null) {
+            bridge.nativeOpenShellSk(host, port, user, pubBlob, skPrivatePem, signer, cols, rows, expectedHostKey)
+        } else {
+            bridge.nativeOpenShell(host, port, user, pubBlob, signer, cols, rows, expectedHostKey,
+                jumpHost, jumpPort, jumpUser, expectedBastionHostKey)
+        }
         if (handle == 0L) return false
         running.set(true)
         Thread({ loop() }, "ssh-session").apply { isDaemon = true }.start()

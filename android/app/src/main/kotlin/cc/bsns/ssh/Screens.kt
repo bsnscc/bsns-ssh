@@ -52,6 +52,8 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
     var confirmDelete by remember { mutableStateOf<AppKey?>(null) }
     var yubiPin by remember { mutableStateOf("") }
     var yubiStatus by remember { mutableStateOf<String?>(null) }
+    var fidoPin by remember { mutableStateOf("") }
+    var fidoStatus by remember { mutableStateOf<String?>(null) }
     val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
     fun refresh() { keys = keyManager.keys() }
@@ -85,8 +87,13 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                             Text(k.label, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
                                 color = MaterialTheme.colorScheme.primary)
                             CapsuleTag(
-                                if (k.yubiKey) "YubiKey" else if (k.hardware) "Hardware" else "Software",
-                                if (k.yubiKey || k.hardware) Brand.accent else softwareTag,
+                                when {
+                                    k.fido -> "FIDO2"
+                                    k.yubiKey -> "YubiKey"
+                                    k.hardware -> "Hardware"
+                                    else -> "Software"
+                                },
+                                if (k.hardware) Brand.accent else softwareTag,
                             )
                         }
                         Text(k.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
@@ -98,6 +105,8 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                             }
                             if (k.yubiKey) {
                                 TextButton(onClick = { keyManager.forgetYubiKey(k.id); refresh() }) { Text("Forget", fontSize = 13.sp) }
+                            } else if (k.fido) {
+                                TextButton(onClick = { keyManager.forgetFido(k.id); refresh() }) { Text("Forget", fontSize = 13.sp) }
                             } else if (!k.builtIn) {
                                 TextButton(onClick = { confirmDelete = k }) { Text("Delete", fontSize = 13.sp) }
                             }
@@ -142,6 +151,31 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                         }
                     }) { Text("Enroll YubiKey") }
                     yubiStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
+                }
+            }
+
+            Section(
+                title = "Add a FIDO2 security key",
+                footer = "Creates a resident sk-ecdsa credential on your FIDO2 key (touch + PIN). " +
+                    "The private key never leaves the token. Works with Android and desktop OpenSSH " +
+                    "(ssh-ed25519/ecdsa-sk). Heads up: the iPhone app can't use FIDO2 keys yet, so this " +
+                    "key won't sign in there — enroll a separate key there or use a PIV/software key if you need iOS.",
+            ) {
+                Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(fidoPin, { fidoPin = it }, label = { Text("Security-key PIN") },
+                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                    OutlinedButton(enabled = fidoPin.isNotEmpty(), onClick = {
+                        val pin = fidoPin
+                        fidoStatus = "enrolling…"
+                        thread {
+                            val result = runCatching { keyManager.enrollFido(pin) }
+                            mainHandler.post {
+                                result.onSuccess { fidoPin = ""; fidoStatus = "enrolled"; refresh() }
+                                    .onFailure { fidoStatus = it.message ?: "couldn't enroll the security key" }
+                            }
+                        }
+                    }) { Text("Enroll FIDO2 key") }
+                    fidoStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
                 }
             }
         }

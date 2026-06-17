@@ -56,16 +56,17 @@ class FileKeySigner(private val fileKey: FileKey) {
 }
 
 /** A key the app can authenticate with: hardware (Keystore), software (FileKey),
- *  or a YubiKey (PIV slot — signs over NFC/USB). */
+ *  a YubiKey PIV slot (signs over NFC/USB), or a FIDO2 security key (sk-ecdsa). */
 class AppKey(
     val id: String,
     val label: String,
     val publicKeyBlob: ByteArray,
     val algorithm: String,   // wire name
     val hardware: Boolean,
-    val signer: Any,         // object exposing sign([B): [B + publicKeyBlob
+    val signer: Any,         // object exposing sign([B): [B (or signSk for fido) + publicKeyBlob
     val yubiKey: Boolean = false,
     val builtIn: Boolean = false,   // the always-present device Keystore key (not deletable)
+    val fido: Boolean = false,      // FIDO2 sk key — uses libssh2's sk-userauth path (direct only)
 ) {
     val fingerprint: String get() = SshKeyFormat.fingerprintOfPublicKeyBlob(publicKeyBlob)
     val authLine: String get() = "$algorithm ${Base64.getEncoder().encodeToString(publicKeyBlob)} bsns"
@@ -116,6 +117,10 @@ class KeyManager(context: Context) {
     private val store = SecureKeyStore(context)
     // Enrolled YubiKeys: just the public blob (the private key lives on the token).
     private val yubiPrefs = context.getSharedPreferences("yubikeys", Context.MODE_PRIVATE)
+    // Enrolled FIDO2 (sk) keys: "base64(publicBlob)|base64(credentialId)|flags".
+    // The credential's private key lives on the authenticator; we keep only the
+    // public blob + handle the sk userauth path needs.
+    private val fidoPrefs = context.getSharedPreferences("fidokeys", Context.MODE_PRIVATE)
 
     fun keys(): List<AppKey> {
         // Label by the key's *actual* backing, not an assumption.
@@ -134,7 +139,23 @@ class KeyManager(context: Context) {
             AppKey(id, "YubiKey (PIV)", blob, "ecdsa-sha2-nistp256",
                 hardware = true, signer = YubiKeyPivKey(blob), yubiKey = true)
         }
-        return listOf(hw) + soft + yubi
+        val fido = fidoPrefs.all.mapNotNull { (id, v) ->
+            val parts = (v as? String)?.split("|") ?: return@mapNotNull null
+            if (parts.size < 3) return@mapNotNull null
+            val blob = Base64.getDecoder().decode(parts[0])
+            val credId = Base64.getDecoder().decode(parts[1])
+            val flags = parts[2].toIntOrNull() ?: 0x01
+            // Recover the EC point + application from the stored public blob:
+            // string(type) | string("nistp256") | string(point) | string(application).
+            val d = SshDecoder(blob)
+            d.readString(); d.readString()                 // type, curve
+            val point = d.readString()
+            val application = d.readStringUtf8()
+            val signer = FidoSkKey(blob, credId, application, point, flags)
+            AppKey(id, "FIDO2 security key", blob, "sk-ecdsa-sha2-nistp256@openssh.com",
+                hardware = true, signer = signer, fido = true)
+        }
+        return listOf(hw) + soft + yubi + fido
     }
 
     /** Enroll a YubiKey (blocking — prompts a tap); returns the new key's id. */
@@ -146,6 +167,22 @@ class KeyManager(context: Context) {
     }
 
     fun forgetYubiKey(id: String) = yubiPrefs.edit().remove(id).apply()
+
+    /** Enroll a FIDO2 security key (blocking — prompts a tap); returns the new key's id.
+     *  Creates a resident sk-ecdsa credential under the fixed "ssh:bsns" application. */
+    fun enrollFido(pin: String): String {
+        val e = FidoKeyManager.enroll(pin)
+        val id = SshKeyFormat.fingerprintOfPublicKeyBlob(e.publicBlob)
+        val v = listOf(
+            Base64.getEncoder().encodeToString(e.publicBlob),
+            Base64.getEncoder().encodeToString(e.credentialId),
+            e.flags.toString(),
+        ).joinToString("|")
+        fidoPrefs.edit().putString(id, v).apply()
+        return id
+    }
+
+    fun forgetFido(id: String) = fidoPrefs.edit().remove(id).apply()
 
     fun generateSoftware(algorithm: KeyAlgorithm): String {
         val fk = FileKey.generate(algorithm, "bsns")

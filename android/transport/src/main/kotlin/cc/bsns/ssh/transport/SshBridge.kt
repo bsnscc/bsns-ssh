@@ -25,6 +25,14 @@ class SshBridge {
     // expectedHostKey (if non-null) must match the server's host key, or open fails.
     // jumpHost (if non-null) routes the connection through that bastion (ProxyJump).
     external fun nativeOpenShell(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cols: Int, rows: Int, expectedHostKey: ByteArray?, jumpHost: String?, jumpPort: Int, jumpUser: String?, expectedBastionHostKey: ByteArray?): Long
+
+    // FIDO2 security-key (sk-ecdsa) variants. `privPem` is the OpenSSH-format sk
+    // private key (carries the credential handle, not a secret); `signer` exposes
+    // `fun signSk(data: ByteArray): ByteArray` (an authenticator assertion). Direct
+    // connections only — sk keys don't support ProxyJump in v1.
+    external fun nativeOpenShellSk(host: String, port: Int, user: String, pubBlob: ByteArray, privPem: String, signer: Any, cols: Int, rows: Int, expectedHostKey: ByteArray?): Long
+    external fun nativeAuthAndExecSk(host: String, port: Int, user: String, pubBlob: ByteArray, privPem: String, signer: Any, cmd: String, expectedHostKey: ByteArray?): String?
+
     external fun nativeWrite(handle: Long, data: ByteArray)
     /** Bytes read (>0), 0 if none available now, or -1 on EOF/error. */
     external fun nativeRead(handle: Long, buf: ByteArray): Int

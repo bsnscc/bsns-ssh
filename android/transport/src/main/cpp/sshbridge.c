@@ -105,6 +105,82 @@ static int sign_cb(LIBSSH2_SESSION* session, unsigned char** sig, size_t* sig_le
     return 0;
 }
 
+// ---- FIDO2 security-key (sk-ecdsa) auth ----------------------------------
+// libssh2's sk path parses the application/flags/key-handle out of an
+// OpenSSH-format sk private key (privatekeydata) and, to sign, calls this back.
+// We hand `data` to Kotlin's signer.signSk([B)[B, which asks the authenticator
+// (YubiKey) for an assertion and returns a packed blob:
+//   flags(1) | counter(uint32 BE) | rlen(uint32 BE) | r | slen(uint32 BE) | s
+// We unpack it into LIBSSH2_SK_SIG_INFO with RAW r/s (libssh2 mpint-encodes and
+// frees sig_r/sig_s itself).
+typedef struct { JNIEnv* env; jobject signer; jmethodID signSk; } SkSignCtx;
+
+static uint32_t rd_be32(const unsigned char* p) {
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+static int sk_sign_cb(LIBSSH2_SESSION* session, LIBSSH2_SK_SIG_INFO* sig_info,
+                      const unsigned char* data, size_t data_len,
+                      int algorithm, uint8_t flags, const char* application,
+                      const unsigned char* key_handle, size_t handle_len,
+                      void** abstract) {
+    (void)session; (void)algorithm; (void)flags; (void)application;
+    (void)key_handle; (void)handle_len;
+    SkSignCtx* c = (SkSignCtx*)(*abstract);
+    JNIEnv* env = c->env;
+    jbyteArray jdata = (*env)->NewByteArray(env, (jsize)data_len);
+    (*env)->SetByteArrayRegion(env, jdata, 0, (jsize)data_len, (const jbyte*)data);
+    jbyteArray jout = (jbyteArray)(*env)->CallObjectMethod(env, c->signer, c->signSk, jdata);
+    (*env)->DeleteLocalRef(env, jdata);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return -1; }
+    if (!jout) return -1;
+    jsize n = (*env)->GetArrayLength(env, jout);
+    unsigned char* buf = (unsigned char*)malloc((size_t)n);
+    if (!buf) { (*env)->DeleteLocalRef(env, jout); return -1; }
+    (*env)->GetByteArrayRegion(env, jout, 0, n, (jbyte*)buf);
+    (*env)->DeleteLocalRef(env, jout);
+    // flags(1) counter(4) rlen(4) r slen(4) s — bounds-check every step.
+    if ((size_t)n < 1 + 4 + 4) { free(buf); return -1; }
+    size_t off = 0;
+    sig_info->flags = buf[off]; off += 1;
+    sig_info->counter = rd_be32(buf + off); off += 4;
+    uint32_t rlen = rd_be32(buf + off); off += 4;
+    if (off + (size_t)rlen + 4 > (size_t)n) { free(buf); return -1; }
+    unsigned char* r = (unsigned char*)malloc(rlen ? rlen : 1);
+    if (!r) { free(buf); return -1; }
+    memcpy(r, buf + off, rlen); off += rlen;
+    uint32_t slen = rd_be32(buf + off); off += 4;
+    if (off + (size_t)slen > (size_t)n) { free(r); free(buf); return -1; }
+    unsigned char* s = (unsigned char*)malloc(slen ? slen : 1);
+    if (!s) { free(r); free(buf); return -1; }
+    memcpy(s, buf + off, slen);
+    free(buf);
+    sig_info->sig_r = r; sig_info->sig_r_len = rlen;
+    sig_info->sig_s = s; sig_info->sig_s_len = slen;
+    return 0;
+}
+
+// Authenticate `s` with an sk key. Returns 0 on success (the caller keeps the
+// session), non-zero on failure (the caller tears the session down). The signer
+// exposes signSk([B)[B; `priv` is the OpenSSH-format sk private key (the handle,
+// not a secret) libssh2 needs to learn the key handle/application.
+static int sk_authenticate(JNIEnv* env, LIBSSH2_SESSION* s, const char* user,
+                           const unsigned char* blob, size_t bloblen,
+                           const char* priv, size_t privlen, jobject signer) {
+    jclass cls = (*env)->GetObjectClass(env, signer);
+    jmethodID signSk = (*env)->GetMethodID(env, cls, "signSk", "([B)[B");
+    SkSignCtx ctx = { env, signer, signSk };
+    void* abstract = &ctx;
+    int rc = libssh2_userauth_publickey_sk(s, user, strlen(user), blob, bloblen,
+                                           priv, privlen, NULL, sk_sign_cb, &abstract);
+    if (rc != 0) {
+        char* msg = NULL; libssh2_session_last_error(s, &msg, NULL, 0);
+        LOG("sk auth failed rc=%d: %s", rc, msg ? msg : "");
+    }
+    return rc;
+}
+
 JNIEXPORT jboolean JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeInstallKey(
     JNIEnv* env, jobject thiz, jstring jhost, jint port, jstring juser,
@@ -553,6 +629,129 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeClose(JNIEnv* env, jobject thiz, jlon
     if (c->fd >= 0) close(c->fd);   // socketpair target side (signals the pump to stop)
     if (c->jump) jump_free(c->jump);
     free(c);
+}
+
+// ---- FIDO2 sk interactive shell + exec -----------------------------------
+// Direct connections only (no ProxyJump for sk keys in v1). Mirrors
+// nativeOpenShell / nativeAuthAndExec but authenticates via the sk path.
+
+JNIEXPORT jlong JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShellSk(
+    JNIEnv* env, jobject thiz, jstring jhost, jint port, jstring juser,
+    jbyteArray jpubblob, jstring jprivpem, jobject signer, jint cols, jint rows,
+    jbyteArray jexpectedHostKey) {
+    (void)thiz;
+    if (libssh2_init(0)) return 0;
+    const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
+    const char* user = (*env)->GetStringUTFChars(env, juser, 0);
+    const char* priv = (*env)->GetStringUTFChars(env, jprivpem, 0);
+    size_t privlen = strlen(priv);
+    jsize bloblen = (*env)->GetArrayLength(env, jpubblob);
+    jbyte* blob = (*env)->GetByteArrayElements(env, jpubblob, 0);
+    SshClient* client = NULL;
+    int fd = tcp_connect(host, port);
+    if (fd >= 0) {
+        LIBSSH2_SESSION* s = open_session(fd);
+        if (s && jexpectedHostKey != NULL) {
+            size_t hklen = 0; int hktype = 0;
+            const char* hk = libssh2_session_hostkey(s, &hklen, &hktype);
+            jsize explen = (*env)->GetArrayLength(env, jexpectedHostKey);
+            jbyte* exp = (*env)->GetByteArrayElements(env, jexpectedHostKey, 0);
+            int mismatch = (!hk || (jsize)hklen != explen || memcmp(hk, exp, hklen) != 0);
+            (*env)->ReleaseByteArrayElements(env, jexpectedHostKey, exp, JNI_ABORT);
+            if (mismatch) {
+                LOG("openShellSk: host key mismatch — refusing");
+                libssh2_session_disconnect(s, "host key mismatch");
+                libssh2_session_free(s); s = NULL;
+            }
+        }
+        if (s) {
+            int rc = sk_authenticate(env, s, user, (const unsigned char*)blob,
+                                     (size_t)bloblen, priv, privlen, signer);
+            if (rc == 0) {
+                LIBSSH2_CHANNEL* ch = libssh2_channel_open_session(s);
+                if (ch &&
+                    libssh2_channel_request_pty_ex(ch, "xterm-256color", 14, NULL, 0, cols, rows, 0, 0) == 0 &&
+                    libssh2_channel_process_startup(ch, "shell", 5, NULL, 0) == 0) {
+                    libssh2_session_set_blocking(s, 0);
+                    client = (SshClient*)calloc(1, sizeof(SshClient));
+                    client->fd = fd; client->session = s; client->channel = ch; client->jump = NULL;
+                } else if (ch) {
+                    libssh2_channel_free(ch);
+                }
+            }
+            if (!client) { libssh2_session_disconnect(s, "bye"); libssh2_session_free(s); }
+        }
+        if (!client) close(fd);
+    }
+    (*env)->ReleaseStringUTFChars(env, jhost, host);
+    (*env)->ReleaseStringUTFChars(env, juser, user);
+    (*env)->ReleaseStringUTFChars(env, jprivpem, priv);
+    (*env)->ReleaseByteArrayElements(env, jpubblob, blob, JNI_ABORT);
+    return (jlong)(intptr_t)client;
+}
+
+JNIEXPORT jstring JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExecSk(
+    JNIEnv* env, jobject thiz, jstring jhost, jint port, jstring juser,
+    jbyteArray jpubblob, jstring jprivpem, jobject signer, jstring jcmd,
+    jbyteArray jexpectedHostKey) {
+    (void)thiz;
+    if (libssh2_init(0)) return NULL;
+    const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
+    const char* user = (*env)->GetStringUTFChars(env, juser, 0);
+    const char* priv = (*env)->GetStringUTFChars(env, jprivpem, 0);
+    const char* cmd = (*env)->GetStringUTFChars(env, jcmd, 0);
+    size_t privlen = strlen(priv);
+    jsize bloblen = (*env)->GetArrayLength(env, jpubblob);
+    jbyte* blob = (*env)->GetByteArrayElements(env, jpubblob, 0);
+    jstring result = NULL;
+    int fd = tcp_connect(host, port);
+    if (fd >= 0) {
+        LIBSSH2_SESSION* s = open_session(fd);
+        if (s && jexpectedHostKey != NULL) {
+            size_t hklen = 0; int hktype = 0;
+            const char* hk = libssh2_session_hostkey(s, &hklen, &hktype);
+            jsize explen = (*env)->GetArrayLength(env, jexpectedHostKey);
+            jbyte* exp = (*env)->GetByteArrayElements(env, jexpectedHostKey, 0);
+            int mismatch = (!hk || (jsize)hklen != explen || memcmp(hk, exp, hklen) != 0);
+            (*env)->ReleaseByteArrayElements(env, jexpectedHostKey, exp, JNI_ABORT);
+            if (mismatch) {
+                LOG("authAndExecSk: host key mismatch — refusing");
+                libssh2_session_disconnect(s, "host key mismatch");
+                libssh2_session_free(s); s = NULL;
+            }
+        }
+        if (s) {
+            int rc = sk_authenticate(env, s, user, (const unsigned char*)blob,
+                                     (size_t)bloblen, priv, privlen, signer);
+            if (rc == 0) {
+                LIBSSH2_CHANNEL* c = libssh2_channel_open_session(s);
+                if (c) {
+                    libssh2_channel_exec(c, cmd);
+                    char out[4096];
+                    int total = 0, n;
+                    while (total < (int)sizeof(out) - 1 &&
+                           (n = libssh2_channel_read(c, out + total, sizeof(out) - 1 - total)) > 0) {
+                        total += n;
+                    }
+                    out[total > 0 ? total : 0] = 0;
+                    result = (*env)->NewStringUTF(env, out);
+                    libssh2_channel_close(c);
+                    libssh2_channel_free(c);
+                }
+            }
+            libssh2_session_disconnect(s, "bye");
+            libssh2_session_free(s);
+        }
+        close(fd);
+    }
+    (*env)->ReleaseStringUTFChars(env, jhost, host);
+    (*env)->ReleaseStringUTFChars(env, juser, user);
+    (*env)->ReleaseStringUTFChars(env, jprivpem, priv);
+    (*env)->ReleaseStringUTFChars(env, jcmd, cmd);
+    (*env)->ReleaseByteArrayElements(env, jpubblob, blob, JNI_ABORT);
+    return result;
 }
 
 // ---- SFTP subsystem ------------------------------------------------------

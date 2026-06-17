@@ -91,6 +91,7 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         YubiKeyManager.attach(this)   // for NFC reader-mode + USB discovery
+        FidoKeyManager.attach(this)   // FIDO2/CTAP2 over the same NFC/USB transports
         // Set the secure flag up front so the very first recents snapshot is
         // protected — don't wait for a resume round-trip (a privacy guarantee).
         applySecureFlag(window, SettingsStore(this).appLock)
@@ -117,6 +118,7 @@ class MainActivity : FragmentActivity() {
     override fun onStop() {
         super.onStop()
         YubiKeyManager.lock()   // forget the cached YubiKey PIN when backgrounded
+        FidoKeyManager.lock()   // and the FIDO2 PIN
         // Auto-sync: push the latest config to the user's folder on background.
         if (SyncStore(this).enabled) {
             val app = applicationContext
@@ -301,12 +303,12 @@ fun App() {
         }
     }
 
-    // Global overlay while a YubiKey operation waits for the user to tap/insert.
-    YubiKeyManager.awaitingTap?.let { msg ->
+    // Global overlay while a YubiKey (PIV) or FIDO2 operation waits for a tap/insert.
+    (YubiKeyManager.awaitingTap ?: FidoKeyManager.awaitingTap)?.let { msg ->
         AlertDialog(
             onDismissRequest = { },
-            title = { Text("YubiKey") },
-            text = { Text("$msg\n\nHold your YubiKey to the back of the phone (NFC) or plug it into USB-C.") },
+            title = { Text("Security key") },
+            text = { Text("$msg\n\nHold your key to the back of the phone (NFC) or plug it into USB-C.") },
             confirmButton = {},
         )
     }
@@ -761,9 +763,11 @@ fun ConnectScreen(
 
     val authLine = key.authLine
 
-    // A YubiKey signs only after its PIN is supplied — prompt once, then proceed.
+    // A YubiKey (PIV) or FIDO2 key signs only after its PIN is supplied — prompt
+    // once per unlock, then proceed.
     fun withYubiPin(action: () -> Unit) {
-        if (key.yubiKey && !YubiKeyManager.unlocked) { afterPin = action; showYubiPin = true } else action()
+        val needsPin = (key.yubiKey && !YubiKeyManager.unlocked) || (key.fido && !FidoKeyManager.unlocked)
+        if (needsPin) { afterPin = action; showYubiPin = true } else action()
     }
 
     val context = LocalContext.current
@@ -785,11 +789,14 @@ fun ConnectScreen(
         // The bastion was verified by verifyThen, so its trusted key is in the store —
         // pin it on the tunnel so the bastion is re-verified on connect + reconnect.
         val bastionKey = js?.let { knownHosts.trustedBlob(it.host, it.port) }
+        // FIDO2 keys authenticate via libssh2's sk path (direct only) using an
+        // OpenSSH-format sk private key (the credential handle, not a secret).
+        val skPem = (key.signer as? FidoSkKey)?.privatePem
         // The same factory does the initial open and any later reconnect-on-drop.
         val factory: () -> TerminalTransport? = {
             val s = SshSession(host, p, user, key.publicKeyBlob, key.signer, expectedHostKey = blob,
                 jumpHost = js?.host, jumpPort = js?.port ?: 22, jumpUser = js?.user,
-                expectedBastionHostKey = bastionKey)
+                expectedBastionHostKey = bastionKey, skPrivatePem = skPem)
             if (s.open(80, 24)) s else null
         }
         thread {
@@ -813,8 +820,12 @@ fun ConnectScreen(
     // the UDP transport. The factory re-bootstraps on a dropped/expired session.
     fun openMosh(p: Int, blob: ByteArray) {
         busy = true; status = "starting mosh-server…"
+        val skPem = (key.signer as? FidoSkKey)?.privatePem
         val factory: () -> TerminalTransport? = {
-            val out = SshBridge().nativeAuthAndExec(host, p, user, key.publicKeyBlob, key.signer,
+            val out = if (skPem != null)
+                SshBridge().nativeAuthAndExecSk(host, p, user, key.publicKeyBlob, skPem, key.signer,
+                    MoshBootstrap.SERVER_CMD, blob)
+            else SshBridge().nativeAuthAndExec(host, p, user, key.publicKeyBlob, key.signer,
                 MoshBootstrap.SERVER_CMD, blob)
             val conn = MoshBootstrap.parse(out)
             if (conn != null) {
@@ -879,6 +890,8 @@ fun ConnectScreen(
     }
 
     val hasJump = jump.trim().isNotEmpty()
+    val fidoKey = key.fido
+    val jumpWithFido = hasJump && fidoKey
     var showPublicKey by remember { mutableStateOf(false) }
     Scaffold { pad ->
         Column(
@@ -971,6 +984,11 @@ fun ConnectScreen(
                     "mosh, Files, Tunnels, and Install key go direct and are disabled.",
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            if (fidoKey) {
+                Text("FIDO2 security keys connect directly to a shell or mosh — Files, " +
+                    "Tunnels, and jump hosts aren't supported with these keys yet.",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
 
             // Actions.
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -978,12 +996,12 @@ fun ConnectScreen(
                     Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Button(enabled = !busy, onClick = {
+                    Button(enabled = !busy && !jumpWithFido, onClick = {
                         // A jump host tunnels the shell only; ignore mosh when one is set.
                         withYubiPin { verifyThen { p, blob -> if (useMosh && !hasJump) openMosh(p, blob) else openWith(p, blob) } }
                     }) { Text(if (useMosh && !hasJump) "Connect (mosh)" else "Connect") }
 
-                    OutlinedButton(enabled = !busy && !hasJump, onClick = {
+                    OutlinedButton(enabled = !busy && !hasJump && !fidoKey, onClick = {
                         withYubiPin {
                             verifyThen { p, blob ->
                                 onSftp(SftpTarget(host, p, user, key.publicKeyBlob, key.signer, blob))
@@ -991,7 +1009,7 @@ fun ConnectScreen(
                         }
                     }) { Text("Files") }
 
-                    OutlinedButton(enabled = !busy && !hasJump, onClick = {
+                    OutlinedButton(enabled = !busy && !hasJump && !fidoKey, onClick = {
                         if (forwardsActive) onReopenForwards()
                         else withYubiPin { verifyThen { p, blob -> openForwards(p, blob) } }
                     }) { Text(if (forwardsActive) "Tunnels ●" else "Tunnels") }
@@ -1148,14 +1166,15 @@ fun ConnectScreen(
             if (showYubiPin) {
                 AlertDialog(
                     onDismissRequest = { showYubiPin = false; yubiPin = ""; afterPin = null },
-                    title = { Text("YubiKey PIN") },
+                    title = { Text(if (key.fido) "Security key PIN" else "YubiKey PIN") },
                     text = {
                         OutlinedTextField(yubiPin, { yubiPin = it }, label = { Text("PIN") }, singleLine = true,
                             visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
                     },
                     confirmButton = {
                         TextButton(onClick = {
-                            YubiKeyManager.setPin(yubiPin); yubiPin = ""; showYubiPin = false
+                            if (key.fido) FidoKeyManager.setPin(yubiPin) else YubiKeyManager.setPin(yubiPin)
+                            yubiPin = ""; showYubiPin = false
                             val act = afterPin; afterPin = null; act?.invoke()
                         }) { Text("Continue") }
                     },
