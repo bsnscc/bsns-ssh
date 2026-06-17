@@ -77,12 +77,20 @@ public enum WebAuthnSignature {
     }
 
     /// Parse the `flags` byte and signature `counter` (big-endian) from WebAuthn
-    /// `authenticatorData` (RP-id-hash(32) ‖ flags(1) ‖ counter(4) ‖ …).
+    /// `authenticatorData` (RP-id-hash(32) ‖ flags(1) ‖ counter(4) ‖ extensions…).
     public static func authenticatorFlagsAndCounter(_ authData: Data) throws -> (flags: UInt8, counter: UInt32) {
         let a = [UInt8](authData)
         guard a.count >= 37 else { throw KeyBackendError.signingFailed("authenticatorData too short") }
         let counter = UInt32(a[33]) << 24 | UInt32(a[34]) << 16 | UInt32(a[35]) << 8 | UInt32(a[36])
         return (a[32], counter)
+    }
+
+    /// The raw extension bytes trailing `authenticatorData` (everything past the
+    /// 37-byte rpIdHash‖flags‖counter prefix). The webauthn-sk signature MUST carry
+    /// these verbatim: the server folds them into the signed message and rejects
+    /// the signature unless the ED flag (0x80) and the extensions' presence agree.
+    public static func authenticatorExtensions(_ authData: Data) -> Data {
+        authData.count > 37 ? Data(authData[37...]) : Data()
     }
 
     /// Parse an ASN.1 DER ECDSA-P256 signature (`SEQUENCE { INTEGER r, INTEGER s }`)

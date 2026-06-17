@@ -85,11 +85,14 @@ final class WebAuthnCoordinator: NSObject {
             throw WebAuthnError.unexpectedCredential
         }
         let (flags, counter) = try WebAuthnSignature.authenticatorFlagsAndCounter(assertion.rawAuthenticatorData)
+        // Forward the authenticator's extension bytes verbatim — the server folds
+        // them into the signed message and the ED flag must agree with their presence.
+        let extensions = WebAuthnSignature.authenticatorExtensions(assertion.rawAuthenticatorData)
         let origin = Self.origin(fromClientDataJSON: assertion.rawClientDataJSON)
             ?? "https://\(Self.relyingPartyID)"
         return try WebAuthnSignature.signatureBlob(
             derSignature: signature, flags: flags, counter: counter,
-            origin: origin, clientDataJSON: assertion.rawClientDataJSON)
+            origin: origin, clientDataJSON: assertion.rawClientDataJSON, extensions: extensions)
     }
 
     // Run one ASAuthorization request, bridging the delegate callbacks to async.

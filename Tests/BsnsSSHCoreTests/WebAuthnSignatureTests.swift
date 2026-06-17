@@ -103,6 +103,16 @@ struct WebAuthnSignatureTests {
         #expect(counter == 9)
     }
 
+    @Test("authenticator extensions = trailing bytes past the 37-byte prefix")
+    func authenticatorExtensions() {
+        // No extensions: exactly 37 bytes → empty.
+        let bare = Data(repeating: 0, count: 37)
+        #expect(WebAuthnSignature.authenticatorExtensions(bare) == Data())
+        // With extensions: trailing CBOR bytes are returned verbatim.
+        let ext = Data([0xa1, 0x6b, 0x68, 0x6d, 0x61, 0x63])
+        #expect(WebAuthnSignature.authenticatorExtensions(bare + ext) == ext)
+    }
+
     @Test("webauthn-sk signature blob matches the PROTOCOL.u2f layout")
     func signatureBlobLayout() throws {
         let r = [UInt8](repeating: 0x33, count: 32)   // high bit clear → mpint == raw
