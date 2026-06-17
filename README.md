@@ -55,6 +55,15 @@ mosh (UDP, roaming) transport. The SSH stack is built on a current, supported
 crypto backend (OpenSSL 3.5 + libssh2 1.11), compiled reproducibly from pinned
 source on both platforms.
 
+## Known issues
+
+- **mosh display after a long background/resume.** If a mosh session is
+  backgrounded long enough to lose its network path (e.g. on a VPN/tailnet) and
+  then resumed, a full-screen TUI such as `tmux` can occasionally come back with
+  a misplaced cursor or a stale-looking redraw. The session reconnects and stays
+  usable, and a manual window resize forces a clean repaint. Plain SSH is
+  unaffected — mosh is the optional roaming transport; SSH is the default.
+
 ## Building
 
 The device-independent core (key handling, SSH agent, wire codec, crypto
