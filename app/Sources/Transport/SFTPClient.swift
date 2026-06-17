@@ -75,7 +75,10 @@ final class SFTPClient: @unchecked Sendable {
             while true {
                 var attrs = LIBSSH2_SFTP_ATTRIBUTES()
                 let n = libssh2_sftp_readdir_ex(dir, &nameBuf, nameBuf.count, nil, 0, &attrs)
-                if n <= 0 { break }   // 0 = end of directory, <0 = error
+                if n == 0 { break }   // end of directory
+                if n < 0 {            // protocol error / disconnect mid-listing — surface it,
+                    throw SFTPError.op("Couldn't read \(path).")   // don't pass off a partial as the whole listing
+                }
                 // Decode exactly the n bytes returned — the name isn't NUL-terminated
                 // and may not be valid UTF-8, so bound by the real length and decode
                 // lossily rather than trusting String(cString:).

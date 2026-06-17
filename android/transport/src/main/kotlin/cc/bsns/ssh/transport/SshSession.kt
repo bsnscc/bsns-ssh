@@ -99,6 +99,11 @@ class SshSession(
         bridge.nativeWake(handle)   // wake the loop so it exits promptly
     }
 
+    // Bytes staged for the channel that haven't gone out yet (owner-thread only).
+    // libssh2_channel_write can take only part of a buffer under backpressure, so
+    // we keep the unsent tail here and retry rather than spin or drop it.
+    private var outBuf = ByteArray(0)
+
     private fun loop() {
         val buf = ByteArray(16384)
         while (running.get()) {
@@ -110,7 +115,15 @@ class SshSession(
                 resize = pendingResize
                 pendingResize = null
             }
-            for (w in writes) bridge.nativeWrite(handle, w)
+            // Append newly-staged input to whatever didn't fit last time, then push
+            // as much as the channel will take in one pass; keep the remainder for
+            // the next turn (nativeWait below parks on OUTBOUND until it's writable).
+            if (writes.isNotEmpty()) outBuf = writes.fold(outBuf) { acc, w -> acc + w }
+            if (outBuf.isNotEmpty()) {
+                val wrote = bridge.nativeWrite(handle, outBuf)
+                if (wrote < 0) { running.set(false); break }
+                if (wrote > 0) outBuf = if (wrote >= outBuf.size) ByteArray(0) else outBuf.copyOfRange(wrote, outBuf.size)
+            }
             resize?.let { bridge.nativeResize(handle, it.first, it.second) }
 
             when (val n = bridge.nativeRead(handle, buf)) {

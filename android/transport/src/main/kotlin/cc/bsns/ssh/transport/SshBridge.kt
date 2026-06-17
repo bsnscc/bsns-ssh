@@ -33,7 +33,9 @@ class SshBridge {
     external fun nativeOpenShellSk(host: String, port: Int, user: String, pubBlob: ByteArray, privPem: String, signer: Any, cols: Int, rows: Int, expectedHostKey: ByteArray?): Long
     external fun nativeAuthAndExecSk(host: String, port: Int, user: String, pubBlob: ByteArray, privPem: String, signer: Any, cmd: String, expectedHostKey: ByteArray?): String?
 
-    external fun nativeWrite(handle: Long, data: ByteArray)
+    /** Writes what the channel will take in one pass; returns bytes written (0..size,
+     *  short on backpressure) or -1 on a hard error. Caller requeues any unsent tail. */
+    external fun nativeWrite(handle: Long, data: ByteArray): Int
     /** Bytes read (>0), 0 if none available now, or -1 on EOF/error. */
     external fun nativeRead(handle: Long, buf: ByteArray): Int
     /** Park the owner thread until the session fd is ready or the wake-pipe is

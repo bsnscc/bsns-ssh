@@ -60,10 +60,11 @@ sync; external security keys never leave the token and don't sync.
 
 Everything stays on your device or in storage you control:
 
-- **Keys.** Hardware-backed keys are generated in and never leave the Secure
-  Enclave (iOS) / Android Keystore (StrongBox when available), a FIDO2 security
-  key, or a YubiKey (PIV). Software keys are held locally. Private keys never
-  touch the network.
+- **Keys.** Keys are generated in and never leave the Secure Enclave (iOS), the
+  Android Keystore (hardware-backed by StrongBox or the TEE where the device
+  provides it, otherwise software-backed — the app shows which, and the key is
+  non-extractable either way), a FIDO2 security key, or a YubiKey (PIV). Software
+  keys are held locally. Private keys never touch the network.
 - **Config** (saved hosts, known_hosts, snippets, command history). Stored
   locally. Command history never leaves your device.
 - **Optional sync.** If you turn it on, your config is encrypted on-device

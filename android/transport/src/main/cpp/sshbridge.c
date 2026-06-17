@@ -642,21 +642,29 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
     return (jlong)(intptr_t)client;
 }
 
-JNIEXPORT void JNICALL
+// Write what the channel will take in one non-blocking pass and return how many
+// bytes went out (0..len), or -1 on a hard error. On EAGAIN (the channel is
+// backed up — slow link, large paste, remote not reading) we stop instead of
+// busy-spinning; the caller requeues the unsent tail and waits for writability
+// via nativeWait (which polls OUTBOUND). This both kills the CPU spin and avoids
+// silently dropping bytes on backpressure.
+JNIEXPORT jint JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeWrite(JNIEnv* env, jobject thiz, jlong handle, jbyteArray jdata) {
     (void)thiz;
     SshClient* c = (SshClient*)(intptr_t)handle;
-    if (!c) return;
+    if (!c) return -1;
     jsize n = (*env)->GetArrayLength(env, jdata);
     jbyte* d = (*env)->GetByteArrayElements(env, jdata, 0);
     ssize_t off = 0;
+    jint result = 0;
     while (off < n) {
         ssize_t w = libssh2_channel_write(c->channel, (const char*)d + off, (size_t)(n - off));
-        if (w == LIBSSH2_ERROR_EAGAIN) continue;
-        if (w < 0) break;
+        if (w == LIBSSH2_ERROR_EAGAIN) break;   // backpressure — caller requeues the tail
+        if (w < 0) { result = -1; break; }      // hard error — caller tears down
         off += w;
     }
     (*env)->ReleaseByteArrayElements(env, jdata, d, JNI_ABORT);
+    return result < 0 ? -1 : (jint)off;
 }
 
 // Returns bytes read (>0), 0 if none available right now, or -1 on EOF/error.
@@ -1145,10 +1153,10 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeSftpWriteChunk(
     int stalls = 0;
     while (off < len) {
         ssize_t n = libssh2_sftp_write(h, (const char*)buf + off, (size_t)(len - off));
-        if (n == LIBSSH2_ERROR_EAGAIN) continue;
-        if (n < 0) { ok = JNI_FALSE; break; }
-        if (n == 0) {                 // no progress on a blocking handle — bail, don't spin
-            if (++stalls > 1000) { ok = JNI_FALSE; break; }
+        if (n < 0 && n != LIBSSH2_ERROR_EAGAIN) { ok = JNI_FALSE; break; }   // hard error
+        if (n <= 0) {                 // EAGAIN or no progress: throttle, don't busy-spin;
+            if (++stalls > 5000) { ok = JNI_FALSE; break; }   // ~2.5s of true stall → bail
+            usleep(500);
             continue;
         }
         stalls = 0;

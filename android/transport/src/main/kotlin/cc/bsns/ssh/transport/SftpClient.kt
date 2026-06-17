@@ -33,7 +33,12 @@ class SftpClient(
     }
 
     fun list(path: String): List<SftpEntry> = on {
-        val rows = bridge.nativeSftpList(handle, path) ?: return@on emptyList()
+        // A null result means the directory couldn't be opened (permission denied,
+        // gone, not a directory, or a dropped connection) — surface it as an error
+        // rather than an empty folder. A genuinely empty directory returns an
+        // (empty but non-null) array.
+        val rows = bridge.nativeSftpList(handle, path)
+            ?: throw java.io.IOException("couldn't open directory: $path")
         rows.mapNotNull { row ->
             val p = row.split('\t', limit = 3)
             if (p.size < 3) null

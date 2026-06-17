@@ -14,6 +14,8 @@
 -keep,includedescriptorclasses class cc.bsns.ssh.transport.KeystoreSigner { byte[] sign(byte[]); }
 -keep,includedescriptorclasses class cc.bsns.ssh.FileKeySigner { byte[] sign(byte[]); }
 -keep,includedescriptorclasses class cc.bsns.ssh.YubiKeyPivKey { byte[] sign(byte[]); }
+# FIDO2 sk keys sign via a different callback: GetMethodID(signer, "signSk", "([B)[B").
+-keep,includedescriptorclasses class cc.bsns.ssh.FidoSkKey { byte[] signSk(byte[]); }
 
 # --- Vendored Termux terminal (internal reflection) --------------------------
 -keep class com.termux.** { *; }

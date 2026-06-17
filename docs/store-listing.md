@@ -66,20 +66,22 @@ bsns.cc is an operations platform for small business with many tools and a share
 **Privacy nutrition label:** Data Not Collected (no data is collected or linked).
 
 **App Review notes** (App Store Connect → App Review Information → Notes). Plain
-text; paste verbatim. ⚠️ Keep the demo account (`apptester` / `sextant.upgo.in`)
-live through the review window — it's the only way a reviewer can exercise a
-connection.
+text; paste verbatim, substituting the demo credentials from the **private** store
+console / your password manager. ⚠️ NEVER commit the demo host/user/password to
+this repo — it is public. Keep a throwaway, rotatable review account live through
+the review window (it's the only way a reviewer can exercise a connection); put
+its real credentials only in App Store Connect's App Review Information fields.
 
 ```
 bsns.SSH is an SSH, Mosh, and SFTP client. No account or registration is required, and the app collects no data.
 
-HOW TO TEST (SSH with a password):
+HOW TO TEST (SSH with a password):  [fill in the demo host/user/password here from the private console — do NOT store them in the repo]
 1. Open the app — it starts on the "Connect" tab.
 2. Enter:
-   • Host: sextant.upgo.in
+   • Host: <demo host>
    • Port: 22
-   • User: apptester
-   • Password: Testing123!
+   • User: <demo user>
+   • Password: <demo password>
 3. Tap "Connect".
 4. On the first connection the app shows a trust-on-first-use host-key prompt — tap "Trust" to proceed.
 5. You'll land in a live interactive shell. Run a command (e.g. ls, whoami) to confirm it works.
@@ -106,7 +108,7 @@ Thank you for reviewing!
 **App title** (≤30): `bsns.SSH`
 
 **Short description** (≤80):
-> SSH & mosh client. Keys in hardware (Keystore/YubiKey). No telemetry. Open source.
+> SSH & mosh client. Non-extractable keys (Keystore/YubiKey). No telemetry. OSS.
 
 **Full description** (≤4000): _(reuse the App Store description, with these swaps)_
 - "Secure Enclave" → "the Android Keystore (StrongBox when available)"
