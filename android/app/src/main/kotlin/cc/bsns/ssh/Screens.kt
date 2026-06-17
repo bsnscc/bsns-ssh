@@ -30,8 +30,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cc.bsns.ssh.core.KeyAlgorithm
@@ -54,79 +56,94 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
 
     fun refresh() { keys = keyManager.keys() }
 
+    val softwareTag = Color(0xFFE0A45A)   // amber for exportable software keys (matches iOS)
     Scaffold { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            Modifier.fillMaxSize().padding(pad).padding(Spacing.screen).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(Spacing.section),
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
-                Text("Keys", fontFamily = FontFamily.Monospace, fontSize = 20.sp)
+                Text("Keys", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 TextButton(onClick = onBack) { Text("Done") }
             }
-            Text("Your device key stays in the Android Keystore and can't be exported. " +
-                "Software keys are encrypted at rest. Each key shows how it's backed.",
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-            keys.forEach { k ->
-                Divider()
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text(k.label, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.primary)
-                    Text(if (k.yubiKey) "yubikey" else if (k.hardware) "hardware" else "software",
-                        fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Section(
+                title = "Keys in the agent",
+                footer = "Your device key stays in the Android Keystore and can't be exported. Software keys are encrypted at rest. Each key shows how it's backed.",
+            ) {
+                if (keys.isEmpty()) {
+                    Text("No keys yet — generate one below.", fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 10.dp))
                 }
-                Text(k.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { copyToClipboard(context, "authorized_keys", k.authLine) }) {
-                        Text("Copy public key")
-                    }
-                    if (k.yubiKey) {
-                        OutlinedButton(onClick = { keyManager.forgetYubiKey(k.id); refresh() }) { Text("Forget") }
-                    } else if (!k.builtIn) {
-                        OutlinedButton(onClick = { confirmDelete = k }) { Text("Delete") }
+                keys.forEachIndexed { i, k ->
+                    if (i > 0) RowDivider()
+                    Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text(k.label, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.primary)
+                            CapsuleTag(
+                                if (k.yubiKey) "YubiKey" else if (k.hardware) "Hardware" else "Software",
+                                if (k.yubiKey || k.hardware) Brand.accent else softwareTag,
+                            )
+                        }
+                        Text(k.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
+                            TextButton(onClick = { copyToClipboard(context, "authorized_keys", k.authLine) }) {
+                                Text("Copy public key", fontSize = 13.sp)
+                            }
+                            if (k.yubiKey) {
+                                TextButton(onClick = { keyManager.forgetYubiKey(k.id); refresh() }) { Text("Forget", fontSize = 13.sp) }
+                            } else if (!k.builtIn) {
+                                TextButton(onClick = { confirmDelete = k }) { Text("Delete", fontSize = 13.sp) }
+                            }
+                        }
                     }
                 }
             }
 
-            Divider()
-            Text("Generate a software key", fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { keyManager.generateSoftware(KeyAlgorithm.ED25519); refresh() }) {
-                    Text("+ ed25519")
-                }
-                OutlinedButton(onClick = { keyManager.generateSoftware(KeyAlgorithm.ECDSA_P256); refresh() }) {
-                    Text("+ ecdsa p256")
-                }
-                OutlinedButton(onClick = { keyManager.generateSoftware(KeyAlgorithm.RSA); refresh() }) {
-                    Text("+ rsa 3072")
+            Section(
+                title = "Generate a software key",
+                footer = "Use RSA only for older gear (some network equipment) that can't accept ed25519 or ecdsa keys.",
+            ) {
+                Row(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val gen = @Composable { label: String, algo: KeyAlgorithm ->
+                        OutlinedButton(
+                            onClick = { keyManager.generateSoftware(algo); refresh() },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
+                        ) { Text(label, maxLines = 1) }
+                    }
+                    gen("+ ed25519", KeyAlgorithm.ED25519)
+                    gen("+ ecdsa", KeyAlgorithm.ECDSA_P256)
+                    gen("+ rsa", KeyAlgorithm.RSA)
                 }
             }
-            Text("Use RSA only for older gear (some network equipment) that can't accept ed25519 or ecdsa keys.",
-                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-            Divider()
-            Text("Add a YubiKey (PIV slot 9A, P-256)", fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-            Text("Reads (or generates) the key in the authentication slot. The private key never " +
-                "leaves the token — it signs over NFC or USB-C.", fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            OutlinedTextField(yubiPin, { yubiPin = it }, label = { Text("YubiKey PIN") },
-                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-            OutlinedButton(enabled = yubiPin.isNotEmpty(), onClick = {
-                val pin = yubiPin
-                yubiStatus = "enrolling…"
-                thread {
-                    val result = runCatching { keyManager.enrollYubiKey(pin) }
-                    mainHandler.post {
-                        result.onSuccess { yubiPin = ""; yubiStatus = "enrolled"; refresh() }
-                            .onFailure { yubiStatus = it.message ?: "couldn't read the YubiKey" }
-                    }
+            Section(
+                title = "Add a YubiKey",
+                footer = "Slot 9A, P-256. Reads (or generates) the key in the authentication slot — the private key never leaves the token; it signs over NFC or USB-C.",
+            ) {
+                Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(yubiPin, { yubiPin = it }, label = { Text("YubiKey PIN") },
+                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                    OutlinedButton(enabled = yubiPin.isNotEmpty(), onClick = {
+                        val pin = yubiPin
+                        yubiStatus = "enrolling…"
+                        thread {
+                            val result = runCatching { keyManager.enrollYubiKey(pin) }
+                            mainHandler.post {
+                                result.onSuccess { yubiPin = ""; yubiStatus = "enrolled"; refresh() }
+                                    .onFailure { yubiStatus = it.message ?: "couldn't read the YubiKey" }
+                            }
+                        }
+                    }) { Text("Enroll YubiKey") }
+                    yubiStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
                 }
-            }) { Text("Enroll YubiKey") }
-            yubiStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
+            }
         }
     }
 

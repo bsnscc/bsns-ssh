@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -57,14 +58,17 @@ class SettingsStore(context: Context) {
 
 @Composable
 private fun SettingToggle(label: String, value: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, fontSize = 15.sp,
-            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+    SettingRow(label, enabled) {
         Switch(checked = value, onCheckedChange = onChange, enabled = enabled)
+    }
+}
+
+/** A row that shows the current value (monospace, brand-tinted) and cycles on tap. */
+@Composable
+private fun PickerRow(label: String, value: String, onTap: () -> Unit) {
+    SettingRow(label, onClick = onTap) {
+        Text(value, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -87,107 +91,80 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
 
     Scaffold { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            Modifier.fillMaxSize().padding(pad).padding(Spacing.screen).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(Spacing.section),
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
-                Text("Settings", fontFamily = FontFamily.Monospace, fontSize = 20.sp)
+                Text("Settings", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 TextButton(onClick = onBack) { Text("Done") }
             }
-            Text("Changes apply to new sessions.", fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-            Divider()
-            Text("Terminal", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+            Section(title = "Terminal", footer = "Changes apply to new sessions.") {
+                SettingRow("Font size") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { if (fontSize > 8) { fontSize--; store.fontSize = fontSize } }) { Text("–") }
+                        Text("$fontSize", fontFamily = FontFamily.Monospace, fontSize = 15.sp,
+                            modifier = Modifier.padding(horizontal = 14.dp))
+                        OutlinedButton(onClick = { if (fontSize < 30) { fontSize++; store.fontSize = fontSize } }) { Text("+") }
+                    }
+                }
+                RowDivider()
+                PickerRow("Scrollback", "$scrollback lines") {
+                    val next = scrollbackOptions[(scrollbackOptions.indexOf(scrollback).coerceAtLeast(0) + 1) % scrollbackOptions.size]
+                    scrollback = next; store.scrollback = next
+                }
+                RowDivider()
+                PickerRow("Theme", theme) {
+                    val next = themeIds[(themeIds.indexOf(theme).coerceAtLeast(0) + 1) % themeIds.size]
+                    theme = next; store.theme = next
+                }
+                RowDivider()
+                PickerRow("Cursor shape", cursorStyle) {
+                    val next = Appearance.cursorStyles[(Appearance.cursorStyles.indexOf(cursorStyle).coerceAtLeast(0) + 1) % Appearance.cursorStyles.size]
+                    cursorStyle = next; store.cursorStyle = next
+                }
+                RowDivider()
+                SettingToggle("Cursor blink", cursorBlink) { cursorBlink = it; store.cursorBlink = it }
+                RowDivider()
+                SettingToggle("Bell vibrates (haptic)", bellHaptic) { bellHaptic = it; store.bellHaptic = it }
+                RowDivider()
+                SettingToggle("Keep screen awake while connected", keepAwake) { keepAwake = it; store.keepAwake = it }
+                RowDivider()
+                SettingToggle("Show key bar", showKeyBar) { showKeyBar = it; store.showKeyBar = it }
+            }
 
-            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Font size", fontSize = 15.sp)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(onClick = {
-                        if (fontSize > 8) { fontSize--; store.fontSize = fontSize }
-                    }) { Text("–") }
-                    Text("$fontSize", fontFamily = FontFamily.Monospace, fontSize = 15.sp,
-                        modifier = Modifier.padding(horizontal = 14.dp))
-                    OutlinedButton(onClick = {
-                        if (fontSize < 30) { fontSize++; store.fontSize = fontSize }
-                    }) { Text("+") }
+            Section(
+                title = "Security",
+                footer = "History stays on this device and is never synced. Type a command with a leading space to keep that one out of history.",
+            ) {
+                SettingToggle(
+                    if (biometricAvailable) "Require fingerprint / face to unlock"
+                    else "Require fingerprint / face (none enrolled)",
+                    appLock, enabled = biometricAvailable,
+                ) {
+                    appLock = it; store.appLock = it
+                    // Apply screenshot/recents protection NOW, not on the next resume.
+                    (context as? android.app.Activity)?.let { a -> applySecureFlag(a.window, it) }
+                }
+                RowDivider()
+                SettingToggle("Record command history (on device)", commandHistory) {
+                    commandHistory = it; store.commandHistory = it
                 }
             }
 
-            Row(Modifier.fillMaxWidth().clickable {
-                val next = scrollbackOptions[(scrollbackOptions.indexOf(scrollback).coerceAtLeast(0) + 1) % scrollbackOptions.size]
-                scrollback = next; store.scrollback = next
-            }.padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("Scrollback", fontSize = 15.sp)
-                Text("$scrollback lines", fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.primary)
+            Section(title = "Snippets") {
+                SettingRow("Snippets", onClick = onSnippets) {
+                    Text("Manage", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
+                }
             }
 
-            Row(Modifier.fillMaxWidth().clickable {
-                val next = themeIds[(themeIds.indexOf(theme).coerceAtLeast(0) + 1) % themeIds.size]
-                theme = next; store.theme = next
-            }.padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("Theme", fontSize = 15.sp)
-                Text(theme, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.primary)
+            Section(title = "Backup") {
+                SettingRow("Export / import", onClick = onBackup) {
+                    Text("Encrypted", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
+                }
             }
 
-            Row(Modifier.fillMaxWidth().clickable {
-                val next = Appearance.cursorStyles[(Appearance.cursorStyles.indexOf(cursorStyle).coerceAtLeast(0) + 1) % Appearance.cursorStyles.size]
-                cursorStyle = next; store.cursorStyle = next
-            }.padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("Cursor shape", fontSize = 15.sp)
-                Text(cursorStyle, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.primary)
-            }
-
-            SettingToggle("Cursor blink", cursorBlink) { cursorBlink = it; store.cursorBlink = it }
-            SettingToggle("Bell vibrates (haptic)", bellHaptic) { bellHaptic = it; store.bellHaptic = it }
-            SettingToggle("Keep screen awake while connected", keepAwake) { keepAwake = it; store.keepAwake = it }
-            SettingToggle("Show key bar", showKeyBar) { showKeyBar = it; store.showKeyBar = it }
-
-            Divider()
-            Text("Security", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
-            SettingToggle(
-                if (biometricAvailable) "Require fingerprint / face to unlock"
-                else "Require fingerprint / face (none enrolled)",
-                appLock, enabled = biometricAvailable,
-            ) {
-                appLock = it; store.appLock = it
-                // Apply screenshot/recents protection NOW, not on the next resume.
-                (context as? android.app.Activity)?.let { a -> applySecureFlag(a.window, it) }
-            }
-            SettingToggle("Record command history (on device)", commandHistory) {
-                commandHistory = it; store.commandHistory = it
-            }
-            Text("History stays on this device and is never synced. Type a command with a " +
-                "leading space to keep that one out of history.",
-                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-
-            Divider()
-            Text("Snippets", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
-            OutlinedButton(onClick = onSnippets) { Text("Manage snippets") }
-
-            Divider()
-            Text("Backup", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
-            OutlinedButton(onClick = onBackup) { Text("Export / import (encrypted)") }
-
-            Divider()
-            Text(
-                "No accounts. No analytics. No telemetry. Your keys stay on this device; " +
-                    "the device key lives in the Android Keystore and can never be exported " +
-                    "(see Keys for whether it's StrongBox- or TEE-backed on your hardware).",
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-
-            Divider()
-            Text("About", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
             val info = remember {
                 runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
             }
@@ -195,10 +172,20 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
             val versionCode = info?.let {
                 if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode else it.versionCode.toLong()
             } ?: 0L
-            Text("bsns.\$_  ·  version $versionName (build $versionCode)",
-                fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-            Text("GPLv3 · OpenSSL 3.5 + libssh2, built from source",
-                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Section(
+                title = "About",
+                footer = "No accounts. No analytics. No telemetry. Your keys stay on this device; the device key lives in the Android Keystore and can never be exported (see Keys for whether it's StrongBox- or TEE-backed on your hardware).",
+            ) {
+                SettingRow("Version") {
+                    Text("$versionName (build $versionCode)", fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                RowDivider()
+                SettingRow("License") {
+                    Text("GPLv3 · OpenSSL 3.5 + libssh2", fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
     }
 }
