@@ -89,7 +89,7 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                             CapsuleTag(
                                 when {
                                     k.fido -> "FIDO2"
-                                    k.yubiKey -> "YubiKey"
+                                    k.yubiKey -> "Smart card"
                                     k.hardware -> "Hardware"
                                     else -> "Software"
                                 },
@@ -133,33 +133,12 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
             }
 
             Section(
-                title = "Add a YubiKey",
-                footer = "Slot 9A, P-256. Reads (or generates) the key in the authentication slot — the private key never leaves the token; it signs over NFC or USB-C.",
-            ) {
-                Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(yubiPin, { yubiPin = it }, label = { Text("YubiKey PIN") },
-                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                    OutlinedButton(enabled = yubiPin.isNotEmpty(), onClick = {
-                        val pin = yubiPin
-                        yubiStatus = "enrolling…"
-                        thread {
-                            val result = runCatching { keyManager.enrollYubiKey(pin) }
-                            mainHandler.post {
-                                result.onSuccess { yubiPin = ""; yubiStatus = "enrolled"; refresh() }
-                                    .onFailure { yubiStatus = it.message ?: "couldn't read the YubiKey" }
-                            }
-                        }
-                    }) { Text("Enroll YubiKey") }
-                    yubiStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
-                }
-            }
-
-            Section(
                 title = "Add a FIDO2 security key",
                 footer = "Creates a resident sk-ecdsa credential on your FIDO2 key (touch + PIN). " +
-                    "The private key never leaves the token. Works with Android and desktop OpenSSH " +
-                    "(ssh-ed25519/ecdsa-sk). Heads up: the iPhone app can't use FIDO2 keys yet, so this " +
-                    "key won't sign in there — enroll a separate key there or use a PIV/software key if you need iOS.",
+                    "The private key never leaves the token. The same physical key works on Android " +
+                    "and iOS, but each platform needs its own enrollment — add both public keys to " +
+                    "your server. Needs OpenSSH 8.2+ on the host. For one key that works everywhere " +
+                    "with a single authorized_keys line (and on any server), use a smart card (PIV) below.",
             ) {
                 Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(fidoPin, { fidoPin = it }, label = { Text("Security-key PIN") },
@@ -176,6 +155,30 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                         }
                     }) { Text("Enroll FIDO2 key") }
                     fidoStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
+                }
+            }
+
+            Section(
+                title = "Add a smart card (PIV)",
+                footer = "Slot 9A, P-256 over NFC or USB-C — the private key never leaves the card. " +
+                    "Produces a plain ecdsa-sha2-nistp256 key every SSH server accepts, and the same " +
+                    "card works on Android and iOS with a single authorized_keys line.",
+            ) {
+                Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(yubiPin, { yubiPin = it }, label = { Text("PIV PIN") },
+                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                    OutlinedButton(enabled = yubiPin.isNotEmpty(), onClick = {
+                        val pin = yubiPin
+                        yubiStatus = "enrolling…"
+                        thread {
+                            val result = runCatching { keyManager.enrollYubiKey(pin) }
+                            mainHandler.post {
+                                result.onSuccess { yubiPin = ""; yubiStatus = "enrolled"; refresh() }
+                                    .onFailure { yubiStatus = it.message ?: "couldn't read the smart card" }
+                            }
+                        }
+                    }) { Text("Enroll smart card") }
+                    yubiStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
                 }
             }
         }

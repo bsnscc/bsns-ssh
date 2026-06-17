@@ -28,7 +28,7 @@ struct KeysView: View {
                             if store.isHardware(key) {
                                 let isFido = store.isSecurityKey(key)
                                 let isYubi = store.isYubiKey(key)
-                                Tag(text: isFido ? "FIDO2" : (isYubi ? "YubiKey" : "Secure Enclave"),
+                                Tag(text: isFido ? "FIDO2" : (isYubi ? "Smart card" : "Secure Enclave"),
                                     color: Brand.accent,
                                     icon: (isFido || isYubi) ? "key.radiowaves.forward.fill" : "lock.shield.fill")
                             } else {
@@ -94,15 +94,10 @@ struct KeysView: View {
                     Text(genError).font(.caption).foregroundStyle(.red)
                 }
                 Button {
-                    showYubiKey = true
-                } label: {
-                    Label("Add YubiKey (NFC / USB-C)", systemImage: "key.radiowaves.forward.fill")
-                }
-                Button {
                     fidoName = "bsns"
                     showFidoEnroll = true
                 } label: {
-                    Label("Add FIDO2 security key (USB-C / NFC)", systemImage: "lock.badge.clock")
+                    Label("FIDO2 security key (USB-C / NFC)", systemImage: "lock.badge.clock")
                 }
                 Button("Ed25519 (software key)") {
                     Task { await store.generateKey(.ed25519) }
@@ -110,8 +105,15 @@ struct KeysView: View {
                 Button("ECDSA P-256 (software key)") {
                     Task { await store.generateKey(.ecdsaP256) }
                 }
-                Button("RSA 3072 (software key)") {
-                    Task { await store.generateKey(.rsa) }
+                DisclosureGroup("Advanced") {
+                    Button {
+                        showYubiKey = true
+                    } label: {
+                        Label("Smart card (PIV)", systemImage: "key.radiowaves.forward.fill")
+                    }
+                    Button("RSA 3072 (software key)") {
+                        Task { await store.generateKey(.rsa) }
+                    }
                 }
             } header: {
                 Text("Generate")
@@ -120,7 +122,7 @@ struct KeysView: View {
                     ? "A Secure Enclave key never leaves this device and asks for Face ID each time it signs — but it can't be backed up, so if you lose this device you're locked out of any server that only trusts it. Enroll a second key on another device as a backup.\n\n"
                     : ""
                 Text(enclaveNote
-                    + "A software key can be backed up and synced across your devices (Settings → Backup), so it survives a lost phone — a good everyday key. Hardware-backed keys (Secure Enclave / YubiKey) are stronger but need a backup key.\n\nUse RSA only for older gear (some network equipment) that can't accept Ed25519 or ECDSA keys.")
+                    + "Software keys back up + sync across your devices (Settings → Backup) — a good everyday key. FIDO2 and Secure Enclave are stronger hardware keys.\n\nAdvanced — a smart card (PIV) makes a plain ECDSA key every server accepts, and the same physical card works on iOS and Android with one authorized_keys line. Use RSA only for older gear that can't accept Ed25519 or ECDSA.")
             }
 
             Section {
@@ -156,9 +158,9 @@ struct KeysView: View {
             }
         } message: {
             Text("""
-            Touch your security key (and enter its PIN if asked) on the next screen. The private key never leaves the key.
+            Touch your security key (and enter its PIN if asked) on the next screen. The private key never leaves it.
 
-            Works with Android and desktop OpenSSH. Like any single hardware key, enroll a backup (another security key, or a software key) so a lost key doesn't lock you out.
+            The same physical key works on iOS and Android, but each platform needs its own enrollment — add both public keys to your server. As with any single hardware key, also keep a backup key so a lost one doesn't lock you out. (For one key that works on both platforms with a single line, use a smart card (PIV) under Advanced.)
             """)
         }
     }

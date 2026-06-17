@@ -136,7 +136,7 @@ class KeyManager(context: Context) {
         }
         val yubi = yubiPrefs.all.mapNotNull { (id, v) ->
             val blob = (v as? String)?.let { Base64.getDecoder().decode(it) } ?: return@mapNotNull null
-            AppKey(id, "YubiKey (PIV)", blob, "ecdsa-sha2-nistp256",
+            AppKey(id, "Smart card (PIV)", blob, "ecdsa-sha2-nistp256",
                 hardware = true, signer = YubiKeyPivKey(blob), yubiKey = true)
         }
         val fido = fidoPrefs.all.mapNotNull { (id, v) ->

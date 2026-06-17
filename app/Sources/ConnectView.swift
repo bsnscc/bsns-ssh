@@ -303,7 +303,7 @@ struct ConnectView: View {
 
     private func keyLabel(_ id: SSHPublicKey) -> String {
         let kind = store.isSecurityKey(id) ? "FIDO2 security key"
-            : store.isYubiKey(id) ? "YubiKey"
+            : store.isYubiKey(id) ? "Smart card"
             : store.isHardware(id) ? "Secure Enclave"
             : id.algorithm.rawValue.replacingOccurrences(of: "ssh-", with: "")
                 .replacingOccurrences(of: "ecdsa-sha2-nistp256", with: "ecdsa")

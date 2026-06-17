@@ -54,11 +54,11 @@ struct YubiKeyEnrollView: View {
                     Button(busy ? "Waiting for YubiKey…" : "Connect") { enroll() }
                         .disabled(busy || pin.isEmpty)
                 } footer: {
-                    Text("If a YubiKey is plugged into USB-C it's used directly; otherwise hold it to the top of your phone to tap over NFC.")
+                    Text("If a smart card / token is plugged into USB-C it's used directly; otherwise hold it to the top of your phone to tap over NFC. Produces a plain ECDSA key any server accepts.")
                 }
                 if let error { Section { Text(error).foregroundStyle(.red).font(.callout) } }
             }
-            .navigationTitle("Add YubiKey")
+            .navigationTitle("Add smart card (PIV)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }
