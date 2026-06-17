@@ -3,6 +3,7 @@ import UIKit
 import CoreNFC
 import CryptoKit
 import CryptoTokenKit
+import CommonCrypto
 import YubiKit
 import BsnsSSHCore
 
@@ -158,7 +159,7 @@ final class YubiKeyCoordinator {
             // Slot 9A is empty, so mint a key — which requires PIV management-key
             // auth (the PIN alone isn't enough; the card rejects generate with
             // 0x6982 otherwise).
-            try await authenticateManagementKey(conn, session, managementKeyHex: managementKeyHex)
+            try await authenticateManagementKey(conn, session, pin: pin, managementKeyHex: managementKeyHex)
             do {
                 pub = try await session.generateKey(in: .authentication, type: .ec(.secp256r1),
                                                     pinPolicy: .once, touchPolicy: .always)
@@ -176,18 +177,21 @@ final class YubiKeyCoordinator {
     /// factory default; else, if the card says it's non-default and we couldn't
     /// recover it, ask for the hex rather than failing with a bare 0x6982.
     private func authenticateManagementKey(_ conn: SmartCardConnection, _ session: PIVSession,
-                                           managementKeyHex: String?) async throws {
+                                           pin: String, managementKeyHex: String?) async throws {
         let key: Data
-        if let hex = managementKeyHex?.trimmingCharacters(in: .whitespaces), !hex.isEmpty {
-            // A PIV management key is 16 (AES-128), 24 (3DES / AES-192), or 32
-            // (AES-256) bytes — validate before handing it to YubiKit so a typo is
-            // a clear "bad management key", not a generic auth failure.
-            guard let parsed = hexToData(hex), [16, 24, 32].contains(parsed.count) else {
-                throw YubiKeyError.badManagementKey
-            }
-            key = parsed
+        let hex = (managementKeyHex ?? "").trimmingCharacters(in: .whitespaces)
+        // A PIV management key is 16 (AES-128), 24 (3DES / AES-192), or 32 (AES-256)
+        // bytes. A PIN-based key (protected/derived) takes priority over whatever is
+        // in the field — so someone who (understandably) typed their PIN there still
+        // gets in via the PIN rather than hitting "bad management key".
+        if !hex.isEmpty, let parsed = hexToData(hex), [16, 24, 32].contains(parsed.count) {
+            key = parsed                                       // an explicit, valid hex key
         } else if let stored = await readPinProtectedManagementKey(conn) {
-            key = stored
+            key = stored                                       // ykman --protect (key stored on-card)
+        } else if let derived = await deriveManagementKey(conn, pin: pin) {
+            key = derived                                      // ykman PIN-derived (key = PBKDF2(PIN, salt))
+        } else if !hex.isEmpty {
+            throw YubiKeyError.badManagementKey                // they typed something, and it isn't a valid key
         } else if let meta = try? await session.getManagementKeyMetadata(), !meta.isDefault {
             throw YubiKeyError.managementKeyRequired
         } else {
@@ -221,6 +225,47 @@ final class YubiKeyCoordinator {
               let keyRec = records(prot.value).first(where: { $0.tag == 0x89 })
         else { return nil }
         return keyRec.value
+    }
+
+    /// Derive the management key from the PIN (`ykman`'s PIN-derived mode): GET
+    /// DATA on the admin pivman object (0x5fff00); if it carries a salt (TLV
+    /// 0x80 → 0x82), the key is PBKDF2-HMAC-SHA1(PIN, salt, 10000, 24 bytes).
+    /// Returns nil if there's no salt (not a PIN-derived setup).
+    private func deriveManagementKey(_ conn: SmartCardConnection, pin: String) async -> Data? {
+        // 00 CB 3F FF  Lc=05  5C 03 5F FF 00  Le=00  (GET DATA → object 0x5fff00)
+        let apdu = Data([0x00, 0xCB, 0x3F, 0xFF, 0x05, 0x5C, 0x03, 0x5F, 0xFF, 0x00, 0x00])
+        guard let resp = try? await conn.send(data: apdu) else { return nil }
+        let bytes = [UInt8](resp)
+        guard bytes.count >= 2 else { return nil }
+        let sw = (UInt16(bytes[bytes.count - 2]) << 8) | UInt16(bytes[bytes.count - 1])
+        guard sw == 0x9000 else { return nil }
+        let body = Data(bytes[0 ..< bytes.count - 2])
+        func records(_ d: Data) -> [TKTLVRecord] { TKBERTLVRecord.sequenceOfRecords(from: d) ?? [] }
+        guard let obj = records(body).first(where: { $0.tag == 0x53 }),
+              let admin = records(obj.value).first(where: { $0.tag == 0x80 }),
+              let saltRec = records(admin.value).first(where: { $0.tag == 0x82 }),
+              !saltRec.value.isEmpty
+        else { return nil }
+        return Self.pbkdf2SHA1(pin: pin, salt: saltRec.value, rounds: 10000, length: 24)
+    }
+
+    /// PBKDF2-HMAC-SHA1 (CommonCrypto) — matches ykman's PIN-derived management key.
+    private static func pbkdf2SHA1(pin: String, salt: Data, rounds: Int, length: Int) -> Data {
+        var derived = Data(count: length)
+        let pinData = Data(pin.utf8)
+        derived.withUnsafeMutableBytes { dk in
+            pinData.withUnsafeBytes { pp in
+                salt.withUnsafeBytes { sp in
+                    _ = CCKeyDerivationPBKDF(
+                        CCPBKDFAlgorithm(kCCPBKDF2),
+                        pp.bindMemory(to: Int8.self).baseAddress, pinData.count,
+                        sp.bindMemory(to: UInt8.self).baseAddress, salt.count,
+                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA1), UInt32(rounds),
+                        dk.bindMemory(to: UInt8.self).baseAddress, length)
+                }
+            }
+        }
+        return derived
     }
 
     /// Re-supply the PIN after an app restart (validated against the key).
