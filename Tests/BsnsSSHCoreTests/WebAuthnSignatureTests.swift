@@ -45,6 +45,64 @@ struct WebAuthnSignatureTests {
         #expect(Array(raw.suffix(32)) == s)
     }
 
+    // --- CBOR encode helpers (tests only) -------------------------------------
+    private func cborUInt(_ n: UInt64) -> [UInt8] {
+        if n <= 23 { return [UInt8(n)] }
+        if n <= 0xff { return [0x18, UInt8(n)] }
+        if n <= 0xffff { return [0x19, UInt8(n >> 8), UInt8(n & 0xff)] }
+        return [0x1a, UInt8(n >> 24), UInt8((n >> 16) & 0xff), UInt8((n >> 8) & 0xff), UInt8(n & 0xff)]
+    }
+    private func cborNeg(_ v: Int) -> [UInt8] { var h = cborUInt(UInt64(-1 - v)); h[0] |= 0x20; return h }
+    private func cborBytes(_ d: [UInt8]) -> [UInt8] { var h = cborUInt(UInt64(d.count)); h[0] |= 0x40; return h + d }
+    private func cborText(_ s: String) -> [UInt8] { let b = [UInt8](s.utf8); var h = cborUInt(UInt64(b.count)); h[0] |= 0x60; return h + b }
+    private func cborMap(_ count: Int) -> [UInt8] { var h = cborUInt(UInt64(count)); h[0] |= 0xa0; return h }
+
+    @Test("CBOR decodes maps, ints, byte strings; int-key lookup handles negatives")
+    func cborBasics() throws {
+        // { 1: 2, 3: -7, -1: 1, -2: h'AA…(3) }
+        let bytes = cborMap(4) + cborUInt(1) + cborUInt(2) + cborUInt(3) + cborNeg(-7)
+            + cborNeg(-1) + cborUInt(1) + cborNeg(-2) + cborBytes([0xAA, 0xBB, 0xCC])
+        let v = try CBOR.decode(Data(bytes))
+        #expect(v.value(intKey: 1) == .uint(2))
+        #expect(v.value(intKey: 3) == .negint(-7))
+        #expect(v.value(intKey: -1) == .uint(1))
+        #expect(v.value(intKey: -2) == .bytes(Data([0xAA, 0xBB, 0xCC])))
+        #expect(v.value(intKey: 9) == nil)
+    }
+
+    /// Build a synthetic COSE EC2/P-256/ES256 key for `x`,`y`.
+    private func coseKey(x: [UInt8], y: [UInt8]) -> [UInt8] {
+        cborMap(5) + cborUInt(1) + cborUInt(2) + cborUInt(3) + cborNeg(-7)
+            + cborNeg(-1) + cborUInt(1) + cborNeg(-2) + cborBytes(x) + cborNeg(-3) + cborBytes(y)
+    }
+
+    @Test("attestation object → sk-ecdsa public blob")
+    func attestationToPublicBlob() throws {
+        let x = [UInt8](repeating: 0x31, count: 32)
+        let y = [UInt8](repeating: 0x32, count: 32)
+        let credId = [UInt8](repeating: 0xCC, count: 4)
+        var authData: [UInt8] = []
+        authData += [UInt8](repeating: 0xAA, count: 32)   // rpIdHash
+        authData += [0x45]                                 // flags
+        authData += [0x00, 0x00, 0x00, 0x09]               // counter
+        authData += [UInt8](repeating: 0xBB, count: 16)    // aaguid
+        authData += [0x00, UInt8(credId.count)]            // credIdLen (big-endian)
+        authData += credId
+        authData += coseKey(x: x, y: y)
+        let attestation = cborMap(1) + cborText("authData") + cborBytes(authData)
+
+        let blob = try WebAuthnSignature.publicKeyBlob(fromAttestationObject: Data(attestation), application: "tools.bsns.cc")
+        var d = SSHDecoder(blob)
+        #expect(try d.readStringUTF8() == "sk-ecdsa-sha2-nistp256@openssh.com")
+        #expect(try d.readStringUTF8() == "nistp256")
+        #expect(try d.readString() == Data([0x04] + x + y))
+        #expect(try d.readStringUTF8() == "tools.bsns.cc")
+
+        let (flags, counter) = try WebAuthnSignature.authenticatorFlagsAndCounter(Data(authData))
+        #expect(flags == 0x45)
+        #expect(counter == 9)
+    }
+
     @Test("webauthn-sk signature blob matches the PROTOCOL.u2f layout")
     func signatureBlobLayout() throws {
         let r = [UInt8](repeating: 0x33, count: 32)   // high bit clear → mpint == raw

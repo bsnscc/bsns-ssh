@@ -46,6 +46,45 @@ public enum WebAuthnSignature {
         }
     }
 
+    /// Extract the `sk-ecdsa-sha2-nistp256@openssh.com` public-key blob from a
+    /// WebAuthn attestation object (CBOR). The attestation map holds `authData`,
+    /// whose attested-credential-data section ends in the COSE_Key (EC2/P-256/ES256);
+    /// the point `0x04 || X || Y` plus `application` (the rpId) form the SSH blob.
+    /// `application` becomes the `application=` field stored in `authorized_keys`.
+    public static func publicKeyBlob(fromAttestationObject attestation: Data, application: String) throws -> Data {
+        let obj = try CBOR.decode(attestation)
+        guard case let .bytes(authData)? = obj.value(textKey: "authData") else {
+            throw KeyBackendError.signingFailed("attestation: no authData")
+        }
+        // authData: rpIdHash(32) flags(1) counter(4) aaguid(16) credIdLen(2) credId(len) COSE_Key…
+        guard authData.count >= 37 + 18 else { throw KeyBackendError.signingFailed("attestation: authData too short") }
+        let a = [UInt8](authData)
+        var off = 37 + 16                                  // skip to credIdLen
+        let credIdLen = Int(a[off]) << 8 | Int(a[off + 1]); off += 2
+        off += credIdLen
+        guard off <= a.count else { throw KeyBackendError.signingFailed("attestation: bad credential id length") }
+        let cose = try CBOR.decode(Data(a[off...]))
+        // kty(1)==2 EC2, alg(3)==-7 ES256, crv(-1)==1 P-256
+        guard cose.value(intKey: 1) == .uint(2) else { throw KeyBackendError.signingFailed("attestation: key not EC2") }
+        guard cose.value(intKey: 3) == .negint(-7) else { throw KeyBackendError.signingFailed("attestation: key not ES256") }
+        guard cose.value(intKey: -1) == .uint(1) else { throw KeyBackendError.signingFailed("attestation: curve not P-256") }
+        guard case let .bytes(x)? = cose.value(intKey: -2), case let .bytes(y)? = cose.value(intKey: -3),
+              x.count == 32, y.count == 32 else {
+            throw KeyBackendError.signingFailed("attestation: missing/!32-byte EC point")
+        }
+        let point = Data([0x04]) + x + y
+        return SSHKeyFormat.skEcdsaPublicBlob(x963Point: point, application: application)
+    }
+
+    /// Parse the `flags` byte and signature `counter` (big-endian) from WebAuthn
+    /// `authenticatorData` (RP-id-hash(32) ‖ flags(1) ‖ counter(4) ‖ …).
+    public static func authenticatorFlagsAndCounter(_ authData: Data) throws -> (flags: UInt8, counter: UInt32) {
+        let a = [UInt8](authData)
+        guard a.count >= 37 else { throw KeyBackendError.signingFailed("authenticatorData too short") }
+        let counter = UInt32(a[33]) << 24 | UInt32(a[34]) << 16 | UInt32(a[35]) << 8 | UInt32(a[36])
+        return (a[32], counter)
+    }
+
     /// Parse an ASN.1 DER ECDSA-P256 signature (`SEQUENCE { INTEGER r, INTEGER s }`)
     /// into a fixed 64-byte `r || s` (each left-padded/trimmed to 32 bytes). DER
     /// integers are signed, so a high-bit value carries a leading 0x00 we strip;
