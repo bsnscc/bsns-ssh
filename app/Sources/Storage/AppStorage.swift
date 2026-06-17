@@ -36,13 +36,28 @@ final class HostStore {
         }
     }
 
-    func add(_ host: SavedHost) { hosts.append(host); save() }
+    /// Identity of a saved host: the same `user@host:port` triple is the "same"
+    /// host. Saving it again overwrites the entry (refreshing label / mosh / jump
+    /// / group) rather than appending a duplicate; identical settings are a no-op.
+    private func identity(_ h: SavedHost) -> String { "\(h.user)@\(h.host):\(h.port)" }
+
+    func add(_ host: SavedHost) {
+        if let i = hosts.firstIndex(where: { identity($0) == identity(host) }) {
+            var updated = host
+            updated.id = hosts[i].id     // keep the list row's identity stable
+            hosts[i] = updated
+        } else {
+            hosts.append(host)
+        }
+        save()
+    }
+
     func remove(_ host: SavedHost) { hosts.removeAll { $0.id == host.id }; save() }
 
     /// Add imported hosts, skipping ones that already match by host/port/user.
     func merge(_ incoming: [SavedHost]) {
-        let existing = Set(hosts.map { "\($0.user)@\($0.host):\($0.port)" })
-        for h in incoming where !existing.contains("\(h.user)@\(h.host):\(h.port)") { hosts.append(h) }
+        let existing = Set(hosts.map(identity))
+        for h in incoming where !existing.contains(identity(h)) { hosts.append(h) }
         save()
     }
 
