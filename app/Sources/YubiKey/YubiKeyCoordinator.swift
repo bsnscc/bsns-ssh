@@ -193,7 +193,16 @@ final class YubiKeyCoordinator {
         } else if !hex.isEmpty {
             throw YubiKeyError.badManagementKey                // they typed something, and it isn't a valid key
         } else if let meta = try? await session.getManagementKeyMetadata(), !meta.isDefault {
-            throw YubiKeyError.managementKeyRequired
+            // Non-default but neither PIN-protected nor PIN-derived recovered it.
+            // Surface the raw card status of both objects so we can tell whether
+            // they're absent (genuinely custom key) or present-but-unparsed.
+            let prot = await getDataObject(conn, objectId: [0x5F, 0xFF, 0x01])
+            let admin = await getDataObject(conn, objectId: [0x5F, 0xFF, 0x00])
+            throw YubiKeyError.stageFailed(
+                stage: "management key",
+                detail: "custom key, not auto-recovered — protected SW=\(Self.hex4(prot?.sw)), "
+                    + "admin SW=\(Self.hex4(admin?.sw)), type=\(meta.keyType). Enter it as hex, "
+                    + "or reset it (ykman piv access change-management-key).")
         } else {
             key = Self.defaultManagementKey
         }
@@ -205,48 +214,43 @@ final class YubiKeyCoordinator {
         }
     }
 
-    /// Read the PIN-protected management key stored on the card (`ykman
-    /// --protect`): GET DATA on the protected pivman object (0x5fff01), which
-    /// holds the key as TLV 0x88 → 0x89. Only succeeds after PIN verification;
-    /// returns nil if the card has no such object (i.e. not a PIN-protected setup).
-    /// Built as raw APDU bytes since YubiKit's typed `send(apdu:)` isn't public.
-    private func readPinProtectedManagementKey(_ conn: SmartCardConnection) async -> Data? {
-        // 00 CB 3F FF  Lc=05  5C 03 5F FF 01  Le=00  (GET DATA, tag-list → object 0x5fff01)
-        let apdu = Data([0x00, 0xCB, 0x3F, 0xFF, 0x05, 0x5C, 0x03, 0x5F, 0xFF, 0x01, 0x00])
-        guard let resp = try? await conn.send(data: apdu) else { return nil }
-        let bytes = [UInt8](resp)
-        guard bytes.count >= 2 else { return nil }
-        let sw = (UInt16(bytes[bytes.count - 2]) << 8) | UInt16(bytes[bytes.count - 1])
-        guard sw == 0x9000 else { return nil }   // 0x6A82 etc. = no protected object
-        let body = Data(bytes[0 ..< bytes.count - 2])
-        func records(_ d: Data) -> [TKTLVRecord] { TKBERTLVRecord.sequenceOfRecords(from: d) ?? [] }
-        guard let obj = records(body).first(where: { $0.tag == 0x53 }),
-              let prot = records(obj.value).first(where: { $0.tag == 0x88 }),
-              let keyRec = records(prot.value).first(where: { $0.tag == 0x89 })
-        else { return nil }
-        return keyRec.value
+    /// GET DATA for a 3-byte PIV object id; returns the card status word + the
+    /// response body (status stripped). Raw APDU bytes, since YubiKit's typed
+    /// `send(apdu:)` isn't public.
+    private func getDataObject(_ conn: SmartCardConnection, objectId: [UInt8]) async -> (sw: UInt16, body: Data)? {
+        var apdu: [UInt8] = [0x00, 0xCB, 0x3F, 0xFF, UInt8(2 + objectId.count), 0x5C, UInt8(objectId.count)]
+        apdu += objectId
+        apdu.append(0x00)   // Le
+        guard let resp = try? await conn.send(data: Data(apdu)) else { return nil }
+        let b = [UInt8](resp)
+        guard b.count >= 2 else { return nil }
+        return ((UInt16(b[b.count - 2]) << 8) | UInt16(b[b.count - 1]), Data(b[0 ..< b.count - 2]))
     }
 
-    /// Derive the management key from the PIN (`ykman`'s PIN-derived mode): GET
-    /// DATA on the admin pivman object (0x5fff00); if it carries a salt (TLV
-    /// 0x80 → 0x82), the key is PBKDF2-HMAC-SHA1(PIN, salt, 10000, 24 bytes).
-    /// Returns nil if there's no salt (not a PIN-derived setup).
+    private static func records(_ d: Data) -> [TKTLVRecord] { TKBERTLVRecord.sequenceOfRecords(from: d) ?? [] }
+    /// GET DATA usually wraps the object in a 0x53 envelope; tolerate both.
+    private static func unwrap53(_ body: Data) -> Data { records(body).first(where: { $0.tag == 0x53 })?.value ?? body }
+    private static func hex4(_ v: UInt16?) -> String { v.map { String(format: "%04X", $0) } ?? "none" }
+
+    /// Read the PIN-protected management key stored on the card (`ykman
+    /// --protect`): protected pivman object (0x5fff01), key as TLV 0x88 → 0x89.
+    /// Only succeeds after PIN verification; nil if the object isn't present.
+    private func readPinProtectedManagementKey(_ conn: SmartCardConnection) async -> Data? {
+        guard let r = await getDataObject(conn, objectId: [0x5F, 0xFF, 0x01]), r.sw == 0x9000 else { return nil }
+        let content = Self.unwrap53(r.body)
+        let inner = Self.records(content).first(where: { $0.tag == 0x88 })?.value ?? content
+        return Self.records(inner).first(where: { $0.tag == 0x89 })?.value
+    }
+
+    /// Derive the management key from the PIN (`ykman`'s PIN-derived mode): admin
+    /// pivman object (0x5fff00); if it carries a salt (TLV 0x80 → 0x82), the key
+    /// is PBKDF2-HMAC-SHA1(PIN, salt, 10000, 24 bytes). Nil if there's no salt.
     private func deriveManagementKey(_ conn: SmartCardConnection, pin: String) async -> Data? {
-        // 00 CB 3F FF  Lc=05  5C 03 5F FF 00  Le=00  (GET DATA → object 0x5fff00)
-        let apdu = Data([0x00, 0xCB, 0x3F, 0xFF, 0x05, 0x5C, 0x03, 0x5F, 0xFF, 0x00, 0x00])
-        guard let resp = try? await conn.send(data: apdu) else { return nil }
-        let bytes = [UInt8](resp)
-        guard bytes.count >= 2 else { return nil }
-        let sw = (UInt16(bytes[bytes.count - 2]) << 8) | UInt16(bytes[bytes.count - 1])
-        guard sw == 0x9000 else { return nil }
-        let body = Data(bytes[0 ..< bytes.count - 2])
-        func records(_ d: Data) -> [TKTLVRecord] { TKBERTLVRecord.sequenceOfRecords(from: d) ?? [] }
-        guard let obj = records(body).first(where: { $0.tag == 0x53 }),
-              let admin = records(obj.value).first(where: { $0.tag == 0x80 }),
-              let saltRec = records(admin.value).first(where: { $0.tag == 0x82 }),
-              !saltRec.value.isEmpty
-        else { return nil }
-        return Self.pbkdf2SHA1(pin: pin, salt: saltRec.value, rounds: 10000, length: 24)
+        guard let r = await getDataObject(conn, objectId: [0x5F, 0xFF, 0x00]), r.sw == 0x9000 else { return nil }
+        let content = Self.unwrap53(r.body)
+        let admin = Self.records(content).first(where: { $0.tag == 0x80 })?.value ?? content
+        guard let salt = Self.records(admin).first(where: { $0.tag == 0x82 })?.value, !salt.isEmpty else { return nil }
+        return Self.pbkdf2SHA1(pin: pin, salt: salt, rounds: 10000, length: 24)
     }
 
     /// PBKDF2-HMAC-SHA1 (CommonCrypto) — matches ykman's PIN-derived management key.
