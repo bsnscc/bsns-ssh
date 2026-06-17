@@ -31,6 +31,22 @@ public enum SSHKeyFormat {
         }
     }
 
+    /// `sk-ecdsa-sha2-nistp256@openssh.com` (FIDO2 security-key) public-key blob:
+    /// `string(type) || string("nistp256") || string(Q) || string(application)`.
+    /// `Q` is the uncompressed point `0x04 || X || Y`; `application` is the FIDO
+    /// relying-party id (rpId) baked into the key. This is the exact same blob
+    /// shape on iOS and Android (the cross-platform contract); a key enrolled via
+    /// Apple's WebAuthn API signs with the `webauthn-sk-…` variant at runtime, but
+    /// the stored public key is this ordinary `sk-ecdsa-…` blob.
+    public static func skEcdsaPublicBlob(x963Point: Data, application: String) -> Data {
+        SSHEncoder.build {
+            $0.writeString("sk-ecdsa-sha2-nistp256@openssh.com")
+            $0.writeString("nistp256")
+            $0.writeString(x963Point)
+            $0.writeString(application)
+        }
+    }
+
     /// `ssh-rsa` public-key blob: `string("ssh-rsa") || mpint(e) || mpint(n)`
     /// (RFC 4253 §6.6 — the exponent comes before the modulus).
     public static func rsaPublicBlob(exponent: Data, modulus: Data) -> Data {

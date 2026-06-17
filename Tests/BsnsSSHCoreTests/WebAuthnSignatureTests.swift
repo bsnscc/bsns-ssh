@@ -1,0 +1,76 @@
+import Foundation
+import Testing
+@testable import BsnsSSHCore
+
+@Suite("webauthn-sk signature + sk-ecdsa public key (PROTOCOL.u2f)")
+struct WebAuthnSignatureTests {
+
+    @Test("sk-ecdsa public blob is well-formed (cross-platform contract)")
+    func skEcdsaBlob() throws {
+        var point = Data([0x04]); point.append(Data(repeating: 0x11, count: 32)); point.append(Data(repeating: 0x22, count: 32))
+        let blob = SSHKeyFormat.skEcdsaPublicBlob(x963Point: point, application: "tools.bsns.cc")
+        var d = SSHDecoder(blob)
+        #expect(try d.readStringUTF8() == "sk-ecdsa-sha2-nistp256@openssh.com")
+        #expect(try d.readStringUTF8() == "nistp256")
+        #expect(try d.readString() == point)
+        #expect(try d.readStringUTF8() == "tools.bsns.cc")
+    }
+
+    @Test("DER ECDSA signature parses to fixed 64-byte r||s, stripping sign padding")
+    func derToRawRS() throws {
+        // r = 0x44… (no high bit, 32 bytes); s = 0x80… (high bit set → DER adds a 0x00
+        // sign byte, making the INTEGER content 33 bytes, which we must strip back to 32).
+        let r = [UInt8](repeating: 0x44, count: 32)
+        var sCore = [UInt8](repeating: 0x80, count: 32)          // high bit set
+        let sDER = [UInt8](repeating: 0x00, count: 1) + sCore     // DER sign-padded → 33 bytes
+        var der: [UInt8] = []
+        der += [0x02, UInt8(r.count)] + r
+        der += [0x02, UInt8(sDER.count)] + sDER
+        let body = [0x30, UInt8(der.count)] + der
+        let raw = try WebAuthnSignature.rawRS(fromDER: Data(body))
+        #expect(raw.count == 64)
+        #expect(Array(raw.prefix(32)) == r)
+        #expect(Array(raw.suffix(32)) == sCore)                   // sign byte stripped, still 32
+    }
+
+    @Test("short DER integer is left-padded to 32 bytes")
+    func shortIntegerPadded() throws {
+        let r: [UInt8] = [0x01, 0x02, 0x03]                       // 3 bytes → pad to 32
+        let s = [UInt8](repeating: 0x09, count: 32)
+        var der: [UInt8] = []
+        der += [0x02, UInt8(r.count)] + r
+        der += [0x02, UInt8(s.count)] + s
+        let raw = try WebAuthnSignature.rawRS(fromDER: Data([0x30, UInt8(der.count)] + der))
+        #expect(Array(raw.prefix(32)) == [UInt8](repeating: 0, count: 29) + r)
+        #expect(Array(raw.suffix(32)) == s)
+    }
+
+    @Test("webauthn-sk signature blob matches the PROTOCOL.u2f layout")
+    func signatureBlobLayout() throws {
+        let r = [UInt8](repeating: 0x33, count: 32)   // high bit clear → mpint == raw
+        let sCore = [UInt8](repeating: 0x88, count: 32)  // high bit set → mpint prepends 0x00
+        let sDER = [0x00] + sCore                      // DER sign byte
+        var der: [UInt8] = []
+        der += [0x02, UInt8(r.count)] + r
+        der += [0x02, UInt8(sDER.count)] + sDER
+        let derSig = Data([0x30, UInt8(der.count)] + der)
+
+        let origin = "https://tools.bsns.cc"
+        let clientData = Data(#"{"type":"webauthn.get","challenge":"AAAA","origin":"https://tools.bsns.cc"}"#.utf8)
+        let blob = try WebAuthnSignature.signatureBlob(
+            derSignature: derSig, flags: 0x05, counter: 0x01020304,
+            origin: origin, clientDataJSON: clientData)
+
+        var d = SSHDecoder(blob)
+        #expect(try d.readStringUTF8() == "webauthn-sk-ecdsa-sha2-nistp256@openssh.com")
+        // ecdsa_signature = string( mpint r || mpint s )
+        var sig = SSHDecoder(try d.readString())
+        #expect(try sig.readString() == Data(r))            // r high bit clear → mpint == raw 32 bytes
+        #expect(try sig.readString() == Data([0x00] + sCore))  // s high bit set → mpint prepends 0x00
+        #expect(try d.readByte() == 0x05)
+        #expect(try d.readUInt32() == 0x01020304)
+        #expect(try d.readStringUTF8() == origin)
+        #expect(try d.readString() == clientData)
+        #expect(try d.readString() == Data())       // empty extensions
+    }
+}
