@@ -33,11 +33,16 @@ final class AgentSignBridge: @unchecked Sendable {
     let agent: Agent
     let publicKeyBlob: Data
     let signContext: SignContext
+    /// When true the agent returns a COMPLETE signature blob (its own format +
+    /// trailer, e.g. webauthn-sk) that must be sent verbatim — don't strip it to
+    /// an inner body. Paired with `libssh2_userauth_publickey_raw`.
+    let rawSignature: Bool
 
-    init(agent: Agent, publicKeyBlob: Data, signContext: SignContext) {
+    init(agent: Agent, publicKeyBlob: Data, signContext: SignContext, rawSignature: Bool = false) {
         self.agent = agent
         self.publicKeyBlob = publicKeyBlob
         self.signContext = signContext
+        self.rawSignature = rawSignature
     }
 
     func signSync(_ data: Data) -> Data? {
@@ -59,6 +64,9 @@ final class AgentSignBridge: @unchecked Sendable {
         }
         semaphore.wait()
         guard let full = box.value?.blob else { return nil }
+        // A webauthn-sk signature is a complete, self-describing blob sent verbatim
+        // via libssh2_userauth_publickey_raw — don't unwrap it.
+        if rawSignature { return full }
         var decoder = SSHDecoder(full)
         _ = try? decoder.readString()    // format
         return try? decoder.readString() // inner body
@@ -351,16 +359,23 @@ public final class SSHShell: @unchecked Sendable {
     private func authenticate(_ session: OpaquePointer, user: String, identities: [SSHPublicKey], agent: Agent, host: String) throws {
         var lastError = "no identity accepted"
         for identity in identities {
+            // FIDO2 security keys (sk-ecdsa) sign with the webauthn-sk variant, a
+            // complete signature blob libssh2 must send verbatim — use the raw path.
+            let isSecurityKey = identity.algorithm == .ecdsaSK
             let bridge = AgentSignBridge(agent: agent, publicKeyBlob: identity.blob,
-                                         signContext: SignContext(host: host, purpose: .sshUserAuth))
+                                         signContext: SignContext(host: host, purpose: .sshUserAuth),
+                                         rawSignature: isSecurityKey)
             self.bridge = bridge
             var abstract: UnsafeMutableRawPointer? = Unmanaged.passUnretained(bridge).toOpaque()
             let rc: Int32 = identity.blob.withUnsafeBytes { (pk: UnsafeRawBufferPointer) in
                 withUnsafeMutablePointer(to: &abstract) { absP in
                     user.withCString { cuser in
-                        libssh2_userauth_publickey(session, cuser,
-                                                   pk.bindMemory(to: UInt8.self).baseAddress, pk.count,
-                                                   agentSignCallback, absP)
+                        let pkPtr = pk.bindMemory(to: UInt8.self).baseAddress
+                        return isSecurityKey
+                            ? libssh2_userauth_publickey_raw(session, cuser, pkPtr, pk.count,
+                                                             agentSignCallback, absP)
+                            : libssh2_userauth_publickey(session, cuser, pkPtr, pk.count,
+                                                         agentSignCallback, absP)
                     }
                 }
             }

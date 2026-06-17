@@ -12,8 +12,9 @@ enum KeyStore {
         let algorithm: String
         let material: Data        // software: raw private key; enclave: wrapped key data; yubikey: public blob
         let comment: String
-        var kind: String?          // nil/"file" = software; "enclave" = Secure Enclave; "yubikey" = PIV token
+        var kind: String?          // nil/"file" = software; "enclave" = Secure Enclave; "yubikey" = PIV token; "webauthn" = FIDO2 security key
         var slot: UInt8?           // yubikey: PIV slot
+        var credentialID: Data?    // webauthn: FIDO credential id (material holds the public blob)
     }
 
     static func save(_ key: FileKey) {
@@ -35,6 +36,13 @@ enum KeyStore {
             algorithm: key.algorithm.rawValue,
             material: key.publicKey.blob,
             comment: key.publicKey.comment, kind: "yubikey", slot: key.slot))
+    }
+
+    static func saveWebAuthn(_ key: WebAuthnSecurityKey) {
+        persist(account: key.id.rawValue, Stored(
+            algorithm: key.algorithm.rawValue,
+            material: key.publicKey.blob,
+            comment: key.publicKey.comment, kind: "webauthn", credentialID: key.credentialID))
     }
 
     private static func persist(account: String, _ stored: Stored) {
@@ -74,6 +82,11 @@ enum KeyStore {
             }
             if stored.kind == "yubikey" {
                 return YubiKeyPIVKey.make(publicBlob: stored.material, slot: stored.slot ?? 0x9a, comment: stored.comment)
+            }
+            if stored.kind == "webauthn" {
+                return WebAuthnSecurityKey.make(publicBlob: stored.material,
+                                                credentialID: stored.credentialID ?? Data(),
+                                                comment: stored.comment)
             }
             guard let algorithm = KeyAlgorithm(rawValue: stored.algorithm) else { return nil }
             return try? FileKey.from(algorithm: algorithm, privateKeyMaterial: stored.material, comment: stored.comment)

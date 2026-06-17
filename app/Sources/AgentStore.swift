@@ -13,6 +13,7 @@ final class AgentStore {
     /// Fingerprints of hardware-backed keys, and the subset that are YubiKeys.
     private(set) var hardwareKeyIDs: Set<String> = []
     private(set) var yubiKeyIDs: Set<String> = []
+    private(set) var securityKeyIDs: Set<String> = []
 
     /// Whether this device can create Secure Enclave keys (false on the simulator).
     var enclaveAvailable: Bool { SecureEnclaveKey.isAvailable }
@@ -23,6 +24,7 @@ final class AgentStore {
                 await agent.add(key)
                 if key.requiresUserPresence { hardwareKeyIDs.insert(key.id.rawValue) }
                 if key is YubiKeyPIVKey { yubiKeyIDs.insert(key.id.rawValue) }
+                if key is WebAuthnSecurityKey { securityKeyIDs.insert(key.id.rawValue) }
             }
             await refresh()
         }
@@ -41,6 +43,24 @@ final class AgentStore {
 
     func isYubiKey(_ identity: SSHPublicKey) -> Bool {
         yubiKeyIDs.contains(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
+    }
+
+    func isSecurityKey(_ identity: SSHPublicKey) -> Bool {
+        securityKeyIDs.contains(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
+    }
+
+    /// Enroll a FIDO2 security key via Apple's WebAuthn API (touch + PIN/UV); adds
+    /// it as an identity. The private key stays on the token.
+    func enrollSecurityKey(name: String) async throws {
+        let result = try await WebAuthnCoordinator.shared.enroll(name: name)
+        let key = WebAuthnSecurityKey.make(publicBlob: result.publicBlob,
+                                           credentialID: result.credentialID,
+                                           comment: name.isEmpty ? "FIDO2 security key" : name)
+        KeyStore.saveWebAuthn(key)
+        await agent.add(key)
+        hardwareKeyIDs.insert(key.id.rawValue)
+        securityKeyIDs.insert(key.id.rawValue)
+        await refresh()
     }
 
     func refresh() async {
@@ -87,6 +107,7 @@ final class AgentStore {
         await agent.remove(id)
         hardwareKeyIDs.remove(id.rawValue)
         yubiKeyIDs.remove(id.rawValue)
+        securityKeyIDs.remove(id.rawValue)
         await refresh()
     }
 }
