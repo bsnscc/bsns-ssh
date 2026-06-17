@@ -44,7 +44,15 @@ final class AgentSignBridge: @unchecked Sendable {
         final class Box: @unchecked Sendable { var value: SSHSignature? }
         let box = Box()
         let semaphore = DispatchSemaphore(value: 0)
-        let agent = self.agent, blob = self.publicKeyBlob, context = self.signContext
+        // libssh2 1.11 may upgrade an ssh-rsa key's userauth signature to
+        // rsa-sha2-256/512 based on the server's server-sig-algs, and it frames the
+        // signature with that name. The to-be-signed blob carries the same algorithm
+        // name, so parse it and sign with the matching hash — otherwise we'd return a
+        // SHA-1 body under an rsa-sha2-* frame and a modern server rejects auth.
+        let rsaAlg = Self.rsaAlgorithm(fromSignedData: data) ?? self.signContext.rsaAlgorithm
+        let context = SignContext(host: self.signContext.host, purpose: self.signContext.purpose,
+                                  rsaAlgorithm: rsaAlg)
+        let agent = self.agent, blob = self.publicKeyBlob
         Task {
             box.value = try? await agent.sign(publicKeyBlob: blob, data: data, context: context)
             semaphore.signal()
@@ -54,6 +62,29 @@ final class AgentSignBridge: @unchecked Sendable {
         var decoder = SSHDecoder(full)
         _ = try? decoder.readString()    // format
         return try? decoder.readString() // inner body
+    }
+
+    /// Parse the public-key-algorithm name out of an SSH userauth signed blob
+    /// (RFC 4252 §7): string(session-id) byte(msg) string(user) string(service)
+    /// string("publickey") bool string(algorithm) string(pubkey). Returns the RSA
+    /// hash that name implies, or nil if it isn't an RSA userauth signature.
+    static func rsaAlgorithm(fromSignedData data: Data) -> RSASignatureAlgorithm? {
+        var d = SSHDecoder(data)
+        do {
+            _ = try d.readString()   // session id
+            _ = try d.readByte()     // SSH_MSG_USERAUTH_REQUEST
+            _ = try d.readString()   // user
+            _ = try d.readString()   // service
+            _ = try d.readString()   // "publickey"
+            _ = try d.readByte()     // has-signature bool
+            let name = String(decoding: try d.readString(), as: UTF8.self)
+            switch name {
+            case "rsa-sha2-512": return .sha512
+            case "rsa-sha2-256": return .sha256
+            case "ssh-rsa": return .sha1
+            default: return nil
+            }
+        } catch { return nil }
     }
 }
 

@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import cc.bsns.ssh.core.FileKey
 import cc.bsns.ssh.core.KeyAlgorithm
+import cc.bsns.ssh.core.RsaSignatureAlgorithm
 import cc.bsns.ssh.core.SshDecoder
 import cc.bsns.ssh.core.SshKeyFormat
 import cc.bsns.ssh.transport.KeystoreSigner
@@ -24,10 +25,33 @@ private const val HARDWARE_ALIAS = "bsns-app-key"
 class FileKeySigner(private val fileKey: FileKey) {
     val publicKeyBlob: ByteArray get() = fileKey.publicKey.blob
     fun sign(data: ByteArray): ByteArray {
-        val full = fileKey.sign(data)        // string(format) || string(body)
+        // libssh2 may frame an ssh-rsa key's signature as rsa-sha2-256/512 based on
+        // the server's server-sig-algs, and the to-be-signed blob carries that name.
+        // Parse it so the RSA body uses the matching hash (a SHA-1 body under an
+        // rsa-sha2-* frame is rejected by modern servers). Ignored for non-RSA keys.
+        val full = fileKey.sign(data, rsaAlgorithmFor(data))   // string(format) || string(body)
         val d = SshDecoder(full)
         d.readString()                       // skip format
         return d.readString()                // body
+    }
+
+    /// Read the public-key-algorithm name from an SSH userauth signed blob
+    /// (RFC 4252 §7) and map it to the RSA hash it implies.
+    private fun rsaAlgorithmFor(data: ByteArray): RsaSignatureAlgorithm = try {
+        val d = SshDecoder(data)
+        d.readString()   // session id
+        d.readByte()     // SSH_MSG_USERAUTH_REQUEST
+        d.readString()   // user
+        d.readString()   // service
+        d.readString()   // "publickey"
+        d.readByte()     // has-signature bool
+        when (String(d.readString(), Charsets.UTF_8)) {
+            "rsa-sha2-512" -> RsaSignatureAlgorithm.SHA512
+            "rsa-sha2-256" -> RsaSignatureAlgorithm.SHA256
+            else -> RsaSignatureAlgorithm.SHA1
+        }
+    } catch (e: Exception) {
+        RsaSignatureAlgorithm.SHA1
     }
 }
 
