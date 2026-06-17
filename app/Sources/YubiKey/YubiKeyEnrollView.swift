@@ -7,6 +7,7 @@ struct YubiKeyEnrollView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var pin = ""
+    @State private var managementKey = ""
     @State private var busy = false
     @State private var error: String?
 
@@ -14,10 +15,17 @@ struct YubiKeyEnrollView: View {
         NavigationStack {
             Form {
                 Section {
-                    SecureField("PIV PIN", text: $pin)
+                    SecureField("PIV user PIN", text: $pin)
                         .keyboardType(.numberPad).textContentType(.password)
                 } footer: {
-                    Text("The PIV PIN protects the key on your YubiKey (default 123456). It's kept only in memory for this session.")
+                    Text("The PIV user PIN (default 123456) authorizes signing. It's kept only in memory for this session. (Not the PUK or the management key.)")
+                }
+                Section {
+                    TextField("Management key (hex) — only if changed", text: $managementKey)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                        .font(.system(.body, design: .monospaced))
+                } footer: {
+                    Text("Only needed to create a new key on the YubiKey, and only if you've changed the PIV management key from its default (010203…08). Leave blank otherwise.")
                 }
                 Section {
                     Button(busy ? "Waiting for YubiKey…" : "Connect") { enroll() }
@@ -37,7 +45,7 @@ struct YubiKeyEnrollView: View {
         error = nil; busy = true
         Task {
             do {
-                try await store.enrollYubiKey(pin: pin)
+                try await store.enrollYubiKey(pin: pin, managementKeyHex: managementKey.isEmpty ? nil : managementKey)
                 dismiss()
             } catch {
                 self.error = error.localizedDescription

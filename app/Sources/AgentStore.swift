@@ -29,8 +29,8 @@ final class AgentStore {
     }
 
     /// Enroll a YubiKey: read its PIV public key and add it as an identity.
-    func enrollYubiKey(pin: String) async throws {
-        let blob = try await YubiKeyCoordinator.shared.enroll(pin: pin)
+    func enrollYubiKey(pin: String, managementKeyHex: String? = nil) async throws {
+        let blob = try await YubiKeyCoordinator.shared.enroll(pin: pin, managementKeyHex: managementKeyHex)
         let key = YubiKeyPIVKey.make(publicBlob: blob, slot: YubiKeyCoordinator.slot, comment: "YubiKey")
         KeyStore.saveYubiKey(key)
         await agent.add(key)

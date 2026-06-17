@@ -11,15 +11,39 @@ enum YubiKeyError: LocalizedError {
     /// underlying error detail so the UI shows something diagnosable instead of
     /// Foundation's useless generic "the operation couldn't be completed."
     case stageFailed(stage: String, detail: String)
+    /// The card has a non-default PIV management key and none was supplied — minting
+    /// a key in a slot needs it.
+    case managementKeyRequired
+    /// A supplied management key wasn't valid hex (or the wrong length).
+    case badManagementKey
     var errorDescription: String? {
         switch self {
         case .locked: return "Enter your YubiKey PIN first (Keys → Unlock YubiKey)."
         case .unsupportedKey: return "That slot doesn't hold a P-256 key."
         case .noConnection:
             return "Couldn't reach a YubiKey. On iPad, plug it into USB-C; on iPhone, plug it in or hold it to the top to tap over NFC."
+        case .managementKeyRequired:
+            return "This YubiKey has a custom PIV management key. Enter it (hex) under Management key to create a new key."
+        case .badManagementKey:
+            return "The management key must be hexadecimal — 48 hex characters for the default 3DES/AES-192 key (or 32 / 64 for AES-128 / AES-256)."
         case let .stageFailed(stage, detail): return "YubiKey \(stage) failed — \(detail)"
         }
     }
+}
+
+/// Parse a hex string (whitespace/colons ignored) into bytes, or nil if malformed.
+private func hexToData(_ s: String) -> Data? {
+    let clean = s.filter { $0.isHexDigit }
+    guard clean.count % 2 == 0, !clean.isEmpty else { return nil }
+    var out = Data(capacity: clean.count / 2)
+    var idx = clean.startIndex
+    while idx < clean.endIndex {
+        let next = clean.index(idx, offsetBy: 2)
+        guard let byte = UInt8(clean[idx..<next], radix: 16) else { return nil }
+        out.append(byte)
+        idx = next
+    }
+    return out
 }
 
 /// Fully describe an error for the UI: a generic localizedDescription on its own
@@ -116,7 +140,9 @@ final class YubiKeyCoordinator {
     }
 
     /// Read (or generate) the P-256 key in slot 9A; returns its SSH public blob.
-    func enroll(pin: String) async throws -> Data {
+    /// `managementKeyHex` is used only when a key must be generated and the card's
+    /// management key isn't the default (blank = use the default).
+    func enroll(pin: String, managementKeyHex: String? = nil) async throws -> Data {
         let (conn, session) = try await openPIV()
         defer { Task { await conn.close(error: nil) } }
         do { _ = try await session.verifyPin(pin) }
@@ -128,13 +154,8 @@ final class YubiKeyCoordinator {
         } else {
             // Slot 9A is empty, so mint a key — which requires PIV management-key
             // auth (the PIN alone isn't enough; the card rejects generate with
-            // 0x6982 otherwise). Use the default management key.
-            do { try await session.authenticate(with: Self.defaultManagementKey) }
-            catch {
-                throw YubiKeyError.stageFailed(
-                    stage: "management-key auth",
-                    detail: "\(yubiDetail(error)) — if you've changed the PIV management key from the default, that's not supported yet")
-            }
+            // 0x6982 otherwise).
+            try await authenticateManagementKey(session, managementKeyHex: managementKeyHex)
             do {
                 pub = try await session.generateKey(in: .authentication, type: .ec(.secp256r1),
                                                     pinPolicy: .once, touchPolicy: .always)
@@ -144,6 +165,29 @@ final class YubiKeyCoordinator {
         self.pin = pin
         unlocked = true
         return SSHKeyFormat.ecdsaP256PublicBlob(x963Point: ec.x963)
+    }
+
+    /// Authenticate the PIV management key: the user-supplied key if given, else
+    /// the factory default — and if the card reports a non-default key and none was
+    /// supplied, ask for it rather than failing with a bare 0x6982.
+    private func authenticateManagementKey(_ session: PIVSession, managementKeyHex: String?) async throws {
+        let key: Data
+        if let hex = managementKeyHex?.trimmingCharacters(in: .whitespaces), !hex.isEmpty {
+            guard let parsed = hexToData(hex) else { throw YubiKeyError.badManagementKey }
+            key = parsed
+        } else {
+            if let meta = try? await session.getManagementKeyMetadata(), !meta.isDefault {
+                throw YubiKeyError.managementKeyRequired
+            }
+            key = Self.defaultManagementKey
+        }
+        do { try await session.authenticate(with: key) }
+        catch {
+            // A wrong key surfaces as 0x6982; point at the management-key field.
+            throw YubiKeyError.stageFailed(
+                stage: "management-key auth",
+                detail: "\(yubiDetail(error)) — check the management key (hex) you entered")
+        }
     }
 
     /// Re-supply the PIN after an app restart (validated against the key).
