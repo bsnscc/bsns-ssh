@@ -37,7 +37,7 @@ struct ImportConfigView: View {
                 }
                 Section("Private key") {
                     Button("Import a private key") { picking = .key }
-                    Text("Unencrypted OpenSSH ed25519 / ecdsa-p256 keys. Decrypt a passphrase-protected key first (ssh-keygen -p).")
+                    Text("Unencrypted ed25519, ecdsa-p256, or RSA keys — OpenSSH format, or RSA in PKCS#1/PKCS#8 PEM. Decrypt a passphrase-protected key first (ssh-keygen -p).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let status {

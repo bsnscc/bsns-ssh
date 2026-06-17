@@ -31,15 +31,17 @@ enum YubiKeyError: LocalizedError {
     }
 }
 
-/// Parse a hex string (whitespace/colons ignored) into bytes, or nil if malformed.
+/// Parse a hex string into bytes. Only spaces/colons are accepted as separators;
+/// any other non-hex character makes the whole input invalid (rather than being
+/// silently dropped), so malformed input is rejected up front.
 private func hexToData(_ s: String) -> Data? {
-    let clean = s.filter { $0.isHexDigit }
-    guard clean.count % 2 == 0, !clean.isEmpty else { return nil }
-    var out = Data(capacity: clean.count / 2)
-    var idx = clean.startIndex
-    while idx < clean.endIndex {
-        let next = clean.index(idx, offsetBy: 2)
-        guard let byte = UInt8(clean[idx..<next], radix: 16) else { return nil }
+    let stripped = s.filter { !$0.isWhitespace && $0 != ":" }
+    guard !stripped.isEmpty, stripped.count % 2 == 0, stripped.allSatisfy(\.isHexDigit) else { return nil }
+    var out = Data(capacity: stripped.count / 2)
+    var idx = stripped.startIndex
+    while idx < stripped.endIndex {
+        let next = stripped.index(idx, offsetBy: 2)
+        guard let byte = UInt8(stripped[idx..<next], radix: 16) else { return nil }
         out.append(byte)
         idx = next
     }
@@ -173,7 +175,12 @@ final class YubiKeyCoordinator {
     private func authenticateManagementKey(_ session: PIVSession, managementKeyHex: String?) async throws {
         let key: Data
         if let hex = managementKeyHex?.trimmingCharacters(in: .whitespaces), !hex.isEmpty {
-            guard let parsed = hexToData(hex) else { throw YubiKeyError.badManagementKey }
+            // A PIV management key is 16 (AES-128), 24 (3DES / AES-192), or 32
+            // (AES-256) bytes — validate before handing it to YubiKit so a typo is
+            // a clear "bad management key", not a generic auth failure.
+            guard let parsed = hexToData(hex), [16, 24, 32].contains(parsed.count) else {
+                throw YubiKeyError.badManagementKey
+            }
             key = parsed
         } else {
             if let meta = try? await session.getManagementKeyMetadata(), !meta.isDefault {

@@ -128,8 +128,9 @@ fun ImportConfigScreen(onBack: () -> Unit) {
             OutlinedButton(onClick = { pickKey.launch("*/*") }, modifier = Modifier.fillMaxWidth()) {
                 Text("Import a private key")
             }
-            Text("Unencrypted OpenSSH ed25519 / ecdsa-p256 keys. Decrypt a passphrase-protected " +
-                "key first (ssh-keygen -p), or generate a new device key instead.",
+            Text("Unencrypted ed25519, ecdsa-p256, or RSA keys — OpenSSH format, or RSA in " +
+                "PKCS#1/PKCS#8 PEM. Decrypt a passphrase-protected key first (ssh-keygen -p), " +
+                "or generate a new device key instead.",
                 fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             status?.let { Divider(); Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }
