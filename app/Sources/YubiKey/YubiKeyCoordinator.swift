@@ -26,6 +26,11 @@ enum YubiKeyError: LocalizedError {
 /// ("the operation couldn't be completed") tells us nothing, so always append the
 /// domain + code and any underlying error.
 private func yubiDetail(_ error: Error) -> String {
+    // A PIV failure carries the card's APDU status — far more useful than the
+    // bridged NSError code (e.g. 0x6982 = the operation needs an auth we skipped).
+    if let piv = error as? PIVSessionError, let status = piv.responseStatus {
+        return "card status \(status.status)"
+    }
     let ns = error as NSError
     var parts: [String] = []
     let desc = ns.localizedDescription
@@ -57,6 +62,16 @@ final class YubiKeyCoordinator {
 
     /// PIV authentication slot (9A) — the default for SSH.
     static let slot: UInt8 = 0x9a
+
+    /// PIV default management key (24 bytes). Generating a key in a slot requires
+    /// management-key auth — the PIN only gates *signing*. `authenticate(with:)`
+    /// reads the card metadata to pick 3DES vs AES-192, and the factory-default
+    /// value is these same 24 bytes for both, so this works on old and new keys.
+    private static let defaultManagementKey = Data([
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    ])
 
     private(set) var unlocked = false
     private var pin: String?
@@ -111,6 +126,15 @@ final class YubiKeyCoordinator {
         if let meta = try? await session.getMetadata(in: .authentication) {
             pub = meta.publicKey
         } else {
+            // Slot 9A is empty, so mint a key — which requires PIV management-key
+            // auth (the PIN alone isn't enough; the card rejects generate with
+            // 0x6982 otherwise). Use the default management key.
+            do { try await session.authenticate(with: Self.defaultManagementKey) }
+            catch {
+                throw YubiKeyError.stageFailed(
+                    stage: "management-key auth",
+                    detail: "\(yubiDetail(error)) — if you've changed the PIV management key from the default, that's not supported yet")
+            }
             do {
                 pub = try await session.generateKey(in: .authentication, type: .ec(.secp256r1),
                                                     pinPolicy: .once, touchPolicy: .always)
