@@ -181,6 +181,13 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             }
             let moshReadable = fds.prefix(wakeIndex).contains { $0.revents & Int16(POLLIN) != 0 }
             if moshReadable {                                   // a datagram arrived
+                // First contact after a stale gap (background → resume): mosh jumps
+                // from the pre-gap framebuffer to the current one in one step, and
+                // diffing that big jump against the stale baseline leaves stray
+                // colored cells (worst in a full-screen TUI like tmux) — the residue
+                // a manual resize clears. Force the next frame to be an absolute full
+                // repaint so recovery re-syncs the view cleanly, no resize needed.
+                if staleReported { mosh_client_force_repaint(c) }
                 mosh_client_recv(c)
                 lastContactAt = Date()
             }
