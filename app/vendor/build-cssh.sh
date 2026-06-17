@@ -15,6 +15,7 @@ OSSL_SHA=529043b15cffa5f36077a4d0af83f3de399807181d607441d734196d889b641f
 SSH2_SHA=3736161e41e2693324deb38c26cfdc3efe6209d634ba4258db1cecff6a5ad461
 
 HERE="$(cd "$(dirname "$0")/CSSH" && pwd)"
+PATCHES="$(cd "$(dirname "$0")/patches" && pwd)"
 W="$(mktemp -d)"; OUT="$W/out"; mkdir -p "$OUT"
 trap 'rm -rf "$W"' EXIT
 verify(){ [ "$(shasum -a256 "$1" | awk '{print $1}')" = "$2" ] || { echo "CHECKSUM MISMATCH: $1" >&2; exit 1; }; }
@@ -23,6 +24,15 @@ cd "$W"
 echo "==> fetching + verifying sources"
 curl -fsSL "https://github.com/openssl/openssl/releases/download/openssl-$OSSL_VER/openssl-$OSSL_VER.tar.gz" -o o.tgz; verify o.tgz "$OSSL_SHA"; tar xzf o.tgz
 curl -fsSL "https://github.com/libssh2/libssh2/releases/download/libssh2-$SSH2_VER/libssh2-$SSH2_VER.tar.gz" -o s.tgz; verify s.tgz "$SSH2_SHA"; tar xzf s.tgz
+
+# Patch libssh2 to support the webauthn-sk-ecdsa signature (FIDO2 via a WebAuthn
+# API — Apple AuthenticationServices). Stock libssh2 has no webauthn-sk support;
+# this adds libssh2_userauth_publickey_raw(), letting the sign callback supply a
+# complete signature blob emitted verbatim. The patch is checked in + documented
+# (keeps the build-from-pinned-source story auditable). Applied once here, before
+# the per-slice copies below.
+echo "==> applying webauthn-sk patch"
+patch -p1 -d "libssh2-$SSH2_VER" < "$PATCHES/libssh2-1.11.0-webauthn-sk.patch"
 
 # name | openssl-target | sdk | configure-host | arch | min-version-flag
 SLICES=(

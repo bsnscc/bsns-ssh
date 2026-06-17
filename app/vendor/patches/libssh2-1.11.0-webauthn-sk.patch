@@ -1,0 +1,99 @@
+--- a/src/libssh2_priv.h	2026-06-17 07:38:12
++++ b/src/libssh2_priv.h	2026-06-17 07:38:18
+@@ -805,6 +805,12 @@
+     size_t userauth_pblc_method_len;
+     unsigned char *userauth_pblc_s;
+     unsigned char *userauth_pblc_b;
++    /* When set, the publickey sign-callback returns a COMPLETE signature blob
++       (its own format string + algorithm-specific trailer, e.g. a webauthn-sk
++       signature). It is emitted verbatim as the packet's signature string while
++       the pubkey-algorithm field still carries the key type. Set by
++       libssh2_userauth_publickey_raw(). [bsns.ssh: webauthn-sk support] */
++    int userauth_pblc_raw_sig;
+     packet_requirev_state_t userauth_pblc_packet_requirev_state;
+ 
+     /* State variables used in libssh2_userauth_keyboard_interactive_ex() */
+--- a/src/userauth.c	2026-06-17 07:38:12
++++ b/src/userauth.c	2026-06-17 07:38:36
+@@ -1723,7 +1723,14 @@
+             plain_method((char *)session->userauth_pblc_method,
+                          session->userauth_pblc_method_len);
+ 
+-        if(strncmp((const char *)session->userauth_pblc_method,
++        if(session->userauth_pblc_raw_sig) {
++            /* The callback returned a complete signature blob (its own format
++               string + any algorithm-specific trailer, e.g. webauthn-sk). Emit it
++               verbatim as the packet's signature string; the pubkey-algorithm
++               field already carries the key type. [bsns.ssh: webauthn-sk] */
++            _libssh2_store_str(&s, (const char *)sig, sig_len);
++        }
++        else if(strncmp((const char *)session->userauth_pblc_method,
+                    "sk-ecdsa-sha2-nistp256@openssh.com",
+                    session->userauth_pblc_method_len) == 0 ||
+            strncmp((const char *)session->userauth_pblc_method,
+@@ -2006,8 +2013,42 @@
+     return rc;
+ }
+ 
++/* libssh2_userauth_publickey_raw
++ * Like libssh2_userauth_publickey(), but the sign callback returns a COMPLETE
++ * SSH signature blob (its own format string + algorithm-specific trailer) which
++ * is sent verbatim as the userauth packet's signature, while the pubkey-algorithm
++ * field still carries the key type from pubkeydata. This lets a caller emit a
++ * signature whose internal format differs from the key type — e.g. a
++ * webauthn-sk-ecdsa-sha2-nistp256@openssh.com signature for an
++ * sk-ecdsa-sha2-nistp256@openssh.com key (FIDO2 via a WebAuthn API).
++ * [bsns.ssh: webauthn-sk support]
++ */
++LIBSSH2_API int
++libssh2_userauth_publickey_raw(LIBSSH2_SESSION *session,
++                               const char *user,
++                               const unsigned char *pubkeydata,
++                               size_t pubkeydata_len,
++                               LIBSSH2_USERAUTH_PUBLICKEY_SIGN_FUNC
++                                   ((*sign_callback)),
++                               void **abstract)
++{
++    int rc;
+ 
++    if(!session)
++        return LIBSSH2_ERROR_BAD_USE;
+ 
++    session->userauth_pblc_raw_sig = 1;
++
++    BLOCK_ADJUST(rc, session,
++                 _libssh2_userauth_publickey(session, user, strlen(user),
++                                             pubkeydata, pubkeydata_len,
++                                             sign_callback, abstract));
++    session->userauth_pblc_raw_sig = 0;
++    return rc;
++}
++
++
++
+ /*
+  * userauth_keyboard_interactive
+  *
+--- a/include/libssh2.h	2026-06-17 07:38:12
++++ b/include/libssh2.h	2026-06-17 07:38:45
+@@ -705,6 +705,20 @@
+                            LIBSSH2_USERAUTH_PUBLICKEY_SIGN_FUNC
+                                ((*sign_callback)),
+                            void **abstract);
++
++/* Like libssh2_userauth_publickey(), but the sign callback returns a complete
++   SSH signature blob (its own format string + trailer), emitted verbatim, while
++   the pubkey-algorithm field carries the key type from pubkeydata. Enables a
++   signature whose format differs from the key type, e.g. webauthn-sk for an
++   sk-ecdsa key. [bsns.ssh: webauthn-sk support] */
++LIBSSH2_API int
++libssh2_userauth_publickey_raw(LIBSSH2_SESSION *session,
++                               const char *username,
++                               const unsigned char *pubkeydata,
++                               size_t pubkeydata_len,
++                               LIBSSH2_USERAUTH_PUBLICKEY_SIGN_FUNC
++                                   ((*sign_callback)),
++                               void **abstract);
+ 
+ LIBSSH2_API int
+ libssh2_userauth_hostbased_fromfile_ex(LIBSSH2_SESSION *session,
