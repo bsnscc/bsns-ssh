@@ -95,6 +95,15 @@ void mosh_client_tick(MoshClient* c) {
   catch (...) {}
 }
 
+void mosh_client_hop(MoshClient* c) {
+  if (!c || !c->transport) return;
+  // Force the connection onto a fresh local socket (mosh roaming), preserving
+  // the crypto sequence the server requires. Called on resume-from-background,
+  // where iOS has torn down our suspended UDP socket.
+  try { c->transport->hop(); }
+  catch (...) {}
+}
+
 void mosh_client_push(MoshClient* c, const char* bytes, int len) {
   if (!c || !c->transport || !bytes) return;
   Network::UserStream& s = c->transport->get_current_state();

@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import CMosh
 
 /// Drives a mosh (UDP) session: opens the client transport with the key the SSH
@@ -26,9 +27,20 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var lastContactAt = Date()
     private var staleReported = false
 
+    // Connection params, kept so we can re-create the client socket after iOS
+    // suspends us in the background (the mosh-server keeps running, so a fresh
+    // socket with the same port+key resumes the session — mosh roaming).
+    private var serverIP = ""
+    private var serverPort = ""
+    private var serverKey = ""
+    private var cols: Int32 = 80
+    private var rows: Int32 = 24
+    private var foregroundObserver: NSObjectProtocol?
+
     private let lock = NSLock()
     private var pendingInput: [UInt8] = []
     private var pendingResize: (Int32, Int32)?
+    private var resumeRequested = false
     private var stopRequested = false
     private var closeNotified = false
 
@@ -40,9 +52,19 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         let c = mosh_client_create(ip, port, key, cols, rows)
         if let err = mosh_client_last_error(c) { mosh_client_free(c); return String(cString: err) }
         client = c
+        serverIP = ip; serverPort = port; serverKey = key; self.cols = cols; self.rows = rows
         var fds: [Int32] = [-1, -1]
         pipe(&fds)
         wakeRead = fds[0]; wakeWrite = fds[1]
+        // iOS suspends our socket when backgrounded; on return, kick the loop to
+        // re-send (and, if we've gone stale, re-establish the socket).
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.lock.lock(); self.resumeRequested = true; self.lock.unlock()
+            self.wake()
+        }
         queue.async { [weak self] in self?.runLoop() }
         return nil
     }
@@ -53,7 +75,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     }
 
     func resize(cols: Int32, rows: Int32) {
-        lock.lock(); pendingResize = (cols, rows); lock.unlock()
+        lock.lock(); pendingResize = (cols, rows); self.cols = cols; self.rows = rows; lock.unlock()
         wake()
     }
 
@@ -67,8 +89,8 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     }
 
     private func runLoop() {
-        guard let c = client else { return }
         while true {
+            guard let c = client else { break }
             // Refresh mosh's frozen clock once per iteration. Without this every
             // send/ack timer stalls after the first packet and local input is
             // never transmitted (the server connects + paints once, then input
@@ -78,11 +100,23 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             // Apply staged commands before blocking.
             lock.lock()
             let stop = stopRequested
+            let resume = resumeRequested; resumeRequested = false
             let input = pendingInput; pendingInput.removeAll(keepingCapacity: true)
             let resize = pendingResize; pendingResize = nil
             lock.unlock()
 
             if stop { break }
+
+            // Returning from the background: if we've been silent past the stale
+            // threshold, iOS almost certainly tore down our suspended UDP socket.
+            // mosh recovers by "hopping" to a fresh socket on the SAME connection
+            // (preserving the crypto sequence the server's replay-protection
+            // requires — a brand-new client would be rejected). mosh auto-hops only
+            // after 10s of silence; force it now so resume is immediate. Gated on
+            // staleness so a brief app-switch (live socket) or launch doesn't churn.
+            if resume, Date().timeIntervalSince(lastContactAt) > Self.staleThreshold {
+                mosh_client_hop(c)
+            }
             if !input.isEmpty {
                 input.withUnsafeBytes { raw in
                     mosh_client_push(c, raw.bindMemory(to: CChar.self).baseAddress, Int32(raw.count))
@@ -119,6 +153,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     }
 
     private func teardown() {
+        if let obs = foregroundObserver { NotificationCenter.default.removeObserver(obs); foregroundObserver = nil }
         if let c = client { mosh_client_free(c); client = nil }
         if wakeRead >= 0 { close(wakeRead); wakeRead = -1 }
         if wakeWrite >= 0 { close(wakeWrite); wakeWrite = -1 }

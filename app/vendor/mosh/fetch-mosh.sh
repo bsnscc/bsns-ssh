@@ -66,5 +66,10 @@ cp "$HERE/display-ansi.cc" "$HERE/mosh-src/src/terminal/terminaldisplay.cc"
 mkdir -p "$HERE/mosh-src/src/include"
 cp "$HERE/config-ios.h" "$HERE/mosh-src/src/include/config.h"
 
+# Expose Connection::hop_port() on the Transport so the app can force a fresh
+# socket on resume from background (instant mosh roaming vs. the ~10s auto-hop).
+echo "==> applying networktransport hop() patch"
+patch -p1 -d "$HERE/mosh-src" < "$HERE/patches/networktransport-hop.patch"
+
 echo "==> done. Source tree assembled under $HERE"
 rm -rf "$WORK"

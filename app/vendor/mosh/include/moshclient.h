@@ -30,6 +30,12 @@ void mosh_client_recv(MoshClient* c);
 /// Send any pending local state / keepalive.
 void mosh_client_tick(MoshClient* c);
 
+/// Force the connection onto a fresh local socket (mosh roaming), preserving the
+/// crypto session/sequence numbers. Call on resume from background, where iOS has
+/// torn down the suspended UDP socket — recovers immediately instead of waiting
+/// for mosh's ~10s auto-hop.
+void mosh_client_hop(MoshClient* c);
+
 /// Queue local input bytes / a terminal resize to send to the server.
 void mosh_client_push(MoshClient* c, const char* bytes, int len);
 void mosh_client_resize(MoshClient* c, int cols, int rows);

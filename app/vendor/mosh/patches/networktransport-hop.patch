@@ -1,0 +1,27 @@
+--- a/src/network/network.h	2026-06-17 10:15:42
++++ b/src/network/network.h	2026-06-17 10:15:50
+@@ -211,6 +211,9 @@
+ 
+     void send( const string & s );
+     string recv( void );
++    /* Public trigger for an immediate port hop (fresh socket, same crypto
++       session) — used to resume after the OS suspends our socket. [bsns.ssh] */
++    void hop_port_now( void ) { hop_port(); }
+     const std::vector< int > fds( void ) const;
+     int get_MTU( void ) const { return MTU; }
+ 
+--- a/src/network/networktransport.h	2026-06-17 10:13:46
++++ b/src/network/networktransport.h	2026-06-17 10:15:56
+@@ -120,6 +120,12 @@
+     socklen_t get_remote_addr_len( void ) const { return connection.get_remote_addr_len(); }
+ 
+     std::string &get_send_error( void ) { return connection.get_send_error(); }
++
++    /* Force the connection onto a fresh local socket, preserving the crypto
++       session + sequence numbers (mosh roaming). Used to resume immediately when
++       the OS tears down our socket on app suspend, instead of waiting for the
++       ~10s auto-hop. [bsns.ssh] */
++    void hop( void ) { connection.hop_port_now(); }
+   };
+ }
+ 
