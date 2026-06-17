@@ -8,6 +8,7 @@ struct YubiKeyEnrollView: View {
 
     @State private var pin = ""
     @State private var managementKey = ""
+    @State private var revealManagementKey = false
     @State private var busy = false
     @State private var error: String?
 
@@ -21,9 +22,25 @@ struct YubiKeyEnrollView: View {
                     Text("The PIV user PIN (default 123456) authorizes signing. It's kept only in memory for this session. (Not the PUK or the management key.)")
                 }
                 Section {
-                    TextField("Management key (hex) — only if changed", text: $managementKey)
+                    HStack {
+                        // Obscured by default like the PIN (it's a secret), with a
+                        // reveal toggle since a long hex key is error-prone to type blind.
+                        Group {
+                            if revealManagementKey {
+                                TextField("Management key (hex) — only if changed", text: $managementKey)
+                            } else {
+                                SecureField("Management key (hex) — only if changed", text: $managementKey)
+                            }
+                        }
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
                         .font(.system(.body, design: .monospaced))
+                        Button { revealManagementKey.toggle() } label: {
+                            Image(systemName: revealManagementKey ? "eye.slash" : "eye")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(revealManagementKey ? "Hide management key" : "Show management key")
+                    }
                 } footer: {
                     Text("Only needed to create a new key on the YubiKey, and only if you've changed the PIV management key from its default (010203…08). Leave blank otherwise.")
                 }
