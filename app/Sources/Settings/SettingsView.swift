@@ -98,8 +98,12 @@ struct SettingsView: View {
             }
 
             Section {
-                Label("No accounts. No analytics. No telemetry. No location.", systemImage: "hand.raised.fill")
-                    .font(.callout)
+                Label {
+                    Text("No accounts. No analytics. No telemetry. No location.")
+                } icon: {
+                    Image(systemName: "hand.raised.fill").foregroundStyle(Brand.accent)
+                }
+                .font(.callout)
             } footer: {
                 Text("Nothing leaves this device except your SSH connections. Your keys are stored on-device and the hardware-backed ones can never be exported.")
             }

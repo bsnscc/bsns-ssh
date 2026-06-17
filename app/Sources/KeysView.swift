@@ -28,22 +28,12 @@ struct KeysView: View {
                             if store.isHardware(key) {
                                 let isFido = store.isSecurityKey(key)
                                 let isYubi = store.isYubiKey(key)
-                                let label = isFido ? "FIDO2 security key" : (isYubi ? "YubiKey" : "Secure Enclave")
-                                let icon = isFido ? "key.radiowaves.forward.fill"
-                                    : (isYubi ? "key.radiowaves.forward.fill" : "lock.shield.fill")
-                                Label(label, systemImage: icon)
-                                    .font(.caption2.weight(.semibold))
-                                    .padding(.horizontal, 7).padding(.vertical, 3)
-                                    .background(Color.green.opacity(0.18), in: Capsule())
-                                    .foregroundStyle(.green)
+                                Tag(text: isFido ? "FIDO2" : (isYubi ? "YubiKey" : "Secure Enclave"),
+                                    color: Brand.accent,
+                                    icon: (isFido || isYubi) ? "key.radiowaves.forward.fill" : "lock.shield.fill")
                             } else {
-                                // Software keys live in the Keychain and can be
-                                // exported — make that legible next to hardware keys.
-                                Label("Software · exportable", systemImage: "externaldrive")
-                                    .font(.caption2.weight(.semibold))
-                                    .padding(.horizontal, 7).padding(.vertical, 3)
-                                    .background(Color.orange.opacity(0.18), in: Capsule())
-                                    .foregroundStyle(.orange)
+                                // Software keys live in the Keychain and can be exported.
+                                Tag(text: "Software · exportable", color: .orange, icon: "externaldrive")
                             }
                         }
                         Text(SSHKeyFormat.fingerprint(ofPublicKeyBlob: key.blob))
