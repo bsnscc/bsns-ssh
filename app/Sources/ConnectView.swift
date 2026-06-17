@@ -8,6 +8,7 @@ struct ConnectView: View {
     @Environment(SessionStore.self) private var sessions
     @Environment(TerminalSurfaceCache.self) private var surfaces
     @Environment(SnippetStore.self) private var snippetStore
+    @Environment(\.horizontalSizeClass) private var hSize
 
     private enum PendingAction { case connect, install }
 
@@ -40,128 +41,7 @@ struct ConnectView: View {
     @State private var pendingJumpPort: UInt16 = 22
 
     var body: some View {
-        Form {
-            if !sessions.sessions.isEmpty {
-                Section("Active") {
-                    ForEach(sessions.sessions) { s in
-                        Button { sessions.activate(s) } label: {
-                            HStack {
-                                Image(systemName: "terminal").foregroundStyle(.secondary)
-                                Text(s.title).foregroundStyle(.primary)
-                                Spacer()
-                                statusDot(for: s)
-                            }
-                        }
-                    }
-                    .onDelete { offsets in
-                        offsets.map { sessions.sessions[$0] }.forEach { s in
-                            surfaces.drop(s.id); sessions.close(s)
-                        }
-                    }
-                }
-            }
-
-            ForEach(groupedHosts, id: \.0) { groupName, groupHosts in
-                Section(groupName ?? "Saved") {
-                    ForEach(groupHosts) { entry in
-                        HStack(spacing: 8) {
-                            Button { loadHost(entry) } label: {
-                                savedRow(entry).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            // On iPad with a pointer, hovering a row reveals a one-tap
-                            // connect that loads the host and connects immediately.
-                            if hoveredHostID == entry.id {
-                                Button { loadHost(entry); attemptConnect() } label: {
-                                    Image(systemName: "bolt.horizontal.circle.fill").font(.title3)
-                                }
-                                .buttonStyle(.borderless)
-                                .foregroundStyle(.green)
-                                .help("Quick connect")
-                                .disabled(busy)
-                                .transition(.opacity)
-                            }
-                        }
-                        .onHover { hovering in
-                            withAnimation(.easeInOut(duration: 0.12)) {
-                                if hovering { hoveredHostID = entry.id }
-                                else if hoveredHostID == entry.id { hoveredHostID = nil }
-                            }
-                        }
-                    }
-                    .onDelete { offsets in offsets.map { groupHosts[$0] }.forEach(hostStore.remove) }
-                }
-            }
-
-            Section("Server") {
-                TextField("host", text: $host)
-                    .autocorrectionDisabled().textInputAutocapitalization(.never)
-                TextField("port", text: $port).keyboardType(.numberPad)
-                TextField("user", text: $user)
-                    .autocorrectionDisabled().textInputAutocapitalization(.never)
-                TextField("group (optional)", text: $group)
-                    .autocorrectionDisabled().textInputAutocapitalization(.never)
-                TextField("jump / bastion (optional: user@host[:port])", text: $jump)
-                    .autocorrectionDisabled().textInputAutocapitalization(.never)
-                Toggle("Use mosh (UDP, survives roaming)", isOn: $useMosh)
-                    .disabled(hasJump)
-                if useMosh && !hasJump {
-                    Text("Connects over SSH to start mosh-server, then runs over UDP. Requires mosh-server on the host and a key (agent) — not a password.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if hasJump {
-                    Text("Via a jump host, only an interactive shell is supported for now — mosh, SFTP, and key install go direct and are disabled. The bastion authenticates with your key (agent); any password above is used only for the target.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-
-            if !store.identities.isEmpty {
-                Section("Key") {
-                    Picker("Authenticate with", selection: $selectedKeyFP) {
-                        ForEach(store.identities, id: \.blob) { id in
-                            Text(keyLabel(id)).tag(fp(id))
-                        }
-                    }
-                    Text("Only this key is offered when connecting — so a host that limits auth attempts won't reject you, and other keys don't prompt.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Password (optional)") {
-                SecureField("password — for login or installing a key", text: $password)
-                    .textContentType(.password)
-                Text(password.isEmpty
-                     ? "Empty: connect with your agent key (\(store.identities.count) available)."
-                     : "Set: connect with the password, or install your key below.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section {
-                Button(busy ? "Working…" : "Connect") { attemptConnect() }
-                    // mosh and jump both require an agent key (mosh has no password
-                    // auth; a jump's bastion is key-only). A direct shell may use
-                    // either a password or a key.
-                    .disabled(busy || host.isEmpty || user.isEmpty
-                              || (useMosh || hasJump ? store.identities.isEmpty : (password.isEmpty && store.identities.isEmpty)))
-                Button("Install my key (ssh-copy-id)") { attemptInstall() }
-                    .disabled(busy || host.isEmpty || user.isEmpty || password.isEmpty || store.identities.isEmpty || hasJump)
-                Button("Browse files (SFTP)") { if let p = UInt16(port), p > 0 { showSFTP = true } }
-                    .disabled(busy || host.isEmpty || user.isEmpty || store.identities.isEmpty || hasJump)
-                Button("Save host") { saveHost() }
-                    .disabled(host.isEmpty || user.isEmpty)
-            }
-
-            Section {
-                Button("Import from OpenSSH (config · known_hosts · keys)") { showImport = true }
-            }
-
-            if let notice {
-                Section { Text(notice).foregroundStyle(.green).font(.callout) }
-            }
-            if let error {
-                Section { Text(error).foregroundStyle(.red).font(.callout) }
-            }
-        }
+        paneLayout
         .navigationTitle("Connect")
         .onAppear { ensureKeySelection() }
         .onChange(of: store.identities) { _, _ in ensureKeySelection() }
@@ -215,6 +95,174 @@ struct ConnectView: View {
     }
 
     /// Saved hosts grouped by folder: named groups first (alphabetical), then ungrouped.
+    // MARK: layout
+
+    /// Two columns on iPad (saved hosts beside the form), one scroll on iPhone.
+    @ViewBuilder private var paneLayout: some View {
+        if hSize == .regular {
+            HStack(spacing: 0) {
+                Form { activeSection; savedSections }
+                    .frame(maxWidth: Layout.sidebarWidth)
+                Divider()
+                Form {
+                    serverSection; keySection; passwordSection
+                    actionsSection; importSection; messagesSection
+                }
+            }
+        } else {
+            Form {
+                activeSection; savedSections; serverSection; keySection
+                passwordSection; actionsSection; importSection; messagesSection
+            }
+        }
+    }
+
+    @ViewBuilder private var activeSection: some View {
+        if !sessions.sessions.isEmpty {
+            Section("Active") {
+                ForEach(sessions.sessions) { s in
+                    Button { sessions.activate(s) } label: {
+                        HStack {
+                            Image(systemName: "terminal").foregroundStyle(.secondary)
+                            Text(s.title).foregroundStyle(.primary)
+                            Spacer()
+                            statusDot(for: s)
+                        }
+                    }
+                }
+                .onDelete { offsets in
+                    offsets.map { sessions.sessions[$0] }.forEach { s in
+                        surfaces.drop(s.id); sessions.close(s)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var savedSections: some View {
+        if hostStore.hosts.isEmpty {
+            Section("Saved") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Image(systemName: "bookmark").font(.title3).foregroundStyle(.secondary)
+                    Text("No saved hosts yet").font(.callout.weight(.medium))
+                    Text("Fill in a server, then **Save host** to keep it here for one-tap connect.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 6)
+            }
+        }
+        ForEach(groupedHosts, id: \.0) { groupName, groupHosts in
+            Section(groupName ?? "Saved") {
+                ForEach(groupHosts) { entry in
+                    HStack(spacing: 8) {
+                        Button { loadHost(entry) } label: {
+                            savedRow(entry).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        // Always visible so it works on touch (not just pointer); hover just
+                        // brightens it. Loads the host and connects in one tap.
+                        Button { loadHost(entry); attemptConnect() } label: {
+                            Image(systemName: "bolt.horizontal.circle.fill").font(.title2).symbolRenderingMode(.hierarchical)
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(Brand.accent)
+                        .help("Quick connect")
+                        .disabled(busy)
+                        .opacity(hoveredHostID == entry.id ? 1 : 0.7)
+                    }
+                    .onHover { hovering in
+                        withAnimation(.easeInOut(duration: 0.12)) {
+                            if hovering { hoveredHostID = entry.id }
+                            else if hoveredHostID == entry.id { hoveredHostID = nil }
+                        }
+                    }
+                }
+                .onDelete { offsets in offsets.map { groupHosts[$0] }.forEach(hostStore.remove) }
+            }
+        }
+    }
+
+    @ViewBuilder private var serverSection: some View {
+        Section("Server") {
+            FieldRow(label: "host") {
+                TextField("example.com", text: $host).autocorrectionDisabled().textInputAutocapitalization(.never)
+                TextField("22", text: $port).keyboardType(.numberPad).frame(width: 52).multilineTextAlignment(.trailing)
+            }
+            FieldRow(label: "user") {
+                TextField("root", text: $user).autocorrectionDisabled().textInputAutocapitalization(.never)
+                TextField("group", text: $group).autocorrectionDisabled().textInputAutocapitalization(.never)
+                    .frame(maxWidth: 110).foregroundStyle(.secondary)
+            }
+            FieldRow(label: "jump") {
+                TextField("optional · user@host[:port]", text: $jump).autocorrectionDisabled().textInputAutocapitalization(.never)
+            }
+            Toggle("Use mosh (UDP · survives roaming)", isOn: $useMosh).disabled(hasJump)
+            if hasJump {
+                Text("Via a jump host, only a shell tunnels through — mosh, SFTP, and key install go direct and are off. The bastion uses your key; any password is for the target only.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if useMosh {
+                Text("Starts mosh-server over SSH, then runs over UDP. Needs mosh-server on the host and a key (agent), not a password.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private var keySection: some View {
+        if !store.identities.isEmpty {
+            Section("Key") {
+                Picker("Authenticate with", selection: $selectedKeyFP) {
+                    ForEach(store.identities, id: \.blob) { id in
+                        Text(keyLabel(id)).tag(fp(id))
+                    }
+                }
+                Text("Only this key is offered, so a host that limits auth attempts won't reject you.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private var passwordSection: some View {
+        Section("Password (optional)") {
+            SecureField("for login or installing a key", text: $password).textContentType(.password)
+            Text(password.isEmpty
+                 ? "Empty: connect with your key (\(store.identities.count) available)."
+                 : "Set: connect with the password, or install your key below.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var actionsSection: some View {
+        Section {
+            Button(busy ? "Working…" : (useMosh && !hasJump ? "Connect (mosh)" : "Connect")) { attemptConnect() }
+                .buttonStyle(.brand)
+                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                .listRowBackground(Color.clear)
+                .disabled(busy || host.isEmpty || user.isEmpty
+                          || (useMosh || hasJump ? store.identities.isEmpty : (password.isEmpty && store.identities.isEmpty)))
+            Button("Browse files (SFTP)") { if let p = UInt16(port), p > 0 { showSFTP = true } }
+                .disabled(busy || host.isEmpty || user.isEmpty || store.identities.isEmpty || hasJump)
+            Button("Install my key (ssh-copy-id)") { attemptInstall() }
+                .disabled(busy || host.isEmpty || user.isEmpty || password.isEmpty || store.identities.isEmpty || hasJump)
+            Button("Save host") { saveHost() }
+                .disabled(host.isEmpty || user.isEmpty)
+        }
+    }
+
+    @ViewBuilder private var importSection: some View {
+        Section {
+            Button("Import from OpenSSH (config · known_hosts · keys)") { showImport = true }
+        }
+    }
+
+    @ViewBuilder private var messagesSection: some View {
+        if let notice {
+            Section { Text(notice).foregroundStyle(Brand.accent).font(.callout) }
+        }
+        if let error {
+            Section { Text(error).foregroundStyle(.red).font(.callout) }
+        }
+    }
+
     private var groupedHosts: [(String?, [SavedHost])] {
         let groups = Dictionary(grouping: hostStore.hosts) { (h: SavedHost) -> String? in
             let g = h.group?.trimmingCharacters(in: .whitespaces)
