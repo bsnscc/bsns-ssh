@@ -10,6 +10,8 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <stdint.h>
 
 #include "moshclient.h"
 
@@ -18,8 +20,15 @@
 namespace {
 struct MoshHandle {
     MoshClient* client;
-    int wake[2];   // self-pipe: wake[1] written to interrupt the poll
+    int wake[2];          // self-pipe: wake[1] written to interrupt the poll
+    uint64_t lastContactMs;   // monotonic time of the last datagram from the server
 };
+
+uint64_t nowMonoMs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
 }
 
 extern "C" {
@@ -43,6 +52,7 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshOpen(
     }
     MoshHandle* h = (MoshHandle*)calloc(1, sizeof(MoshHandle));
     h->client = c;
+    h->lastContactMs = nowMonoMs();
     if (pipe(h->wake) == 0) {
         fcntl(h->wake[0], F_SETFL, O_NONBLOCK);
         fcntl(h->wake[1], F_SETFL, O_NONBLOCK);
@@ -82,6 +92,7 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshService(
             if (!(pfds[i].revents & POLLIN)) continue;
             if (pfds[i].fd == mfd) {
                 mosh_client_recv(h->client);
+                h->lastContactMs = nowMonoMs();   // a datagram arrived from the server
             } else {
                 char buf[64];
                 while (read(h->wake[0], buf, sizeof(buf)) > 0) {}   // drain
@@ -97,6 +108,18 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshService(
     if (out) env->SetByteArrayRegion(out, 0, (jsize)len, (const jbyte*)ansi);
     free(ansi);
     return out;
+}
+
+// Milliseconds since the last datagram from the server — the liveness signal.
+// mosh never self-closes on silence (it roams), so the UI uses this to show a
+// session has gone stale rather than a reassuring "connected".
+JNIEXPORT jlong JNICALL
+Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshMsSinceContact(
+    JNIEnv* env, jobject thiz, jlong handle) {
+    (void)env; (void)thiz;
+    MoshHandle* h = (MoshHandle*)(intptr_t)handle;
+    if (!h) return 0;
+    return (jlong)(nowMonoMs() - h->lastContactMs);
 }
 
 JNIEXPORT void JNICALL

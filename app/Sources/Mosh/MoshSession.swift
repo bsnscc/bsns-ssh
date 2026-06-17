@@ -13,9 +13,18 @@ import CMosh
 final class MoshSession: TerminalTransport, @unchecked Sendable {
     var onOutput: (@Sendable (ArraySlice<UInt8>) -> Void)?
     var onClosed: (@Sendable (String?) -> Void)?
+    /// Reports liveness transitions: `true` when the server has gone silent past
+    /// the threshold (so the UI can show the session is stale rather than a
+    /// reassuring green), `false` when contact resumes. mosh deliberately never
+    /// self-closes on silence (it's built to roam), so this is the only signal a
+    /// dead session gives us.
+    var onLiveness: (@Sendable (Bool) -> Void)?
+    private static let staleThreshold: TimeInterval = 8
 
     private let queue = DispatchQueue(label: "cc.bsns.ssh.mosh")
     private var client: OpaquePointer?
+    private var lastContactAt = Date()
+    private var staleReported = false
 
     private let lock = NSLock()
     private var pendingInput: [UInt8] = []
@@ -91,13 +100,20 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 var trash = [UInt8](repeating: 0, count: 64)
                 _ = Darwin.read(wakeRead, &trash, trash.count)
             }
-            if fds[0].revents & Int16(POLLIN) != 0 { mosh_client_recv(c) }
+            if fds[0].revents & Int16(POLLIN) != 0 {            // a datagram arrived
+                mosh_client_recv(c)
+                lastContactAt = Date()
+            }
             mosh_client_tick(c)
             if let ansi = mosh_client_drain_ansi(c) {
                 let bytes = Array(String(cString: ansi).utf8)
                 free(ansi)
                 onOutput?(bytes[...])
             }
+            // Flag staleness on transition (the loop wakes at least ~1/s, so this
+            // is checked promptly without a separate timer).
+            let stale = Date().timeIntervalSince(lastContactAt) > Self.staleThreshold
+            if stale != staleReported { staleReported = stale; onLiveness?(stale) }
         }
         teardown()
     }

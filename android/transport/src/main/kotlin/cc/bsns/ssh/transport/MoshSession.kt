@@ -25,6 +25,11 @@ class MoshSession(
             }
         }
     var onClosed: ((String?) -> Unit)? = null
+    /** Reports liveness transitions: true when the server has gone silent past the
+     *  threshold, false when contact resumes. mosh never self-closes on silence
+     *  (it roams), so this is the only signal a dead session gives the UI. */
+    var onLiveness: ((Boolean) -> Unit)? = null
+    private var staleReported = false
 
     private val bridge = MoshBridge()
     private var handle = 0L
@@ -79,11 +84,19 @@ class MoshSession(
                         if (cb != null) cb(ansi) else preBuffer.add(ansi)
                     }
                 }
+                // nativeMoshService blocks up to ~1s, so staleness is checked
+                // promptly without a separate timer.
+                val stale = bridge.nativeMoshMsSinceContact(handle) > STALE_THRESHOLD_MS
+                if (stale != staleReported) { staleReported = stale; onLiveness?.invoke(stale) }
             }
         } finally {
             val err = if (handle != 0L) bridge.nativeMoshLastError(handle) else null
             if (handle != 0L) { bridge.nativeMoshClose(handle); handle = 0L }
             onClosed?.invoke(err)
         }
+    }
+
+    private companion object {
+        const val STALE_THRESHOLD_MS = 8000L
     }
 }

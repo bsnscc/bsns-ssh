@@ -183,7 +183,7 @@ struct ConnectView: View {
 
     @ViewBuilder private func statusDot(for s: TerminalSession) -> some View {
         switch s.status {
-        case .connected: Circle().fill(.green).frame(width: 8, height: 8)
+        case .connected: Circle().fill(s.isStale ? .yellow : .green).frame(width: 8, height: 8)
         case .connecting: ProgressView().controlSize(.mini)
         case .disconnected: Circle().fill(.orange).frame(width: 8, height: 8)
         }

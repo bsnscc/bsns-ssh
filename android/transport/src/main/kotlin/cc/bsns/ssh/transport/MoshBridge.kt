@@ -15,6 +15,8 @@ class MoshBridge {
     external fun nativeMoshResize(handle: Long, cols: Int, rows: Int)
     /** Interrupt a blocked nativeMoshService (any thread). */
     external fun nativeMoshWake(handle: Long)
+    /** Milliseconds since the last datagram from the server (liveness signal). */
+    external fun nativeMoshMsSinceContact(handle: Long): Long
     external fun nativeMoshLastError(handle: Long): String?
     external fun nativeMoshClose(handle: Long)
 

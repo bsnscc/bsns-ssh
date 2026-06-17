@@ -33,6 +33,10 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     }
 
     private(set) var status: Status = .connecting
+    /// mosh-only: the server has gone silent past the liveness threshold. The
+    /// status stays `.connected` (mosh may still recover by roaming), but the UI
+    /// surfaces staleness so a dead session isn't shown as a reassuring green.
+    private(set) var isStale = false
     let spec: Spec
     let title: String
 
@@ -117,6 +121,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     func adopt(_ transport: TerminalTransport) {
         wire(transport)
         lock.lock(); self.transport = transport; lock.unlock()
+        DispatchQueue.main.async { self.isStale = false }
         setStatus(.connected)
     }
 
@@ -214,6 +219,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// `mosh-server`), since a hard drop means the old UDP session is gone.
     func reconnect() {
         guard isDisconnected else { return }
+        DispatchQueue.main.async { self.isStale = false }
         setStatus(.connecting)
         lock.lock(); let cols = self.cols, rows = self.rows; lock.unlock()
         let spec = self.spec
@@ -252,6 +258,11 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         transport.onOutput = { [weak self] bytes in self?.deliver(bytes) }
         transport.onClosed = { [weak self] reason in
             self?.setStatus(.disconnected(reason: reason))
+        }
+        if let mosh = transport as? MoshSession {
+            mosh.onLiveness = { [weak self] stale in
+                DispatchQueue.main.async { self?.isStale = stale }
+            }
         }
     }
 

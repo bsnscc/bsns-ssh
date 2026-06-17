@@ -58,6 +58,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
@@ -331,6 +332,11 @@ class TerminalHolder(
     var session: TerminalTransport = initialSession
         private set
     var status by mutableStateOf(ConnStatus.Connected)
+    /** mosh-only: server silent past the liveness threshold. status stays
+     *  Connected (mosh may roam back), but the UI shows staleness so a dead
+     *  session isn't a reassuring green. */
+    var isStale by mutableStateOf(false)
+        private set
     private var userClosing = false
 
     // Local command history + the line currently being typed (for suggestions).
@@ -463,7 +469,10 @@ class TerminalHolder(
         }
         when (s) {
             is SshSession -> s.onClosed = { _ -> onDropped() }
-            is MoshSession -> s.onClosed = { _ -> onDropped() }
+            is MoshSession -> {
+                s.onClosed = { _ -> onDropped() }
+                s.onLiveness = { stale -> main.post { isStale = stale } }
+            }
         }
     }
 
@@ -475,6 +484,7 @@ class TerminalHolder(
     fun reconnect() {
         if (status == ConnStatus.Reconnecting) return
         status = ConnStatus.Reconnecting
+        isStale = false
         thread {
             val s = reconnectFactory()
             main.post {
@@ -608,6 +618,14 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                     Button(onClick = { holder.reconnect() }) { Text("Reconnect") }
                 }
             }
+        } else if (holder.isStale) {
+            // mosh stays "Connected" while it roams, but flag prolonged silence so a
+            // dead session isn't shown as live (amber, not the error red).
+            Text(
+                "mosh: no contact with the server — it may have dropped",
+                fontSize = 13.sp, color = Color(0xFFB8860B),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            )
         }
         AndroidView(
             factory = { FrameLayout(it) },

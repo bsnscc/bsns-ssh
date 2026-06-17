@@ -204,7 +204,8 @@ struct SessionTabBar: View {
 
     @ViewBuilder private func statusDot(_ s: TerminalSession) -> some View {
         switch s.status {
-        case .connected: Circle().fill(.green).frame(width: 7, height: 7)
+        // Amber when connected-but-stale (mosh has lost contact) — not a reassuring green.
+        case .connected: Circle().fill(s.isStale ? .yellow : .green).frame(width: 7, height: 7)
         case .connecting: ProgressView().controlSize(.mini)
         case .disconnected: Circle().fill(.orange).frame(width: 7, height: 7)
         }
