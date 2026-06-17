@@ -21,28 +21,34 @@ struct YubiKeyEnrollView: View {
                 } footer: {
                     Text("The PIV user PIN (default 123456) authorizes signing. It's kept only in memory for this session. (Not the PUK or the management key.)")
                 }
+                // Tucked behind a disclosure: a normal enrollment is just PIN +
+                // Connect. Your PIN unlocks the management key (default or
+                // PIN-protected/derived) automatically; this is only for a bespoke
+                // management key you set yourself.
                 Section {
-                    HStack {
-                        // Obscured by default like the PIN (it's a secret), with a
-                        // reveal toggle since a long hex key is error-prone to type blind.
-                        Group {
-                            if revealManagementKey {
-                                TextField("Management key (hex) — only if changed", text: $managementKey)
-                            } else {
-                                SecureField("Management key (hex) — only if changed", text: $managementKey)
+                    DisclosureGroup("Advanced — custom management key") {
+                        HStack {
+                            // Obscured by default like the PIN (it's a secret), with a
+                            // reveal toggle since a long hex key is error-prone to type blind.
+                            Group {
+                                if revealManagementKey {
+                                    TextField("Management key (hex)", text: $managementKey)
+                                } else {
+                                    SecureField("Management key (hex)", text: $managementKey)
+                                }
                             }
+                            .autocorrectionDisabled().textInputAutocapitalization(.never)
+                            .font(.system(.body, design: .monospaced))
+                            Button { revealManagementKey.toggle() } label: {
+                                Image(systemName: revealManagementKey ? "eye.slash" : "eye")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(revealManagementKey ? "Hide management key" : "Show management key")
                         }
-                        .autocorrectionDisabled().textInputAutocapitalization(.never)
-                        .font(.system(.body, design: .monospaced))
-                        Button { revealManagementKey.toggle() } label: {
-                            Image(systemName: revealManagementKey ? "eye.slash" : "eye")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(revealManagementKey ? "Hide management key" : "Show management key")
                     }
                 } footer: {
-                    Text("Leave blank for the default key, or a PIN-protected management key (ykman --protect) — your PIN unlocks that automatically. Only enter a value if you set a specific management key of your own.")
+                    Text("Leave this closed for the default or a PIN-protected/derived management key — your PIN unlocks it automatically. Only open it if you set a specific management key of your own.")
                 }
                 Section {
                     Button(busy ? "Waiting for YubiKey…" : "Connect") { enroll() }

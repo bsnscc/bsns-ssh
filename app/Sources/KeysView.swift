@@ -8,6 +8,7 @@ struct KeysView: View {
     @State private var genError: String?
     @State private var installTarget: InstallTarget?
     @State private var showYubiKey = false
+    @State private var showEnclaveBackupWarning = false
 
     private struct InstallTarget: Identifiable { let id = UUID(); let key: SSHPublicKey }
 
@@ -84,7 +85,10 @@ struct KeysView: View {
                 if store.enclaveAvailable {
                     Button {
                         Task {
-                            do { try await store.generateEnclaveKey() }
+                            do {
+                                try await store.generateEnclaveKey()
+                                showEnclaveBackupWarning = true
+                            }
                             catch { genError = "Couldn't create the key: \(error.localizedDescription)" }
                         }
                     } label: {
@@ -111,11 +115,11 @@ struct KeysView: View {
             } header: {
                 Text("Generate")
             } footer: {
-                if store.enclaveAvailable {
-                    Text("A Secure Enclave key never leaves this device and asks for Face ID each time it signs in. It can't be exported or copied off the phone.\n\nUse RSA only for older gear (some network equipment) that can't accept Ed25519 or ECDSA keys.")
-                } else {
-                    Text("Use RSA only for older gear (some network equipment) that can't accept Ed25519 or ECDSA keys.")
-                }
+                let enclaveNote = store.enclaveAvailable
+                    ? "A Secure Enclave key never leaves this device and asks for Face ID each time it signs — but it can't be backed up, so if you lose this device you're locked out of any server that only trusts it. Enroll a second key on another device as a backup.\n\n"
+                    : ""
+                Text(enclaveNote
+                    + "A software key can be backed up and synced across your devices (Settings → Backup), so it survives a lost phone — a good everyday key. Hardware-backed keys (Secure Enclave / YubiKey) are stronger but need a backup key.\n\nUse RSA only for older gear (some network equipment) that can't accept Ed25519 or ECDSA keys.")
             }
 
             Section {
@@ -126,6 +130,15 @@ struct KeysView: View {
         }
         .navigationTitle("Keys")
         .task { await store.refresh() }
+        .alert("Add a backup key", isPresented: $showEnclaveBackupWarning) {
+            Button("Got it", role: .cancel) {}
+        } message: {
+            Text("""
+            This Secure Enclave key is locked to this device and can't be backed up or copied off it. If the device is lost or broken, you'll be locked out of every server that only trusts this key.
+
+            Enroll a second hardware-backed key on another device (or a YubiKey), and make sure BOTH public keys are added to each server's authorized_keys.
+            """)
+        }
         .sheet(item: $installTarget) { target in
             InstallKeyView(keyLines: [authorizedKeysLine(target.key)],
                            keyLabel: "\(target.key.algorithm.rawValue)  ·  \(SSHKeyFormat.fingerprint(ofPublicKeyBlob: target.key.blob))")
