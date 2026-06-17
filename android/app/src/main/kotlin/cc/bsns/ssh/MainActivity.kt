@@ -14,7 +14,9 @@ import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -37,6 +39,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -841,175 +844,180 @@ fun ConnectScreen(
         }
     }
 
+    val hasJump = jump.trim().isNotEmpty()
+    var showPublicKey by remember { mutableStateOf(false) }
     Scaffold { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            Modifier.fillMaxSize().padding(pad).padding(Spacing.screen).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(Spacing.section),
         ) {
+            // App bar: brand wordmark + nav.
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
                 Text("bsns.\$_", fontFamily = FontFamily.Monospace, fontSize = 22.sp)
-                Row {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = onManageKeys) { Text("Keys") }
                     TextButton(onClick = onManageHosts) { Text("Hosts") }
-                    TextButton(onClick = onSettings) { Text("⚙") }
+                    IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Settings") }
                 }
             }
-            Text("Connect over SSH — your key stays in the Keystore.", fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-            TextButton(onClick = onImport) { Text("Import from ~/.ssh (config · known_hosts · keys)", fontSize = 12.sp) }
-
+            // Saved hosts — one card per folder.
             if (savedHosts.isNotEmpty()) {
-                // Group by folder: named groups first (alphabetical), ungrouped last.
                 val grouped = savedHosts.groupBy { it.group?.trim()?.ifEmpty { null } }
                 val sections = grouped.keys.filterNotNull().sorted() + (if (grouped.containsKey(null)) listOf<String?>(null) else emptyList())
                 sections.forEach { g ->
-                    Text(g ?: "Saved", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    grouped[g]!!.forEach { h ->
-                        Row(
-                            // Whole row loads the host (a bigger, reliable tap target than
-                            // just the text); the ✕ removes it.
-                            Modifier.fillMaxWidth().clickable {
-                                host = h.host; port = h.port.toString(); user = h.user
-                                group = h.group ?: ""; jump = h.jump ?: ""
-                                // Restore the saved key if it still exists.
-                                if (h.keyId != null && keys.any { it.id == h.keyId }) onSelectKey(h.keyId)
-                                status = "loaded ${h.label}"
-                            }.padding(vertical = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                h.label + (h.jump?.let { "  ⇢ $it" } ?: ""),
-                                fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.weight(1f),
-                            )
-                            IconButton(onClick = { savedHosts = hostStore.remove(h) }) {
-                                Icon(Icons.Default.Close, "remove", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Section(title = g ?: "Saved hosts") {
+                        grouped[g]!!.forEachIndexed { i, h ->
+                            if (i > 0) RowDivider()
+                            Row(
+                                // Whole row loads the host (a big, reliable tap target); the ✕ removes it.
+                                Modifier.fillMaxWidth().heightIn(min = Spacing.rowMinHeight).clickable {
+                                    host = h.host; port = h.port.toString(); user = h.user
+                                    group = h.group ?: ""; jump = h.jump ?: ""
+                                    if (h.keyId != null && keys.any { it.id == h.keyId }) onSelectKey(h.keyId)
+                                    status = "loaded ${h.label}"
+                                },
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+                                    Text(h.label, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.primary)
+                                    h.jump?.let {
+                                        Text("⇢ $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                IconButton(onClick = { savedHosts = hostStore.remove(h) }) {
+                                    Icon(Icons.Default.Close, "remove", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             }
                         }
                     }
                 }
             }
 
-            OutlinedTextField(host, { host = it }, label = { Text("host") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(port, { port = it }, label = { Text("port") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(user, { user = it }, label = { Text("user") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(group, { group = it }, label = { Text("group (optional)") },
-                singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(jump, { jump = it }, label = { Text("jump / bastion (optional: user@host[:port])") },
-                singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(
-                password, { password = it },
-                label = { Text("password (only to install your key)") },
-                singleLine = true,
-                visualTransformation = if (showPassword) androidx.compose.ui.text.input.VisualTransformation.None
-                    else androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                trailingIcon = {
-                    TextButton(onClick = { showPassword = !showPassword }) {
-                        Text(if (showPassword) "hide" else "show", fontSize = 12.sp)
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            // Always-visible Save (the action row below is scrollable, so a button
-            // there can sit off-screen on a phone).
-            OutlinedButton(
-                enabled = host.isNotBlank() && user.isNotBlank(),
-                onClick = {
-                    val p = validPort(port)
-                    if (p == null) { status = "port must be a number from 1 to 65535"; return@OutlinedButton }
-                    savedHosts = hostStore.add(SavedHost(host, p, user,
-                        jump = jump.trim().ifEmpty { null }, group = group.trim().ifEmpty { null },
-                        keyId = key.id))
-                    status = "saved $user@$host"
-                },
-            ) { Text("Save this host") }
-
-            if (keys.size > 1) KeyPicker(keys, key.id, onSelectKey)
-
-            val hasJump = jump.trim().isNotEmpty()
-
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Use mosh (UDP — roams, survives sleep)", fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                androidx.compose.material3.Switch(checked = useMosh, enabled = !hasJump,
-                    onCheckedChange = { useMosh = it })
+            // Connection inputs.
+            Section(title = "Server", footer = "Connect over SSH — your key stays in the Keystore.") {
+                Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(host, { host = it }, label = { Text("host") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(port, { port = it }, label = { Text("port") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(user, { user = it }, label = { Text("user") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(group, { group = it }, label = { Text("group (optional)") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(jump, { jump = it }, label = { Text("jump / bastion (optional: user@host[:port])") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(
+                        password, { password = it },
+                        label = { Text("password (only to install your key)") },
+                        singleLine = true,
+                        visualTransformation = if (showPassword) androidx.compose.ui.text.input.VisualTransformation.None
+                            else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        trailingIcon = {
+                            TextButton(onClick = { showPassword = !showPassword }) {
+                                Text(if (showPassword) "hide" else "show", fontSize = 12.sp)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                RowDivider()
+                SettingRow("Use mosh (UDP — roams, survives sleep)", enabled = !hasJump) {
+                    androidx.compose.material3.Switch(checked = useMosh, enabled = !hasJump,
+                        onCheckedChange = { useMosh = it })
+                }
+                if (keys.size > 1) {
+                    RowDivider()
+                    Box(Modifier.padding(vertical = 8.dp)) { KeyPicker(keys, key.id, onSelectKey) }
+                }
             }
+
             if (hasJump) {
                 Text("Via a jump host, only an interactive shell is supported for now — " +
                     "mosh, Files, Tunnels, and Install key go direct and are disabled.",
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
 
-            Row(
-                Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Button(enabled = !busy, onClick = {
-                    // A jump host tunnels the shell only; ignore mosh when one is set.
-                    withYubiPin { verifyThen { p, blob -> if (useMosh && !hasJump) openMosh(p, blob) else openWith(p, blob) } }
-                }) { Text(if (useMosh && !hasJump) "Connect (mosh)" else "Connect") }
+            // Actions.
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(enabled = !busy, onClick = {
+                        // A jump host tunnels the shell only; ignore mosh when one is set.
+                        withYubiPin { verifyThen { p, blob -> if (useMosh && !hasJump) openMosh(p, blob) else openWith(p, blob) } }
+                    }) { Text(if (useMosh && !hasJump) "Connect (mosh)" else "Connect") }
 
-                OutlinedButton(enabled = !busy && !hasJump, onClick = {
-                    withYubiPin {
-                        verifyThen { p, blob ->
-                            onSftp(SftpTarget(host, p, user, key.publicKeyBlob, key.signer, blob))
-                        }
-                    }
-                }) { Text("Files") }
-
-                OutlinedButton(enabled = !busy && !hasJump, onClick = {
-                    if (forwardsActive) onReopenForwards()
-                    else withYubiPin { verifyThen { p, blob -> openForwards(p, blob) } }
-                }) { Text(if (forwardsActive) "Tunnels ●" else "Tunnels") }
-
-                OutlinedButton(enabled = !busy && password.isNotEmpty() && !hasJump, onClick = {
-                    // Verify the host key first (same TOFU prompt as Connect) so the
-                    // server password is never sent to an unverified host.
-                    verifyThen { p, blob ->
-                        busy = true; status = "installing key…"
-                        thread {
-                            val ok = SshBridge().nativeInstallKey(host, p, user, password, authLine, blob)
-                            main.post {
-                                busy = false
-                                if (ok) password = ""   // don't keep the password in UI state after use
-                                status = if (ok) "key installed — now Connect" else "install failed"
+                    OutlinedButton(enabled = !busy && !hasJump, onClick = {
+                        withYubiPin {
+                            verifyThen { p, blob ->
+                                onSftp(SftpTarget(host, p, user, key.publicKeyBlob, key.signer, blob))
                             }
                         }
-                    }
-                }) { Text("Install key") }
-            }
+                    }) { Text("Files") }
 
-            status?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }
+                    OutlinedButton(enabled = !busy && !hasJump, onClick = {
+                        if (forwardsActive) onReopenForwards()
+                        else withYubiPin { verifyThen { p, blob -> openForwards(p, blob) } }
+                    }) { Text(if (forwardsActive) "Tunnels ●" else "Tunnels") }
 
-            // The public key is a wall of base64, rarely needed — keep it collapsed.
-            var showPublicKey by remember { mutableStateOf(false) }
-            Divider(Modifier.padding(top = 6.dp))
-            Row(
-                Modifier.fillMaxWidth().clickable { showPublicKey = !showPublicKey }.padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("My public key", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { copyToClipboard(context, "public key", authLine) }) { Text("Copy") }
-                    Icon(if (showPublicKey) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                        contentDescription = if (showPublicKey) "hide" else "show",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton(enabled = !busy && password.isNotEmpty() && !hasJump, onClick = {
+                        // Verify the host key first (same TOFU prompt as Connect) so the
+                        // server password is never sent to an unverified host.
+                        verifyThen { p, blob ->
+                            busy = true; status = "installing key…"
+                            thread {
+                                val ok = SshBridge().nativeInstallKey(host, p, user, password, authLine, blob)
+                                main.post {
+                                    busy = false
+                                    if (ok) password = ""   // don't keep the password in UI state after use
+                                    status = if (ok) "key installed — now Connect" else "install failed"
+                                }
+                            }
+                        }
+                    }) { Text("Install key") }
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        enabled = host.isNotBlank() && user.isNotBlank(),
+                        onClick = {
+                            val p = validPort(port)
+                            if (p == null) { status = "port must be a number from 1 to 65535"; return@OutlinedButton }
+                            savedHosts = hostStore.add(SavedHost(host, p, user,
+                                jump = jump.trim().ifEmpty { null }, group = group.trim().ifEmpty { null },
+                                keyId = key.id))
+                            status = "saved $user@$host"
+                        },
+                    ) { Text("Save host") }
+                    TextButton(onClick = onImport) { Text("Import from ~/.ssh", fontSize = 13.sp) }
+                }
+                status?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }
             }
-            if (showPublicKey) {
-                Text("Add to the server's ~/.ssh/authorized_keys:", fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                SelectionContainer {
-                    Text(authLine, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+
+            // The public key is a wall of base64, rarely needed — keep it in a card, collapsed.
+            Section {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = Spacing.rowMinHeight)
+                        .clickable { showPublicKey = !showPublicKey },
+                    horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("My public key", fontSize = 15.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { copyToClipboard(context, "public key", authLine) }) { Text("Copy") }
+                        Icon(if (showPublicKey) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = if (showPublicKey) "hide" else "show",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (showPublicKey) {
+                    Text("Add to the server's ~/.ssh/authorized_keys:", fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 4.dp))
+                    SelectionContainer {
+                        Text(authLine, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
+                            modifier = Modifier.padding(bottom = 8.dp))
+                    }
                 }
             }
 
