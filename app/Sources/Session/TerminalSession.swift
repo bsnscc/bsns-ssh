@@ -135,6 +135,37 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     // the on-device history only, never leaves the device.
     private var lineBuf = ""
     private var inEscape = false
+    /// Armed when recent OUTPUT looks like a password / passphrase prompt. The
+    /// next submitted line is then NOT recorded — at such a prompt the remote
+    /// reads with echo OFF, but the keystrokes still flow through this tap, so
+    /// without this guard a typed password would land in history.
+    private var awaitingSecret = false
+    /// Rolling tail of recent printable output, for prompt detection across chunks.
+    private var outTail = ""
+
+    /// Output-side cues (lowercased) that a secret is being prompted for. Liberal
+    /// on purpose: a false positive only drops one command from history, while a
+    /// miss would record a password — so we bias hard toward suppression.
+    private static let secretPromptCues = [
+        "password:", "password for", "'s password", "passphrase",
+        "[sudo] password", "verification code", "one-time password",
+        "enter pin", "pin:", "otp",
+    ]
+
+    /// Inspect transport output (lock held) and arm secret-suppression when a
+    /// password/passphrase prompt appears.
+    private func noteOutputForSecretPrompt(_ bytes: ArraySlice<UInt8>) {
+        for b in bytes where (0x20...0x7e).contains(b) || b == 0x0a {
+            outTail.append(Character(UnicodeScalar(b)))
+        }
+        if outTail.count > 256 { outTail = String(outTail.suffix(256)) }
+        let hay = outTail.lowercased()
+        if Self.secretPromptCues.contains(where: { hay.contains($0) }) {
+            awaitingSecret = true
+            outTail = ""   // consume so we don't re-arm on the same stale text
+        }
+    }
+
     private func trackInput(_ bytes: ArraySlice<UInt8>) {
         lock.lock()
         for b in bytes {
@@ -144,11 +175,17 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             case 0x0d, 0x0a:
                 let raw = lineBuf
                 lineBuf = ""
+                // A line submitted right after a password prompt is a secret — never
+                // record it (and disarm; one wrong-password retry re-arms on the
+                // next prompt).
+                let secret = awaitingSecret
+                awaitingSecret = false
                 // Honor the shell `ignorespace` convention + the user's history
                 // toggle: a line typed with a leading space is never recorded
                 // (use it for secrets), and history can be turned off entirely.
                 let line = raw.trimmingCharacters(in: .whitespaces)
-                if !line.isEmpty, !raw.hasPrefix(" "), UserDefaults.standard.bool(forKey: SettingsKey.commandHistory) {
+                if !secret, !line.isEmpty, !raw.hasPrefix(" "),
+                   UserDefaults.standard.bool(forKey: SettingsKey.commandHistory) {
                     CommandHistory.shared.record(line)
                 }
             case 0x03, 0x15: lineBuf = ""                          // Ctrl-C / Ctrl-U
@@ -218,6 +255,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// attaches and `onOutput` is set (see that property's note).
     private func deliver(_ bytes: ArraySlice<UInt8>) {
         lock.lock()
+        noteOutputForSecretPrompt(bytes)
         if onOutput == nil {
             outputBuffer.append(contentsOf: bytes)
             lock.unlock()

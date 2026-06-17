@@ -307,6 +307,14 @@ enum class ConnStatus { Connected, Reconnecting, Disconnected }
  * and [reconnect] rebuilds the transport behind the same terminal (iOS reconnect
  * parity). Also applies the colour theme / cursor shape / bell at session start.
  */
+/** Output-side cues (lowercased) that a secret is being prompted for, used to keep
+ *  typed passwords out of command history. See [TerminalHolder.noteOutputForSecretPrompt]. */
+private val SECRET_PROMPT_CUES = listOf(
+    "password:", "password for", "'s password", "passphrase",
+    "[sudo] password", "verification code", "one-time password",
+    "enter pin", "pin:", "otp",
+)
+
 class TerminalHolder(
     context: android.content.Context,
     initialSession: TerminalTransport,
@@ -332,6 +340,31 @@ class TerminalHolder(
         private set
     private val lineBuf = StringBuilder()
     private var inEscape = false
+    // Armed when recent OUTPUT looks like a password/passphrase prompt — the next
+    // submitted line is then NOT recorded. At such a prompt the remote reads with
+    // echo OFF, but the keystrokes still flow through trackInput, so without this
+    // a typed password would land in history. Touched from the output thread
+    // (noteOutputForSecretPrompt) and the write thread (trackInput).
+    @Volatile private var awaitingSecret = false
+    private val outTail = StringBuilder()
+
+    /** Inspect transport output and arm secret-suppression on a password prompt.
+     *  Liberal on purpose: a false positive only drops one history entry, while a
+     *  miss would record a password — so bias hard toward suppression. */
+    private fun noteOutputForSecretPrompt(bytes: ByteArray) {
+        synchronized(outTail) {
+            for (b in bytes) {
+                val c = b.toInt() and 0xFF
+                if (c in 0x20..0x7e || c == 0x0a) outTail.append(c.toChar())
+            }
+            if (outTail.length > 256) outTail.delete(0, outTail.length - 256)
+            val hay = outTail.toString().lowercase()
+            if (SECRET_PROMPT_CUES.any { hay.contains(it) }) {
+                awaitingSecret = true
+                outTail.setLength(0)
+            }
+        }
+    }
 
     fun suggestionsFor(prefix: String): List<String> = history.suggestions(prefix)
     fun history(): List<String> = history.all()
@@ -357,9 +390,13 @@ class TerminalHolder(
                 c == 0x0d || c == 0x0a -> {                          // Enter — commit the line
                     val raw = lineBuf.toString()
                     val line = raw.trim()
+                    // A line submitted right after a password prompt is a secret — never
+                    // record it (disarm; a wrong-password retry re-arms on the next prompt).
+                    val secret = awaitingSecret
+                    awaitingSecret = false
                     // ignorespace convention + history toggle: a leading-space line is
                     // never recorded (use it for secrets), and history can be disabled.
-                    if (line.isNotEmpty() && !raw.startsWith(" ") && settingsStore.commandHistory) {
+                    if (!secret && line.isNotEmpty() && !raw.startsWith(" ") && settingsStore.commandHistory) {
                         history.record(line)
                     }
                     lineBuf.setLength(0)
@@ -420,7 +457,10 @@ class TerminalHolder(
     }
 
     private fun wireOutput(s: TerminalTransport) {
-        s.onOutput = { bytes -> main.post { termSession.appendToEmulator(bytes, bytes.size) } }
+        s.onOutput = { bytes ->
+            noteOutputForSecretPrompt(bytes)
+            main.post { termSession.appendToEmulator(bytes, bytes.size) }
+        }
         when (s) {
             is SshSession -> s.onClosed = { _ -> onDropped() }
             is MoshSession -> s.onClosed = { _ -> onDropped() }
