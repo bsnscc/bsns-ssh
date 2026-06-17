@@ -104,6 +104,13 @@ void mosh_client_hop(MoshClient* c) {
   catch (...) {}
 }
 
+void mosh_client_force_repaint(MoshClient* c) {
+  // Drop the diff baseline so the next drain_ansi emits a FULL repaint (clear +
+  // redraw of the entire framebuffer) instead of a delta — recovers a desynced
+  // display after resume (wrong row count / stale gap).
+  if (c) c->rendered = false;
+}
+
 void mosh_client_push(MoshClient* c, const char* bytes, int len) {
   if (!c || !c->transport || !bytes) return;
   Network::UserStream& s = c->transport->get_current_state();

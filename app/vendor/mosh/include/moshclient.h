@@ -36,6 +36,11 @@ void mosh_client_tick(MoshClient* c);
 /// for mosh's ~10s auto-hop.
 void mosh_client_hop(MoshClient* c);
 
+/// Drop the diff baseline so the next mosh_client_drain_ansi emits a FULL repaint
+/// (clear + full framebuffer redraw) rather than a delta. Call on resume to fix a
+/// desynced display (wrong row count / gap) after the app was backgrounded.
+void mosh_client_force_repaint(MoshClient* c);
+
 /// Queue local input bytes / a terminal resize to send to the server.
 void mosh_client_push(MoshClient* c, const char* bytes, int len);
 void mosh_client_resize(MoshClient* c, int cols, int rows);

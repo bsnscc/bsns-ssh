@@ -1,6 +1,11 @@
 import Foundation
 import UIKit
+import os
 import CMosh
+
+/// Diagnostics for the mosh resume/size path — view in Console.app (subsystem
+/// cc.bsns.ssh, category mosh) while reproducing a background→foreground cycle.
+private let moshLog = Logger(subsystem: "cc.bsns.ssh", category: "mosh")
 
 /// Drives a mosh (UDP) session: opens the client transport with the key the SSH
 /// bootstrap obtained from `mosh-server`, pumps datagrams on a background thread,
@@ -35,7 +40,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var serverKey = ""
     private var cols: Int32 = 80
     private var rows: Int32 = 24
-    private var foregroundObserver: NSObjectProtocol?
+    private var foregroundObservers: [NSObjectProtocol] = []
 
     private let lock = NSLock()
     private var pendingInput: [UInt8] = []
@@ -53,17 +58,24 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         if let err = mosh_client_last_error(c) { mosh_client_free(c); return String(cString: err) }
         client = c
         serverIP = ip; serverPort = port; serverKey = key; self.cols = cols; self.rows = rows
+        moshLog.info("open \(cols, privacy: .public)x\(rows, privacy: .public)")
         var fds: [Int32] = [-1, -1]
         pipe(&fds)
         wakeRead = fds[0]; wakeWrite = fds[1]
-        // iOS suspends our socket when backgrounded; on return, kick the loop to
-        // re-send (and, if we've gone stale, re-establish the socket).
-        foregroundObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil
-        ) { [weak self] _ in
+        // iOS suspends the loop + tears down our socket when backgrounded. On return
+        // we (a) kick the loop, (b) re-assert the terminal size + force a full repaint
+        // (the framebuffer/viewport desync that leaves content wrapping at the wrong
+        // row), and (c) hop to a fresh socket if we'd gone stale. Observe both
+        // notifications — willEnterForeground fires earliest; didBecomeActive is the
+        // backstop — since either alone has proven unreliable in a SwiftUI-scene app.
+        let resume: (Notification) -> Void = { [weak self] _ in
             guard let self else { return }
             self.lock.lock(); self.resumeRequested = true; self.lock.unlock()
             self.wake()
+        }
+        for name in [UIApplication.willEnterForegroundNotification, UIApplication.didBecomeActiveNotification] {
+            foregroundObservers.append(
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil, using: resume))
         }
         queue.async { [weak self] in self?.runLoop() }
         return nil
@@ -76,6 +88,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
 
     func resize(cols: Int32, rows: Int32) {
         lock.lock(); pendingResize = (cols, rows); self.cols = cols; self.rows = rows; lock.unlock()
+        moshLog.info("resize \(cols, privacy: .public)x\(rows, privacy: .public)")
         wake()
     }
 
@@ -107,15 +120,20 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
 
             if stop { break }
 
-            // Returning from the background: if we've been silent past the stale
-            // threshold, iOS almost certainly tore down our suspended UDP socket.
-            // mosh recovers by "hopping" to a fresh socket on the SAME connection
-            // (preserving the crypto sequence the server's replay-protection
-            // requires — a brand-new client would be rejected). mosh auto-hops only
-            // after 10s of silence; force it now so resume is immediate. Gated on
-            // staleness so a brief app-switch (live socket) or launch doesn't churn.
-            if resume, Date().timeIntervalSince(lastContactAt) > Self.staleThreshold {
-                mosh_client_hop(c)
+            // Returning from the background.
+            if resume {
+                let silent = Date().timeIntervalSince(lastContactAt)
+                moshLog.info("resume: silent=\(Int(silent), privacy: .public)s size=\(self.cols, privacy: .public)x\(self.rows, privacy: .public)")
+                // If we'd gone silent past the stale threshold, iOS likely tore down
+                // our suspended UDP socket — hop to a fresh one on the SAME connection
+                // (preserves the crypto sequence the server's replay-protection needs;
+                // a brand-new client would be rejected). mosh auto-hops only after 10s.
+                if silent > Self.staleThreshold { mosh_client_hop(c) }
+                // Re-assert the terminal size (server redraws to match) and force a
+                // full repaint — fixes the framebuffer/viewport desync that leaves the
+                // screen wrapping at the wrong row with a gap after resume.
+                mosh_client_resize(c, cols, rows)
+                mosh_client_force_repaint(c)
             }
             if !input.isEmpty {
                 input.withUnsafeBytes { raw in
@@ -153,7 +171,8 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     }
 
     private func teardown() {
-        if let obs = foregroundObserver { NotificationCenter.default.removeObserver(obs); foregroundObserver = nil }
+        foregroundObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        foregroundObservers.removeAll()
         if let c = client { mosh_client_free(c); client = nil }
         if wakeRead >= 0 { close(wakeRead); wakeRead = -1 }
         if wakeWrite >= 0 { close(wakeWrite); wakeWrite = -1 }
