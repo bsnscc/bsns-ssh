@@ -61,12 +61,19 @@ struct InstallKeyView: View {
             .navigationTitle("Install Key")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
-            .alert("Unknown host key", isPresented: Binding(get: { pendingHostKey != nil }, set: { if !$0 { pendingHostKey = nil } })) {
-                Button("Trust & continue") { trustAndInstall() }
+            .alert("Verify host key", isPresented: Binding(get: { pendingHostKey != nil }, set: { if !$0 { pendingHostKey = nil } })) {
+                Button("Trust") { trustAndInstall() }
                 Button("Cancel", role: .cancel) { pendingHostKey = nil; busy = false }
             } message: {
                 if let key = pendingHostKey {
-                    Text("First connection to \(host). Verify the fingerprint:\n\n\(key.keyType)\n\(key.fingerprint)")
+                    Text("""
+                    First connection to \(user)@\(host):\(port).
+
+                    \(key.keyType)
+                    \(key.fingerprint)
+
+                    Only trust this if the fingerprint matches what the server's admin gave you (e.g. `ssh-keygen -lf` on the host). Trusting an unverified key can expose your session to interception.
+                    """)
                 }
             }
         }

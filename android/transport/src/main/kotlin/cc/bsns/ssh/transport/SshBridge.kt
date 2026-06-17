@@ -36,6 +36,15 @@ class SshBridge {
     external fun nativeWrite(handle: Long, data: ByteArray)
     /** Bytes read (>0), 0 if none available now, or -1 on EOF/error. */
     external fun nativeRead(handle: Long, buf: ByteArray): Int
+    /** Park the owner thread until the session fd is ready or the wake-pipe is
+     *  poked (whichever first), up to timeoutMs — the non-busy idle wait that
+     *  replaces sleeping on EAGAIN. Returns 0 normally, -1 on poll error. */
+    external fun nativeWait(handle: Long, timeoutMs: Int): Int
+    /** Poke the wake-pipe so a blocked [nativeWait] returns at once (any thread). */
+    external fun nativeWake(handle: Long)
+    /** Why the last [nativeOpenShell]/[nativeOpenShellSk] on THIS thread failed —
+     *  an [OpenReason] ordinal. Read immediately after a 0-handle open. */
+    external fun nativeLastOpenReason(): Int
     external fun nativeResize(handle: Long, cols: Int, rows: Int)
     external fun nativeClose(handle: Long)
 

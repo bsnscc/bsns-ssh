@@ -99,8 +99,28 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
 
     func send(source: TerminalView, data: ArraySlice<UInt8>) { session.write(data) }
 
+    // Coalesce resize churn: a Stage Manager / split-view drag fires ~60 layout
+    // passes a second, and each session.resize forces a full mosh repaint. Skip
+    // no-op repeats and debounce so only the settled size reaches the transport.
+    private var lastSentCols: Int = -1
+    private var lastSentRows: Int = -1
+    private var pendingResize: DispatchWorkItem?
+
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        session.resize(cols: Int32(newCols), rows: Int32(newRows))
+        // No-op suppression — the same size during a drag costs nothing.
+        if newCols == lastSentCols && newRows == lastSentRows { return }
+        pendingResize?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingResize = nil
+            self.lastSentCols = newCols
+            self.lastSentRows = newRows
+            self.session.resize(cols: Int32(newCols), rows: Int32(newRows))
+        }
+        pendingResize = work
+        // Trailing debounce: only the last size in a ~110ms quiet window is sent,
+        // and the final size always wins (every change reschedules this).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.11, execute: work)
     }
 
     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {

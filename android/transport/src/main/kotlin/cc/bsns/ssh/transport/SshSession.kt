@@ -2,6 +2,18 @@ package cc.bsns.ssh.transport
 
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** Why an [SshSession.open] failed — the Android analogue of the iOS
+ *  SSHShellError categories, so the UI can say more than "couldn't connect".
+ *  Ordinals MUST stay in sync with the OPEN_* enum in sshbridge.c. */
+enum class OpenReason {
+    Ok, Unreachable, Handshake, Auth, HostKeyMismatch, NoShell;
+
+    companion object {
+        fun fromCode(code: Int): OpenReason =
+            entries.getOrElse(code) { Unreachable }
+    }
+}
+
 /**
  * A live interactive SSH session — the safe Kotlin face over the raw JNI bridge.
  * One owner thread drives the libssh2 session (which isn't thread-safe): it
@@ -39,6 +51,11 @@ class SshSession(
         }
     var onClosed: ((String?) -> Unit)? = null
 
+    /** Why the last [open] failed, for the UI to show a specific message. Set on
+     *  a failed open; [OpenReason.Ok] otherwise. */
+    var lastError: OpenReason = OpenReason.Ok
+        private set
+
     private val bridge = SshBridge()
     private var handle = 0L
     private val running = AtomicBoolean(false)
@@ -56,7 +73,11 @@ class SshSession(
             bridge.nativeOpenShell(host, port, user, pubBlob, signer, cols, rows, expectedHostKey,
                 jumpHost, jumpPort, jumpUser, expectedBastionHostKey)
         }
-        if (handle == 0L) return false
+        if (handle == 0L) {
+            lastError = OpenReason.fromCode(bridge.nativeLastOpenReason())
+            return false
+        }
+        lastError = OpenReason.Ok
         running.set(true)
         Thread({ loop() }, "ssh-session").apply { isDaemon = true }.start()
         return true
@@ -64,15 +85,18 @@ class SshSession(
 
     override fun write(data: ByteArray) {
         synchronized(lock) { writeQueue.add(data) }
+        bridge.nativeWake(handle)   // interrupt the idle wait so input goes out now
     }
 
     override fun resize(cols: Int, rows: Int) {
         synchronized(lock) { pendingResize = cols to rows }
+        bridge.nativeWake(handle)
     }
 
     override fun close() {
         userClosed.set(true)
         running.set(false)
+        bridge.nativeWake(handle)   // wake the loop so it exits promptly
     }
 
     private fun loop() {
@@ -98,7 +122,11 @@ class SshSession(
                     }
                 }
                 -1 -> { running.set(false) }
-                else -> Thread.sleep(10)   // no data right now
+                // No data right now: park on the session fd + wake-pipe instead of
+                // busy-polling at 100Hz. A typed byte / resize / close pokes the
+                // wake-pipe (nativeWake) so it returns immediately; the 1s cap keeps
+                // keepalives ticking even on a fully idle session.
+                else -> bridge.nativeWait(handle, 1000)
             }
         }
         bridge.nativeClose(handle)

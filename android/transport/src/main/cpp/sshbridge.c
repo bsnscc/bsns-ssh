@@ -1,7 +1,8 @@
 // JNI bridge over libssh2: the Android equivalent of the iOS AgentSignBridge.
 // Public-key auth's sign callback calls back into Kotlin, which signs with a
 // non-extractable Android Keystore key — the private key never touches the
-// transport. (Spike: also installs the pubkey via password first.)
+// transport. nativeInstallKey is the "Install my key" feature: a one-time
+// password connect that appends the pubkey to the server's authorized_keys.
 #include <jni.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -214,17 +215,38 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeInstallKey(
             if (libssh2_userauth_password(s, user, pass) == 0) {
                 LIBSSH2_CHANNEL* c = libssh2_channel_open_session(s);
                 if (c) {
+                    // Single-quote-escape the authorized_keys line before interpolating
+                    // it into the remote command, so spaces/metacharacters can't break
+                    // out of the quoting (mirrors the iOS installer's '...'\''...'
+                    // pattern). Worst case each char becomes the 4-char "'\''", so a
+                    // 2-byte preamble + 4x the line + 2-byte trailer + NUL bounds it.
+                    size_t linelen = strlen(line);
+                    char* qline = (char*)malloc(linelen * 4 + 3);
                     char cmd[8192];
-                    // Append the key only if it isn't already present (dedup), matching
-                    // the iOS installer's `grep -qxF || append` so repeated installs
-                    // don't pile up duplicate authorized_keys lines.
-                    snprintf(cmd, sizeof(cmd),
-                             "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && "
-                             "chmod 600 ~/.ssh/authorized_keys && "
-                             "{ grep -qxF -- \"%s\" ~/.ssh/authorized_keys || "
-                             "printf '%%s\\n' \"%s\" >> ~/.ssh/authorized_keys; } && echo INSTALLED",
-                             line, line);
-                    libssh2_channel_exec(c, cmd);
+                    int built = 0;
+                    if (qline) {
+                        size_t qi = 0;
+                        qline[qi++] = '\'';
+                        for (size_t i = 0; i < linelen; i++) {
+                            if (line[i] == '\'') { qline[qi++]='\''; qline[qi++]='\\'; qline[qi++]='\''; qline[qi++]='\''; }
+                            else qline[qi++] = line[i];
+                        }
+                        qline[qi++] = '\'';
+                        qline[qi] = 0;
+                        // Append the key only if it isn't already present (dedup), matching
+                        // the iOS installer's `grep -qxF || append` so repeated installs
+                        // don't pile up duplicate authorized_keys lines. qline is already
+                        // a fully shell-quoted word, so it goes in unquoted.
+                        int need = snprintf(cmd, sizeof(cmd),
+                                 "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && "
+                                 "chmod 600 ~/.ssh/authorized_keys && "
+                                 "line=%s && { grep -qxF -- \"$line\" ~/.ssh/authorized_keys || "
+                                 "printf '%%s\\n' \"$line\" >> ~/.ssh/authorized_keys; } && echo INSTALLED",
+                                 qline);
+                        built = (need > 0 && need < (int)sizeof(cmd));
+                        free(qline);
+                    }
+                    if (built) libssh2_channel_exec(c, cmd);
                     char buf[256];
                     int n;
                     while ((n = libssh2_channel_read(c, buf, sizeof(buf) - 1)) > 0) {
@@ -364,8 +386,9 @@ static LIBSSH2_SESSION* connect_and_auth(JNIEnv* env, const char* host, int port
 // direct-tcpip channel to the target, and relay that channel over a socketpair.
 // The target SSH handshake then runs over the socketpair fd end-to-end, so the
 // target's host key is verified through the tunnel (a malicious bastion can't
-// impersonate the target). The bastion's own key is trust-on-first-use for now
-// (no UI pinning of the jump host yet — a documented v1 limitation).
+// impersonate the target). The bastion's own key is also verified: the caller
+// passes its expected host-key blob (jexpectedBastionHostKey) and the handshake
+// to the bastion is refused on mismatch, same as the target.
 typedef struct {
     LIBSSH2_SESSION* session;   // session to the bastion
     LIBSSH2_CHANNEL* channel;   // direct-tcpip bastion -> target
@@ -375,7 +398,42 @@ typedef struct {
     volatile int stop;
 } JumpChain;
 
-typedef struct { int fd; LIBSSH2_SESSION* session; LIBSSH2_CHANNEL* channel; JumpChain* jump; } SshClient;
+typedef struct {
+    int fd; LIBSSH2_SESSION* session; LIBSSH2_CHANNEL* channel; JumpChain* jump;
+    int wake[2];   // self-pipe: wake[1] written to interrupt nativeWait's poll
+} SshClient;
+
+// Create the wake self-pipe on a fresh client (best-effort: -1 fds just mean
+// nativeWait falls back to its timeout, never blocking forever). Both ends are
+// non-blocking so a poke never stalls the poking thread and a drain never hangs.
+static void ssh_client_init_wake(SshClient* c) {
+    if (pipe(c->wake) == 0) {
+        fcntl(c->wake[0], F_SETFL, O_NONBLOCK);
+        fcntl(c->wake[1], F_SETFL, O_NONBLOCK);
+    } else {
+        c->wake[0] = c->wake[1] = -1;
+    }
+}
+
+// Poke the wake-pipe so a blocked nativeWait returns now (called from the owner
+// thread's write/resize/close staging path, mirroring the mosh bridge).
+static void ssh_client_wake(SshClient* c) {
+    if (c && c->wake[1] >= 0) { char b = 1; ssize_t w = write(c->wake[1], &b, 1); (void)w; }
+}
+
+// Why the last open on THIS thread failed, so the UI can show something better
+// than one generic "couldn't open the session". Open runs synchronously on the
+// factory thread, which reads this immediately after — so thread-local is safe
+// and needs no locking. Mirrors the categories of iOS TerminalSession.describe.
+enum {
+    OPEN_OK = 0,
+    OPEN_UNREACHABLE,     // TCP connect / bastion tunnel failed
+    OPEN_HANDSHAKE,       // SSH handshake / algorithm policy failed
+    OPEN_AUTH,            // public-key (or sk) auth rejected
+    OPEN_HOST_KEY,        // pinned host key didn't match (possible MITM)
+    OPEN_NO_SHELL,        // authed, but couldn't open the channel / PTY / shell
+};
+static __thread int g_open_reason = OPEN_OK;
 
 // Relay bytes between the local socketpair end and the bastion's tunnel channel
 // until either side closes. Owns the bastion session exclusively (libssh2 isn't
@@ -506,6 +564,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
     jbyteArray jpubblob, jobject signer, jint cols, jint rows, jbyteArray jexpectedHostKey,
     jstring jjumpHost, jint jumpPort, jstring jjumpUser, jbyteArray jexpectedBastionHostKey) {
     (void)thiz;
+    g_open_reason = OPEN_UNREACHABLE;   // refined as we get further in
     if (libssh2_init(0)) return 0;
     const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
     const char* user = (*env)->GetStringUTFChars(env, juser, 0);
@@ -528,6 +587,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
     }
     if (fd >= 0) {
         LIBSSH2_SESSION* s = open_session(fd);
+        if (!s) g_open_reason = OPEN_HANDSHAKE;   // connected, but SSH handshake/policy failed
         if (s && jexpectedHostKey != NULL) {
             // Defense in depth: the session's actual host key must match what the
             // app trusted (guards against a swap between the TOFU check and now).
@@ -539,6 +599,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
             (*env)->ReleaseByteArrayElements(env, jexpectedHostKey, exp, JNI_ABORT);
             if (mismatch) {
                 LOG("host key mismatch — refusing");
+                g_open_reason = OPEN_HOST_KEY;
                 libssh2_session_disconnect(s, "host key mismatch");
                 libssh2_session_free(s);
                 s = NULL;
@@ -559,10 +620,14 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
                     libssh2_session_set_blocking(s, 0);   // non-blocking reads from here
                     client = (SshClient*)calloc(1, sizeof(SshClient));
                     client->fd = fd; client->session = s; client->channel = ch; client->jump = jump;
+                    ssh_client_init_wake(client);
+                    g_open_reason = OPEN_OK;
                 } else {
+                    g_open_reason = OPEN_NO_SHELL;   // authed, but no channel/PTY/shell
                     if (ch) { libssh2_channel_free(ch); }
                 }
             } else {
+                g_open_reason = OPEN_AUTH;
                 char* msg = NULL; libssh2_session_last_error(s, &msg, NULL, 0);
                 LOG("openShell: pubkey auth failed rc=%d: %s", rc, msg ? msg : "");
             }
@@ -612,6 +677,60 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeRead(JNIEnv* env, jobject thiz, jlong
     return result;
 }
 
+// Block up to timeoutMs for the session fd to become readable/writable (per
+// libssh2's current block directions) or for the wake-pipe to be poked, then
+// return. This replaces a busy-poll on EAGAIN: an idle session parks here
+// instead of spinning at 100Hz, while a poke (nativeWake) returns immediately so
+// typed input and resizes are never delayed. libssh2 stays non-blocking — we
+// only wait on the socket via poll(), then the owner thread retries nativeRead.
+// For a ProxyJump session c->fd is the local socketpair end the jump-pump relays
+// onto, so polling it for POLLIN still sees tunneled data. Owner thread only.
+JNIEXPORT jint JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeWait(JNIEnv* env, jobject thiz, jlong handle, jint timeoutMs) {
+    (void)env; (void)thiz;
+    SshClient* c = (SshClient*)(intptr_t)handle;
+    if (!c) return -1;
+    struct pollfd pfds[2];
+    int n = 0;
+    if (c->fd >= 0) {
+        int dir = libssh2_session_block_directions(c->session);
+        short ev = 0;
+        if (dir & LIBSSH2_SESSION_BLOCK_INBOUND) ev |= POLLIN;
+        if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) ev |= POLLOUT;
+        if (ev == 0) ev = POLLIN;   // nothing pending — wait for more server output
+        pfds[n].fd = c->fd; pfds[n].events = ev; pfds[n].revents = 0; n++;
+    }
+    if (c->wake[0] >= 0) { pfds[n].fd = c->wake[0]; pfds[n].events = POLLIN; pfds[n].revents = 0; n++; }
+    if (n == 0) return 0;
+    int r = poll(pfds, n, timeoutMs);
+    if (r > 0) {
+        for (int i = 0; i < n; i++) {
+            if ((pfds[i].revents & POLLIN) && c->wake[0] >= 0 && pfds[i].fd == c->wake[0]) {
+                char buf[64];
+                while (read(c->wake[0], buf, sizeof(buf)) > 0) {}   // drain
+            }
+        }
+    }
+    return r < 0 ? -1 : 0;
+}
+
+// Poke the wake-pipe so a blocked nativeWait returns now (any thread). Used by
+// the Kotlin write/resize/close staging path so input goes out immediately.
+JNIEXPORT void JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeWake(JNIEnv* env, jobject thiz, jlong handle) {
+    (void)env; (void)thiz;
+    ssh_client_wake((SshClient*)(intptr_t)handle);
+}
+
+// Why the last nativeOpenShell(Sk) on this thread failed (an OPEN_* code), so
+// the caller can show a specific message. Read it right after a 0-handle open,
+// on the same thread that called open.
+JNIEXPORT jint JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeLastOpenReason(JNIEnv* env, jobject thiz) {
+    (void)env; (void)thiz;
+    return (jint)g_open_reason;
+}
+
 JNIEXPORT void JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeResize(JNIEnv* env, jobject thiz, jlong handle, jint cols, jint rows) {
     (void)env; (void)thiz;
@@ -627,6 +746,8 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeClose(JNIEnv* env, jobject thiz, jlon
     if (c->channel) { libssh2_channel_close(c->channel); libssh2_channel_free(c->channel); }
     if (c->session) { libssh2_session_disconnect(c->session, "bye"); libssh2_session_free(c->session); }
     if (c->fd >= 0) close(c->fd);   // socketpair target side (signals the pump to stop)
+    if (c->wake[0] >= 0) close(c->wake[0]);
+    if (c->wake[1] >= 0) close(c->wake[1]);
     if (c->jump) jump_free(c->jump);
     free(c);
 }
@@ -641,6 +762,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShellSk(
     jbyteArray jpubblob, jstring jprivpem, jobject signer, jint cols, jint rows,
     jbyteArray jexpectedHostKey) {
     (void)thiz;
+    g_open_reason = OPEN_UNREACHABLE;   // refined as we get further in
     if (libssh2_init(0)) return 0;
     const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
     const char* user = (*env)->GetStringUTFChars(env, juser, 0);
@@ -652,6 +774,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShellSk(
     int fd = tcp_connect(host, port);
     if (fd >= 0) {
         LIBSSH2_SESSION* s = open_session(fd);
+        if (!s) g_open_reason = OPEN_HANDSHAKE;
         if (s && jexpectedHostKey != NULL) {
             size_t hklen = 0; int hktype = 0;
             const char* hk = libssh2_session_hostkey(s, &hklen, &hktype);
@@ -661,6 +784,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShellSk(
             (*env)->ReleaseByteArrayElements(env, jexpectedHostKey, exp, JNI_ABORT);
             if (mismatch) {
                 LOG("openShellSk: host key mismatch — refusing");
+                g_open_reason = OPEN_HOST_KEY;
                 libssh2_session_disconnect(s, "host key mismatch");
                 libssh2_session_free(s); s = NULL;
             }
@@ -676,9 +800,14 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShellSk(
                     libssh2_session_set_blocking(s, 0);
                     client = (SshClient*)calloc(1, sizeof(SshClient));
                     client->fd = fd; client->session = s; client->channel = ch; client->jump = NULL;
-                } else if (ch) {
-                    libssh2_channel_free(ch);
+                    ssh_client_init_wake(client);
+                    g_open_reason = OPEN_OK;
+                } else {
+                    g_open_reason = OPEN_NO_SHELL;
+                    if (ch) libssh2_channel_free(ch);
                 }
+            } else {
+                g_open_reason = OPEN_AUTH;
             }
             if (!client) { libssh2_session_disconnect(s, "bye"); libssh2_session_free(s); }
         }

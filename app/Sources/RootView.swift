@@ -22,7 +22,7 @@ struct RootView: View {
                 }
             } else {
                 TabView(selection: $homeTab) {
-                    NavigationStack { ConnectView() }
+                    NavigationStack { ConnectView(homeTab: $homeTab) }
                         .tabItem { Label("Connect", systemImage: "network") }.tag("connect")
                     NavigationStack { KeysView() }
                         .tabItem { Label("Keys", systemImage: "key.fill") }.tag("keys")

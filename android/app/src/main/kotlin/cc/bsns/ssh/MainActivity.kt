@@ -82,6 +82,7 @@ import com.termux.terminal.TerminalSession
 import com.termux.view.TerminalView
 import cc.bsns.ssh.core.SshKeyFormat
 import cc.bsns.ssh.transport.MoshSession
+import cc.bsns.ssh.transport.OpenReason
 import cc.bsns.ssh.transport.SshBridge
 import cc.bsns.ssh.transport.SshSession
 import cc.bsns.ssh.transport.TerminalTransport
@@ -324,6 +325,17 @@ fun App() {
 
 enum class ConnStatus { Connected, Reconnecting, Disconnected }
 
+/** Human-readable message for a failed SSH open, mirroring the categories in
+ *  iOS TerminalSession.describe so both platforms speak the same language. */
+fun describeOpenFailure(reason: OpenReason): String = when (reason) {
+    OpenReason.Unreachable -> "Couldn't reach the server. Check the host, port, and your network."
+    OpenReason.Handshake -> "SSH handshake failed — the server may not speak SSH, or uses unsupported algorithms."
+    OpenReason.Auth -> "Authentication failed — is your key installed on the server?"
+    OpenReason.HostKeyMismatch -> "⚠️ The host key changed — possible interception. Connection refused."
+    OpenReason.NoShell -> "Couldn't open a shell on the server."
+    OpenReason.Ok -> "Couldn't open the session."
+}
+
 /**
  * Holds one session's TerminalView + emulator outside composition so the buffer
  * survives tab switches. On a dropped connection it exposes [status] = Disconnected
@@ -358,6 +370,10 @@ class TerminalHolder(
      *  Connected (mosh may roam back), but the UI shows staleness so a dead
      *  session isn't a reassuring green. */
     var isStale by mutableStateOf(false)
+        private set
+    /** Why the session is in [ConnStatus.Disconnected] — shown in the banner so a
+     *  drop isn't just a bare "Disconnected". Null for a plain peer drop. */
+    var disconnectReason by mutableStateOf<String?>(null)
         private set
     private var userClosing = false
 
@@ -484,22 +500,49 @@ class TerminalHolder(
         session.write(text.toByteArray(Charsets.UTF_8))
     }
 
+    // Coalesce incoming output: many small network chunks accumulate into one
+    // buffer and a single main-thread drain feeds the emulator once per frame,
+    // instead of one post()+redraw per packet (iOS coalesces the same way via
+    // TerminalSurface.scheduleFlush). Bytes are appended in arrival order and
+    // never dropped — the buffer just batches them.
+    private val outBuf = java.io.ByteArrayOutputStream()
+    private var drainScheduled = false
+
     private fun wireOutput(s: TerminalTransport) {
         s.onOutput = { bytes ->
             noteOutputForSecretPrompt(bytes)
-            main.post { termSession.appendToEmulator(bytes, bytes.size) }
+            val post: Boolean
+            synchronized(outBuf) {
+                outBuf.write(bytes)
+                post = !drainScheduled
+                if (post) drainScheduled = true
+            }
+            if (post) main.post {
+                val batch: ByteArray
+                synchronized(outBuf) {
+                    batch = outBuf.toByteArray()
+                    outBuf.reset()
+                    drainScheduled = false
+                }
+                if (batch.isNotEmpty()) termSession.appendToEmulator(batch, batch.size)
+            }
         }
         when (s) {
-            is SshSession -> s.onClosed = { _ -> onDropped() }
+            is SshSession -> s.onClosed = { reason -> onDropped(reason) }
             is MoshSession -> {
-                s.onClosed = { _ -> onDropped() }
+                s.onClosed = { reason -> onDropped(reason) }
                 s.onLiveness = { stale -> main.post { isStale = stale } }
             }
         }
     }
 
-    private fun onDropped() {
-        if (!userClosing) main.post { if (status == ConnStatus.Connected) status = ConnStatus.Disconnected }
+    private fun onDropped(reason: String?) {
+        if (!userClosing) main.post {
+            if (status == ConnStatus.Connected) {
+                disconnectReason = reason
+                status = ConnStatus.Disconnected
+            }
+        }
     }
 
     /** Rebuild the transport behind the same terminal view (the buffer persists). */
@@ -514,8 +557,14 @@ class TerminalHolder(
                     session = s
                     wireOutput(s)
                     terminalView.mEmulator?.let { s.resize(it.mColumns, it.mRows) }
+                    disconnectReason = null
                     status = ConnStatus.Connected
-                } else status = ConnStatus.Disconnected
+                } else {
+                    // The factory swallows the per-category reason on a failed open;
+                    // surface an honest "couldn't reconnect" rather than a bare dot.
+                    disconnectReason = "Couldn't reconnect — the server may still be unreachable."
+                    status = ConnStatus.Disconnected
+                }
             }
         }
     }
@@ -658,8 +707,13 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    if (holder.status == ConnStatus.Reconnecting) "Reconnecting…" else "Disconnected",
+                    when {
+                        holder.status == ConnStatus.Reconnecting -> "Reconnecting…"
+                        holder.disconnectReason != null -> holder.disconnectReason!!
+                        else -> "Disconnected"
+                    },
                     fontSize = 13.sp, color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f, fill = false).padding(end = 8.dp),
                 )
                 if (holder.status == ConnStatus.Disconnected) {
                     Button(onClick = { holder.reconnect() }) { Text("Reconnect") }
@@ -801,16 +855,19 @@ fun ConnectScreen(
         // OpenSSH-format sk private key (the credential handle, not a secret).
         val skPem = (key.signer as? FidoSkKey)?.privatePem
         // The same factory does the initial open and any later reconnect-on-drop.
+        // On a failed open it stashes the SshSession's reason category so the UI
+        // can say *why* (auth vs unreachable vs no shell vs host-key change).
+        var lastReason: OpenReason = OpenReason.Unreachable
         val factory: () -> TerminalTransport? = {
             val s = SshSession(host, p, user, key.publicKeyBlob, key.signer, expectedHostKey = blob,
                 jumpHost = js?.host, jumpPort = js?.port ?: 22, jumpUser = js?.user,
                 expectedBastionHostKey = bastionKey, skPrivatePem = skPem)
-            if (s.open(80, 24)) s else null
+            if (s.open(80, 24)) s else { lastReason = s.lastError; null }
         }
         thread {
             val s = factory()
             if (s != null) main.post { busy = false; onConnected(s, title, factory) }
-            else main.post { busy = false; status = "couldn't open the session (is your key installed?)" }
+            else main.post { busy = false; status = describeOpenFailure(lastReason) }
         }
     }
 
@@ -948,6 +1005,17 @@ fun ConnectScreen(
                                 }
                             }
                         }
+                    }
+                }
+            } else {
+                // No saved hosts yet — hint that the feature exists (iOS ConnectView parity).
+                Section(title = "Saved hosts") {
+                    Column(Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("No saved hosts yet", fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface)
+                        Text("Fill in a server below, then Save host to keep it here for one-tap connect.",
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }

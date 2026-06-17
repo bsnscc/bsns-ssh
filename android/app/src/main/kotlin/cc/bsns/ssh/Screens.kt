@@ -93,7 +93,7 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                                     k.yubiKey -> "Smart card"
                                     k.protectedDeviceKey -> "Biometric"
                                     k.hardware -> "Hardware"
-                                    else -> "Software"
+                                    else -> "Software · exportable"
                                 },
                                 if (k.hardware) Brand.accent else softwareTag,
                             )

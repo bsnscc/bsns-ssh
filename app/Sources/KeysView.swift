@@ -11,6 +11,9 @@ struct KeysView: View {
     @State private var showEnclaveBackupWarning = false
     @State private var showFidoEnroll = false
     @State private var fidoName = "bsns"
+    /// Keys swiped for deletion, held until the user confirms — deleting a key can
+    /// lock you out of every server that only trusts it, so never delete on swipe alone.
+    @State private var pendingDelete: [SSHPublicKey] = []
 
     private struct InstallTarget: Identifiable { let id = UUID(); let key: SSHPublicKey }
 
@@ -71,8 +74,7 @@ struct KeysView: View {
                     .padding(.vertical, 2)
                 }
                 .onDelete { offsets in
-                    let targets = offsets.map { store.identities[$0] }
-                    Task { for identity in targets { await store.deleteKey(identity) } }
+                    pendingDelete = offsets.map { store.identities[$0] }
                 }
             }
 
@@ -133,6 +135,17 @@ struct KeysView: View {
         }
         .navigationTitle("Keys")
         .task { await store.refresh() }
+        .alert(pendingDelete.count > 1 ? "Delete \(pendingDelete.count) keys?" : "Delete this key?",
+               isPresented: Binding(get: { !pendingDelete.isEmpty }, set: { if !$0 { pendingDelete = [] } })) {
+            Button("Delete", role: .destructive) {
+                let targets = pendingDelete
+                pendingDelete = []
+                Task { for identity in targets { await store.deleteKey(identity) } }
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = [] }
+        } message: {
+            Text("This removes the key from the agent and this device. Any server that only trusts this key will lock you out — and a software key that isn't backed up can't be recovered.")
+        }
         .alert("Add a backup key", isPresented: $showEnclaveBackupWarning) {
             Button("Got it", role: .cancel) {}
         } message: {

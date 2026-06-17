@@ -35,7 +35,7 @@ same pinned source for the NDK). The Android app also links:
 | [Termux terminal-emulator / terminal-view](https://github.com/termux/termux-app) | **GPL-3.0-only** (incorporates Apache-2.0 [Android Terminal Emulator](https://github.com/jackpal/Android-Terminal-Emulator)) | vendored VT terminal (forked) |
 | [AndroidX + Jetpack Compose](https://developer.android.com/jetpack/androidx) | Apache-2.0 | UI, activity, biometric, documentfile |
 | [Kotlin stdlib + kotlinx.serialization](https://kotlinlang.org) | Apache-2.0 | language runtime, config envelope |
-| [Bouncy Castle](https://www.bouncycastle.org/java.html) (bcprov-jdk18on 1.78.1) | MIT-style (BC) | software-key math (not the transport) |
+| [Bouncy Castle](https://www.bouncycastle.org/java.html) (bcprov-jdk18on 1.78.1) | MIT-style (BC) — [`licenses/bouncycastle-1.78.1-LICENSE.txt`](licenses/bouncycastle-1.78.1-LICENSE.txt) | software-key math (not the transport) |
 | [yubikit-android](https://github.com/Yubico/yubikit-android) 2.5.0 | Apache-2.0 | YubiKey PIV over NFC / USB-C |
 
 Termux's terminal modules are GPL-3.0 — same license as the combined app, so no

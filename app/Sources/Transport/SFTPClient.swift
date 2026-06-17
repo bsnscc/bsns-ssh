@@ -215,15 +215,26 @@ final class SFTPClient: @unchecked Sendable {
     }
 
     func disconnect() {
-        queue.async {
-            if let sftp = self.sftp { libssh2_sftp_shutdown(sftp); self.sftp = nil }
-            if let session = self.session {
-                libssh2_session_disconnect_ex(session, 0, "bye", "")
-                libssh2_session_free(session); self.session = nil
-            }
-            if self.fd >= 0 { close(self.fd); self.fd = -1 }
-        }
+        queue.async { self.teardown() }
     }
+
+    /// Free the SFTP subsystem, the session, and the socket. Idempotent: each
+    /// pointer is nilled / the fd reset after release, so a second call (e.g.
+    /// onDisappear after Done, or deinit after either) is a safe no-op.
+    private func teardown() {
+        if let sftp = self.sftp { libssh2_sftp_shutdown(sftp); self.sftp = nil }
+        if let session = self.session {
+            libssh2_session_disconnect_ex(session, 0, "bye", "")
+            libssh2_session_free(session); self.session = nil
+        }
+        if self.fd >= 0 { close(self.fd); self.fd = -1 }
+    }
+
+    /// Last-resort teardown for any dismissal path that didn't already call
+    /// disconnect() (e.g. a swipe-dismiss of the sheet). Runs synchronously
+    /// because the object is being deallocated — can't hop to the queue, and
+    /// nothing else can touch these pointers once deinit is running.
+    deinit { teardown() }
 
     /// Hop a blocking libssh2 op onto the serial queue as an async call.
     private func run<T>(_ body: @escaping () throws -> T) async throws -> T {

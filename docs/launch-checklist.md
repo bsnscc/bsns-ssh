@@ -4,8 +4,9 @@ The ordered gates from "review passed" to "live on both stores." Engineering is
 essentially done; most of what's left needs a device or a store-console account.
 Check items off in order — each phase assumes the previous one passed.
 
-Current version: **0.3.0** (iOS build `CURRENT_PROJECT_VERSION`, Android
-`versionCode`). Bump both before the first store submission (see Phase 4).
+Current version: **1.0** (iOS build `46` / `CURRENT_PROJECT_VERSION`, Android
+`versionName 1.0` / `versionCode 15`). The repo is already public and pushed
+(HEAD ~`c97d46e`); the remaining open items are device/store gates, not code.
 
 Detail docs this references:
 - Android build/console steps → [`android-play-release.md`](android-play-release.md)
@@ -17,11 +18,11 @@ Detail docs this references:
 
 ## Phase 0 — Code freeze & verify
 
-- [ ] All review findings closed; branch green.
-- [ ] iOS: `swift test` + `xcodebuild … build` pass.
-- [ ] Android: `:core:test`, `:app:testDebugUnitTest`, `:app:lintRelease`,
+- [x] All review findings closed; branch green.
+- [x] iOS: `swift test` + `xcodebuild … build` pass.
+- [x] Android: `:core:test`, `:app:testDebugUnitTest`, `:app:lintRelease`,
       `:app:bundleRelease` pass (native prereqs built per `android/README.md`).
-- [ ] Push the branch and open the release PR (nothing has been pushed yet).
+- [x] Branch pushed; repo is public (`bsnscc/bsns-ssh`) at HEAD ~`c97d46e`.
 
 ## Phase 1 — Trust gates (do not ship the marketing claims without these)
 
@@ -34,9 +35,10 @@ Detail docs this references:
       (mirror of the repo's [`../PRIVACY.md`](../PRIVACY.md)) and linked from both
       listings. Keep it distinct from the SaaS `bsns.cc/privacy`; confirm it
       matches the "Data Not Collected" label.
-- [ ] **GPLv3 source availability**: the public repo matches exactly what ships
-      (the App Store/Play binary's corresponding source). Flip the repo public
-      (`gh repo edit bsnscc/bsns-ssh --visibility public`) at or before launch.
+- [x] Repo flipped public (`gh repo edit bsnscc/bsns-ssh --visibility public`).
+- [ ] **GPLv3 source availability**: confirm the public repo matches exactly what
+      ships (the App Store/Play binary's corresponding source) at the tagged
+      release commit.
 - [ ] `SECURITY.md` disclosure path works (GitHub "Report a vulnerability"
       enabled on the repo settings).
 
@@ -61,14 +63,14 @@ Detail docs this references:
 
 ## Phase 4 — Build & submit
 
-- [ ] Bump version: `MARKETING_VERSION` + `CURRENT_PROJECT_VERSION` in
-      `app/project.yml`; `versionName` + `versionCode` in
-      `android/app/build.gradle.kts`. Commit.
+- [x] Version set to **1.0**: `MARKETING_VERSION 1.0` + `CURRENT_PROJECT_VERSION 46`
+      in `app/project.yml`; `versionName 1.0` + `versionCode 15` in
+      `android/app/build.gradle.kts`.
 - [ ] iOS: archive the **Release** config, upload to App Store Connect, submit
       for review (TestFlight first if you want a final on-device pass).
 - [ ] Android: `./gradlew :app:bundleRelease` → upload the signed `.aab`, roll
       out to internal testing, then production review.
-- [ ] Tag the release commit (e.g. `v0.3.0`) once both artifacts are uploaded.
+- [ ] Tag the release commit `v1.0` once both artifacts are uploaded.
 
 ## Phase 5 — After approval
 

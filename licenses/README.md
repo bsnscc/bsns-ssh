@@ -15,6 +15,7 @@ pinned versions we ship, so the obligations are auditable without chasing links.
 | libssh2 | 1.11.0 | BSD-3-Clause | [`libssh2-1.11.0-COPYING.txt`](libssh2-1.11.0-COPYING.txt) |
 | OpenSSL | 3.5.1 | Apache-2.0 | [`openssl-3.5.1-LICENSE.txt`](openssl-3.5.1-LICENSE.txt) |
 | Protocol Buffers (lite) | 3.20.3 | BSD-3-Clause | [`protobuf-3.20.3-LICENSE.txt`](protobuf-3.20.3-LICENSE.txt) |
+| Bouncy Castle (bcprov-jdk18on) | 1.78.1 | MIT-style (BC) | [`bouncycastle-1.78.1-LICENSE.txt`](bouncycastle-1.78.1-LICENSE.txt) |
 | SwiftTerm | 1.13.0 | MIT | [`../app/vendor/SwiftTerm/LICENSE`](../app/vendor/SwiftTerm/LICENSE) |
 
 Notes:
@@ -30,8 +31,9 @@ Notes:
   Kotlin stdlib + kotlinx.serialization, and the YubiKit SDKs (those arrive via
   pinned package managers, version-locked in `app/project.yml` and the per-module
   `android/**/gradle.lockfile`).
-- Bouncy Castle (Android software-key math) uses the MIT-style BC license; see
-  its package metadata at the locked version.
+- **Bouncy Castle** (Android software-key math) uses the MIT-style BC license;
+  the verbatim text for the locked `bcprov-jdk18on 1.78.1` release is committed as
+  [`bouncycastle-1.78.1-LICENSE.txt`](bouncycastle-1.78.1-LICENSE.txt).
 
 These texts are fetched verbatim from the upstream tag/release matching each
 pinned version. Refresh them whenever a pinned version changes.

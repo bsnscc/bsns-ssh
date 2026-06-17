@@ -24,6 +24,9 @@ final class DiagLog {
 
     /// Record an event. Safe to call from any thread/actor: it writes the unified
     /// log inline (nonisolated) and hops to the main actor to append to the buffer.
+    /// INVARIANT: never pass secrets here (keys, PINs, passphrases, tokens) — the
+    /// message is mirrored to the unified log at `.public`, so it's readable via
+    /// Console.app / sysdiagnose. Log only timing, sizes, and state.
     nonisolated static func log(_ category: String, _ message: String) {
         logger.notice("[\(category, privacy: .public)] \(message, privacy: .public)")
         Task { @MainActor in shared.append(category, message) }

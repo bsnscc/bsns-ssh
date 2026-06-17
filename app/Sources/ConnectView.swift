@@ -10,6 +10,10 @@ struct ConnectView: View {
     @Environment(SnippetStore.self) private var snippetStore
     @Environment(\.horizontalSizeClass) private var hSize
 
+    /// The home TabView's selection, so the no-keys empty state can switch the
+    /// user to the Keys tab. Optional so previews / other call sites still work.
+    var homeTab: Binding<String>? = nil
+
     private enum PendingAction { case connect, install }
 
     /// A jump host is configured — only the interactive shell tunnels through it
@@ -55,7 +59,10 @@ struct ConnectView: View {
         }
         .sheet(isPresented: $showImport) { ImportConfigView() }
         .alert("Verify host key", isPresented: Binding(get: { pendingHostKey != nil }, set: { if !$0 { pendingHostKey = nil } })) {
-            Button("Trust", role: .destructive) { trustAndContinue() }
+            // First-trust is the normal path, not destructive — keep it non-alarming.
+            // A changed/mismatched key never reaches this alert; it surfaces as the
+            // "HOST KEY CHANGED" error banner instead.
+            Button("Trust") { trustAndContinue() }
             Button("Cancel", role: .cancel) { pendingHostKey = nil }
         } message: {
             if let key = pendingHostKey {
@@ -70,7 +77,7 @@ struct ConnectView: View {
             }
         }
         .alert("Verify jump host key", isPresented: Binding(get: { pendingJumpKey != nil }, set: { if !$0 { pendingJumpKey = nil } })) {
-            Button("Trust", role: .destructive) { trustJumpAndContinue() }
+            Button("Trust") { trustJumpAndContinue() }
             Button("Cancel", role: .cancel) { pendingJumpKey = nil }
         } message: {
             if let key = pendingJumpKey {
@@ -167,6 +174,7 @@ struct ConnectView: View {
                         .buttonStyle(.borderless)
                         .foregroundStyle(Brand.accent)
                         .help("Quick connect")
+                        .accessibilityLabel("Quick connect to \(entry.label.isEmpty ? "\(entry.user)@\(entry.host)" : entry.label)")
                         .disabled(busy)
                         .opacity(hoveredHostID == entry.id ? 1 : 0.7)
                     }
@@ -218,6 +226,27 @@ struct ConnectView: View {
                 }
                 Text("Only this key is offered, so a host that limits auth attempts won't reject you.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+        } else {
+            // First-run dead-end: with no keys, key/mosh/jump connects are disabled
+            // and there's no hint why. Explain it and offer a one-tap way out —
+            // generate a key inline (user-initiated, never silent on launch) or jump
+            // to the Keys tab. Password login below still works without a key.
+            Section("Key") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Image(systemName: "key").font(.title3).foregroundStyle(.secondary)
+                    Text("No keys yet").font(.callout.weight(.medium))
+                    Text("Key, mosh, and jump-host connections need an SSH key. Generate one to get started, or add your own on the Keys tab. (Password login below works without a key.)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 6)
+                Button("Generate an Ed25519 key") {
+                    // Generation updates store.identities, and ensureKeySelection()
+                    // (onChange) auto-selects the new key.
+                    Task { await store.generateKey(.ed25519) }
+                }
+                Button("Add a key on the Keys tab") { homeTab?.wrappedValue = "keys" }
+                    .disabled(homeTab == nil)
             }
         }
     }

@@ -29,6 +29,25 @@ struct TerminalKeyBar: View {
         let label: String
         let key: Key
         let wide: Bool
+
+        /// A spoken label for VoiceOver — the visible glyphs (↑ ⇞ …) read poorly,
+        /// so name the keys. Falls back to the visible label for plain symbols.
+        var accessibilityLabel: String {
+            switch key {
+            case .esc: return "Escape"
+            case .tab: return "Tab"
+            case .ctrl(let c): return "Control \(c.uppercased())"
+            case .arrow(let a):
+                switch a {
+                case .up: return "Up arrow"
+                case .down: return "Down arrow"
+                case .left: return "Left arrow"
+                case .right: return "Right arrow"
+                }
+            case .page(let up): return up ? "Page up" : "Page down"
+            case .text(let s): return s
+            }
+        }
     }
 
     private var items: [Item] { minimal ? [Item(label: "esc", key: .esc, wide: true)] : fullItems }
@@ -66,6 +85,7 @@ struct TerminalKeyBar: View {
                             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(item.accessibilityLabel)
                 }
             }
             .padding(.horizontal, 8)

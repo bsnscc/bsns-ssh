@@ -83,12 +83,23 @@ struct SFTPBrowserView: View {
             }
         }
         .task { await connect() }
+        // Cover every dismissal path, not just the Done button — a swipe-dismiss
+        // of the sheet otherwise orphans the libssh2 session + socket. disconnect()
+        // is idempotent, so the Done button calling it too is harmless.
+        .onDisappear { client.disconnect() }
         .alert("Verify host key", isPresented: Binding(get: { pendingHostKey != nil }, set: { if !$0 { pendingHostKey = nil } })) {
-            Button("Trust", role: .destructive) { trustAndConnect() }
+            Button("Trust") { trustAndConnect() }
             Button("Cancel", role: .cancel) { pendingHostKey = nil; dismiss() }
         } message: {
             if let key = pendingHostKey {
-                Text("First connection to \(user)@\(host):\(port).\n\n\(key.keyType)\n\(key.fingerprint)\n\nOnly trust this if the fingerprint matches what the server's admin gave you.")
+                Text("""
+                First connection to \(user)@\(host):\(port).
+
+                \(key.keyType)
+                \(key.fingerprint)
+
+                Only trust this if the fingerprint matches what the server's admin gave you (e.g. `ssh-keygen -lf` on the host). Trusting an unverified key can expose your session to interception.
+                """)
             }
         }
         .alert("Delete \(pendingDelete?.name ?? "")?", isPresented: Binding(
