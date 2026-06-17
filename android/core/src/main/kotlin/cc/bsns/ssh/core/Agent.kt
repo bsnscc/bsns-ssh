@@ -33,10 +33,11 @@ class Agent {
     fun identities(): List<SshPublicKey> = backends.values.map { it.publicKey }
 
     /** Sign for the key identified by its public-key blob. */
-    fun sign(publicKeyBlob: ByteArray, data: ByteArray): ByteArray {
+    fun sign(publicKeyBlob: ByteArray, data: ByteArray,
+             rsaAlgorithm: RsaSignatureAlgorithm = RsaSignatureAlgorithm.SHA1): ByteArray {
         val backend = backends.values.firstOrNull { it.publicKey.blob.contentEquals(publicKeyBlob) }
             ?: throw KeyBackendException("unknown key")
-        return backend.sign(data)
+        return backend.sign(data, rsaAlgorithm)
     }
 
     /** Process one agent request payload (without the outer uint32 length frame)
@@ -48,8 +49,15 @@ class Agent {
             SshAgentMessageType.SIGN_REQUEST -> {
                 val keyBlob = dec.readString()
                 val data = dec.readString()
-                dec.readUInt32()   // flags (rsa-sha2 selection) — handled later
-                val signature = sign(keyBlob, data)
+                // Flags select the RSA signature hash (RFC 8332): 0x04 = SHA-512,
+                // 0x02 = SHA-256, none = ssh-rsa (SHA-1). Ignored by non-RSA keys.
+                val flags = dec.readUInt32()
+                val rsaAlg = when {
+                    flags and 0x04L != 0L -> RsaSignatureAlgorithm.SHA512
+                    flags and 0x02L != 0L -> RsaSignatureAlgorithm.SHA256
+                    else -> RsaSignatureAlgorithm.SHA1
+                }
+                val signature = sign(keyBlob, data, rsaAlg)
                 SshEncoder.build {
                     it.writeByte(SshAgentMessageType.SIGN_RESPONSE.code)
                     it.writeString(signature)

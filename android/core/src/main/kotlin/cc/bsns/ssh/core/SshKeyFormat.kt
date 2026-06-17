@@ -30,6 +30,15 @@ object SshKeyFormat {
         it.writeString(x963Point)
     }
 
+    /** `ssh-rsa` blob: string("ssh-rsa") || mpint(e) || mpint(n) (RFC 4253 §6.6
+     *  — exponent before modulus). `exponent`/`modulus` are unsigned big-endian
+     *  magnitudes (a leading sign byte is fine; writeMPInt normalizes). */
+    fun rsaPublicBlob(exponent: ByteArray, modulus: ByteArray): ByteArray = SshEncoder.build {
+        it.writeString("ssh-rsa")
+        it.writeMPInt(exponent)
+        it.writeMPInt(modulus)
+    }
+
     /** Canonical SSH signature blob: string(format) || string(body). */
     fun signatureBlob(format: String, body: ByteArray): ByteArray = SshEncoder.build {
         it.writeString(format)

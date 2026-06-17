@@ -100,7 +100,12 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                 OutlinedButton(onClick = { keyManager.generateSoftware(KeyAlgorithm.ECDSA_P256); refresh() }) {
                     Text("+ ecdsa p256")
                 }
+                OutlinedButton(onClick = { keyManager.generateSoftware(KeyAlgorithm.RSA); refresh() }) {
+                    Text("+ rsa 3072")
+                }
             }
+            Text("Use RSA only for older gear (some network equipment) that can't accept ed25519 or ecdsa keys.",
+                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             Divider()
             Text("Add a YubiKey (PIV slot 9A, P-256)", fontSize = 13.sp,

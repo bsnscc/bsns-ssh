@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cc.bsns.ssh.core.KeyImportException
 import cc.bsns.ssh.core.KnownHostsParser
-import cc.bsns.ssh.core.OpenSshPrivateKey
+import cc.bsns.ssh.core.PrivateKeyImport
 import cc.bsns.ssh.core.SshConfigHost
 import cc.bsns.ssh.core.SshConfigParser
 import kotlinx.coroutines.Dispatchers
@@ -85,7 +85,7 @@ fun ImportConfigScreen(onBack: () -> Unit) {
         scope.launch {
             status = withContext(Dispatchers.IO) {
                 try {
-                    val k = OpenSshPrivateKey.parse(readText(uri) ?: "")
+                    val k = PrivateKeyImport.parse(readText(uri) ?: "")
                     KeyManager(context).importSoftware(k.algorithm.wireName, k.material, k.comment)
                     "imported a ${k.algorithm.wireName.removePrefix("ssh-")} key"
                 } catch (e: KeyImportException) {

@@ -1,7 +1,17 @@
 package cc.bsns.ssh.core
 
+import org.bouncycastle.asn1.ASN1Primitive
+import org.bouncycastle.asn1.pkcs.RSAPrivateKey as Asn1RSAPrivateKey
+import org.bouncycastle.crypto.digests.SHA1Digest
+import org.bouncycastle.crypto.digests.SHA256Digest
+import org.bouncycastle.crypto.digests.SHA512Digest
 import org.bouncycastle.crypto.generators.ECKeyPairGenerator
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
+import org.bouncycastle.crypto.generators.RSAKeyPairGenerator
+import org.bouncycastle.crypto.params.RSAKeyGenerationParameters
+import org.bouncycastle.crypto.params.RSAKeyParameters
+import org.bouncycastle.crypto.params.RSAPrivateCrtKeyParameters
+import org.bouncycastle.crypto.signers.RSADigestSigner
 import org.bouncycastle.crypto.params.ECDomainParameters
 import org.bouncycastle.crypto.params.ECKeyGenerationParameters
 import org.bouncycastle.crypto.params.ECPrivateKeyParameters
@@ -38,7 +48,9 @@ class FileKey private constructor(
     /** Raw private material, for the encrypted-at-rest / sync layer to wrap. */
     fun exportPrivateKeyMaterial(): ByteArray = material
 
-    override fun sign(data: ByteArray): ByteArray = when (algorithm) {
+    override fun sign(data: ByteArray): ByteArray = sign(data, RsaSignatureAlgorithm.SHA1)
+
+    override fun sign(data: ByteArray, rsaAlgorithm: RsaSignatureAlgorithm): ByteArray = when (algorithm) {
         KeyAlgorithm.ED25519 -> {
             val signer = Ed25519Signer()
             signer.init(true, Ed25519PrivateKeyParameters(material, 0))
@@ -52,6 +64,25 @@ class FileKey private constructor(
             val rs = signer.generateSignature(MessageDigest.getInstance("SHA-256").digest(data))
             val rawRS = fixed32(rs[0]) + fixed32(rs[1])
             SshKeyFormat.signatureBlob("ecdsa-sha2-nistp256", SshKeyFormat.ecdsaSignatureBody(rawRS))
+        }
+        KeyAlgorithm.RSA -> {
+            // material is PKCS#1 RSAPrivateKey DER (same as iOS, for sync parity).
+            val rk = Asn1RSAPrivateKey.getInstance(ASN1Primitive.fromByteArray(material))
+            val params = RSAPrivateCrtKeyParameters(
+                rk.modulus, rk.publicExponent, rk.privateExponent,
+                rk.prime1, rk.prime2, rk.exponent1, rk.exponent2, rk.coefficient,
+            )
+            val digest = when (rsaAlgorithm) {
+                RsaSignatureAlgorithm.SHA1 -> SHA1Digest()
+                RsaSignatureAlgorithm.SHA256 -> SHA256Digest()
+                RsaSignatureAlgorithm.SHA512 -> SHA512Digest()
+            }
+            // RSADigestSigner emits the EMSA-PKCS1-v1_5 signature (DigestInfo +
+            // PKCS#1 padding) that ssh-rsa / rsa-sha2 expect.
+            val signer = RSADigestSigner(digest)
+            signer.init(true, params)
+            signer.update(data, 0, data.size)
+            SshKeyFormat.signatureBlob(rsaAlgorithm.wireName, signer.generateSignature())
         }
         else -> throw KeyBackendException("unsupported algorithm: ${algorithm.wireName}")
     }
@@ -81,6 +112,20 @@ class FileKey private constructor(
                 make(KeyAlgorithm.ECDSA_P256, SshKeyFormat.ecdsaP256PublicBlob(pub.q.getEncoded(false)),
                      fixed32(priv.d), comment)
             }
+            KeyAlgorithm.RSA -> {
+                val gen = RSAKeyPairGenerator()
+                gen.init(RSAKeyGenerationParameters(BigInteger.valueOf(65537), SecureRandom(), 3072, 100))
+                val pair = gen.generateKeyPair()
+                val priv = pair.private as RSAPrivateCrtKeyParameters
+                val pub = pair.public as RSAKeyParameters
+                val material = Asn1RSAPrivateKey(
+                    priv.modulus, priv.publicExponent, priv.exponent,
+                    priv.p, priv.q, priv.dp, priv.dq, priv.qInv,
+                ).encoded   // PKCS#1 DER
+                make(KeyAlgorithm.RSA,
+                     SshKeyFormat.rsaPublicBlob(pub.exponent.toByteArray(), pub.modulus.toByteArray()),
+                     material, comment)
+            }
             else -> throw KeyBackendException("unsupported algorithm: ${algorithm.wireName}")
         }
 
@@ -97,6 +142,12 @@ class FileKey private constructor(
                 val q = p256.g.multiply(d).normalize()
                 make(KeyAlgorithm.ECDSA_P256, SshKeyFormat.ecdsaP256PublicBlob(q.getEncoded(false)),
                      fixed32(d), comment)
+            }
+            KeyAlgorithm.RSA -> {
+                val rk = Asn1RSAPrivateKey.getInstance(ASN1Primitive.fromByteArray(privateKeyMaterial))
+                make(KeyAlgorithm.RSA,
+                     SshKeyFormat.rsaPublicBlob(rk.publicExponent.toByteArray(), rk.modulus.toByteArray()),
+                     privateKeyMaterial, comment)
             }
             else -> throw KeyBackendException("unsupported algorithm: ${algorithm.wireName}")
         }
