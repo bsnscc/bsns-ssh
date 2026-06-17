@@ -39,6 +39,17 @@ object SshKeyFormat {
         it.writeMPInt(modulus)
     }
 
+    /** `sk-ecdsa-sha2-nistp256@openssh.com` (FIDO2 security-key) public-key blob:
+     *  string(type) || string("nistp256") || string(Q) || string(application).
+     *  `x963Point` is the uncompressed EC point (0x04||X||Y); `application` is the
+     *  FIDO rp/credential scope (we use "ssh:bsns"), baked into the key. */
+    fun skEcdsaPublicBlob(x963Point: ByteArray, application: String): ByteArray = SshEncoder.build {
+        it.writeString("sk-ecdsa-sha2-nistp256@openssh.com")
+        it.writeString("nistp256")
+        it.writeString(x963Point)
+        it.writeString(application)
+    }
+
     /** Canonical SSH signature blob: string(format) || string(body). */
     fun signatureBlob(format: String, body: ByteArray): ByteArray = SshEncoder.build {
         it.writeString(format)
