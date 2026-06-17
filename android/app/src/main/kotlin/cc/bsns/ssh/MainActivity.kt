@@ -11,14 +11,21 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.fragment.app.FragmentActivity
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -65,7 +72,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -511,21 +520,36 @@ class TerminalHolder(
 @Composable
 fun TabStrip(titles: List<String>, active: Int, onSelect: (Int) -> Unit, onClose: (Int) -> Unit, onNew: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 4.dp),
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         titles.forEachIndexed { i, title ->
             val sel = i == active
-            TextButton(onClick = { onSelect(i) }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
+            // Capsule tab: active gets a brand-tinted fill + border, like the iOS session tabs.
+            Row(
+                Modifier.clip(CircleShape)
+                    .background(
+                        if (sel) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                        else MaterialTheme.colorScheme.surfaceVariant,
+                    )
+                    .then(
+                        if (sel) Modifier.border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f), CircleShape)
+                        else Modifier,
+                    )
+                    .clickable { onSelect(i) }
+                    .padding(start = 14.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
-                    (if (sel) "● " else "") + title.substringAfter('@').take(18),
-                    fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                    title.substringAfter('@').take(18),
+                    fontFamily = FontFamily.Monospace, fontSize = 13.sp,
                     color = if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            IconButton(onClick = { onClose(i) }, modifier = Modifier.size(28.dp)) {
-                Icon(Icons.Default.Close, "close tab", modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                IconButton(onClick = { onClose(i) }, modifier = Modifier.size(30.dp)) {
+                    Icon(Icons.Default.Close, "close tab", modifier = Modifier.size(14.dp),
+                        tint = if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
         TextButton(onClick = onNew) {
@@ -594,6 +618,16 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Connection status as a colored dot (green / amber-stale / orange),
+                // matching the iOS tab dots.
+                val dotColor = when {
+                    holder.status == ConnStatus.Reconnecting -> Color(0xFFFFCC00)
+                    holder.status == ConnStatus.Disconnected -> Color(0xFFFF9500)
+                    holder.isStale -> Color(0xFFFFCC00)
+                    else -> Color(0xFF34C759)
+                }
+                StatusDot(dotColor)
+                Spacer(Modifier.width(8.dp))
                 // Flex + ellipsize the title so a long (jumped) title never pushes the
                 // action buttons off the right edge.
                 Text(holder.title, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
@@ -1161,10 +1195,23 @@ private fun KeyBar(onKey: (ByteArray) -> Unit) {
         "↓" to seq(0x1B, 0x5B, 0x42), "→" to seq(0x1B, 0x5B, 0x43),
         "|" to seq('|'.code), "~" to seq('~'.code), "/" to seq('/'.code), "-" to seq('-'.code),
     )
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+            .padding(horizontal = 6.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         keys.forEach { (label, bytes) ->
-            TextButton(onClick = { onKey(bytes) }) {
-                Text(label, fontFamily = FontFamily.Monospace, fontSize = 15.sp)
+            // Rounded, filled key like the iOS key bar — a tappable chip, not a flat button.
+            Box(
+                Modifier.clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable { onKey(bytes) }
+                    .heightIn(min = 38.dp).widthIn(min = 42.dp)
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, fontFamily = FontFamily.Monospace, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface)
             }
         }
     }
