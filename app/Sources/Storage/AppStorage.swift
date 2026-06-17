@@ -57,10 +57,19 @@ final class HostStore {
 
     func remove(_ host: SavedHost) { hosts.removeAll { $0.id == host.id }; save() }
 
-    /// Add imported hosts, skipping ones that already match by host/port/user.
+    /// Merge imported/pulled hosts: update an existing entry in place when it
+    /// matches by user@host:port (so a pull reflects changes to a host, not just
+    /// new ones), and append the rest. Upsert, not append-only.
     func merge(_ incoming: [SavedHost]) {
-        let existing = Set(hosts.map(identity))
-        for h in incoming where !existing.contains(identity(h)) { hosts.append(h) }
+        for h in incoming {
+            if let i = hosts.firstIndex(where: { identity($0) == identity(h) }) {
+                var updated = h
+                updated.id = hosts[i].id     // keep the list row's identity stable
+                hosts[i] = updated
+            } else {
+                hosts.append(h)
+            }
+        }
         save()
     }
 

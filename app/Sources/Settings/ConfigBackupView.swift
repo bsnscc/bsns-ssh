@@ -31,7 +31,8 @@ struct ConfigBackupView: View {
             Section {
                 SecureField("Passphrase (optional)", text: $passphrase)
                     .textContentType(.password).autocorrectionDisabled().textInputAutocapitalization(.never)
-                Toggle("Also export encrypted private keys", isOn: $includeKeys)
+                Toggle(passphrase.isEmpty ? "Also export private keys (set a passphrase first)"
+                                          : "Also export encrypted private keys", isOn: $includeKeys)
                     .disabled(passphrase.isEmpty)
                 Button("Export…") { startExport() }
             } header: {
@@ -96,6 +97,9 @@ struct ConfigBackupView: View {
             if case .success(let url) = result { sync.setFolder(url) }
         }
         .onAppear { if syncPass.isEmpty { syncPass = sync.loadPassphrase() ?? "" } }
+        // Clear a stale "Wrong passphrase." the moment the user starts correcting it,
+        // so the old error doesn't linger and confuse.
+        .onChange(of: syncPass) { _, _ in if sync.lastStatus != nil { sync.lastStatus = nil } }
         .alert("Encrypted bundle", isPresented: $askImportPassphrase) {
             SecureField("Passphrase", text: $importPassphrase)
             Button("Import") { finishImport() }
