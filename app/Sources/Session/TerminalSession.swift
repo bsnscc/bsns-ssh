@@ -35,7 +35,27 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
 
     /// Set by the terminal coordinator; receives shell output (called off-main —
     /// the coordinator hops to main itself, matching SSHShell's existing contract).
-    var onOutput: (@Sendable (ArraySlice<UInt8>) -> Void)?
+    ///
+    /// Output produced before the surface attaches is buffered and flushed the
+    /// moment this is set. This matters for mosh: its bootstrap runs the whole SSH
+    /// exchange before `open()`, so the server has already painted and the first
+    /// full-repaint frame arrives almost immediately — before the lazily-created
+    /// surface wires this up. Delivered to a nil closure it would be dropped, after
+    /// which `mosh_client_drain_ansi` only emits diffs and an idle shell never
+    /// repaints, leaving a blank screen. (SSH is slower to first byte and dodges
+    /// the race, but buffering makes both transports correct.)
+    var onOutput: (@Sendable (ArraySlice<UInt8>) -> Void)? {
+        didSet {
+            lock.lock()
+            guard onOutput != nil, !outputBuffer.isEmpty else { lock.unlock(); return }
+            let buffered = outputBuffer
+            outputBuffer.removeAll(keepingCapacity: false)
+            let out = onOutput
+            lock.unlock()
+            out?(buffered[...])
+        }
+    }
+    private var outputBuffer: [UInt8] = []
 
     private let lock = NSLock()
     /// A configured local (-L) forward. Survives reconnect (re-applied to the
@@ -188,10 +208,24 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     private var currentTransport: TerminalTransport? { lock.lock(); defer { lock.unlock() }; return transport }
 
     private func wire(_ transport: TerminalTransport) {
-        transport.onOutput = { [weak self] bytes in self?.onOutput?(bytes) }
+        transport.onOutput = { [weak self] bytes in self?.deliver(bytes) }
         transport.onClosed = { [weak self] reason in
             self?.setStatus(.disconnected(reason: reason))
         }
+    }
+
+    /// Forward transport output to the surface, or buffer it until the surface
+    /// attaches and `onOutput` is set (see that property's note).
+    private func deliver(_ bytes: ArraySlice<UInt8>) {
+        lock.lock()
+        if onOutput == nil {
+            outputBuffer.append(contentsOf: bytes)
+            lock.unlock()
+            return
+        }
+        let out = onOutput
+        lock.unlock()
+        out?(bytes)
     }
 
     private func setStatus(_ s: Status) {
