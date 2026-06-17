@@ -190,8 +190,9 @@ struct ConnectView: View {
             }
             FieldRow(label: "user") {
                 TextField("root", text: $user).autocorrectionDisabled().textInputAutocapitalization(.never)
-                TextField("group", text: $group).autocorrectionDisabled().textInputAutocapitalization(.never)
-                    .frame(maxWidth: 110).foregroundStyle(.secondary)
+            }
+            FieldRow(label: "group") {
+                TextField("optional", text: $group).autocorrectionDisabled().textInputAutocapitalization(.never)
             }
             FieldRow(label: "jump") {
                 TextField("optional · user@host[:port]", text: $jump).autocorrectionDisabled().textInputAutocapitalization(.never)
@@ -301,7 +302,8 @@ struct ConnectView: View {
     private var selectedKey: SSHPublicKey? { store.identities.first { fp($0) == selectedKeyFP } }
 
     private func keyLabel(_ id: SSHPublicKey) -> String {
-        let kind = store.isYubiKey(id) ? "YubiKey"
+        let kind = store.isSecurityKey(id) ? "FIDO2 security key"
+            : store.isYubiKey(id) ? "YubiKey"
             : store.isHardware(id) ? "Secure Enclave"
             : id.algorithm.rawValue.replacingOccurrences(of: "ssh-", with: "")
                 .replacingOccurrences(of: "ecdsa-sha2-nistp256", with: "ecdsa")
