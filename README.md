@@ -6,7 +6,8 @@
 
 <p align="center">
   A native iOS &amp; Android SSH/mosh client — <strong>your keys and config are
-  yours, hardware-protected, with no vendor ever in the middle.</strong>
+  yours, hardware-backed where the device supports it, with no vendor ever in the
+  middle.</strong>
 </p>
 
 <p align="center">
@@ -19,9 +20,11 @@
 
 ---
 
-- **Hardware-backed, non-extractable keys** — generated in and never leaving the
-  Secure Enclave (iOS) or the Android Keystore / StrongBox, or held on a YubiKey
-  (PIV, over NFC or USB-C). The private key never touches the SSH transport.
+- **Hardware-backed (where available), non-extractable keys** — generated in and
+  never leaving the Secure Enclave (iOS) or the Android Keystore (StrongBox / TEE,
+  or software backing on devices without secure hardware — the app shows which),
+  or held on a YubiKey (PIV, over NFC or USB-C). The private key never touches the
+  SSH transport.
 - **Encrypted config sync over storage you control** — it writes through native
   OS file providers (iOS Files / Android Storage Access Framework), so iCloud
   Drive, Google Drive, Dropbox, Nextcloud, Proton Drive, or a plain network share

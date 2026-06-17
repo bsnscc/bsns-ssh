@@ -136,18 +136,18 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                 }
             }
 
-            // Opt-in: a separate Keystore key that demands a fingerprint on every
-            // signature. Only offered when a strong biometric is enrolled and the
-            // key doesn't exist yet; once added it appears above with a "Biometric"
-            // tag and a Remove action. The everyday device key is never changed.
+            // Opt-in: a separate Keystore key that demands a strong biometric on
+            // every signature. Only offered when a strong biometric is enrolled and
+            // the key doesn't exist yet; once added it appears above with a
+            // "Biometric" tag and a Remove action. The everyday device key is never changed.
             if (strongBiometricAvailable(context) && !keys.any { it.protectedDeviceKey }) {
                 Section(
                     title = "Add a biometric-protected device key",
-                    footer = "A second non-extractable device key that requires your fingerprint " +
-                        "(class-3 biometric) for every signature — so a connection can't be made " +
-                        "while the phone is unlocked but unattended. It's a new key with its own " +
-                        "public key: add it to your servers and pick it per host. Your everyday " +
-                        "device key is left as is.",
+                    footer = "A second non-extractable device key that requires a strong (class-3) " +
+                        "biometric — fingerprint, face, or iris, depending on your device — for every " +
+                        "signature, so a connection can't be made while the phone is unlocked but " +
+                        "unattended. It's a new key with its own public key: add it to your servers " +
+                        "and pick it per host. Your everyday device key is left as is.",
                 ) {
                     Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = {

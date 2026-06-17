@@ -23,9 +23,11 @@ fun interface KeyAuthorizer {
 
 /**
  * A non-extractable ECDSA P-256 key in the Android Keystore. The private key is
- * generated in, and never leaves, the device's secure key store — StrongBox on
- * devices that have it, otherwise the TEE (the emulator has no StrongBox).
- * Signing happens there; the key is never exported.
+ * generated in, and never leaves, the device's key store — StrongBox on devices
+ * that have it, otherwise the TEE, or (on devices without secure hardware) a
+ * software-backed Keystore. [backing] reports which, so the UI/docs never claim
+ * more than the device actually provides. Signing happens in the key store; the
+ * key is never exported.
  *
  * By default signing is NOT gated on a per-use biometric/credential prompt — the
  * app lock gates the UI, not each signature. When constructed with [requireAuth]
@@ -33,7 +35,10 @@ fun interface KeyAuthorizer {
  * `sign` is gated behind [authorizer]'s biometric prompt (the opt-in
  * "biometric-protected device key"). Requiring auth is a property of the key at
  * generation; it can't be added to an existing key, so the protected key is a
- * separate, additional key rather than a flag flipped on the everyday one.
+ * separate, additional key rather than a flag flipped on the everyday one. If
+ * [requireAuth] is asked for but the existing alias does NOT actually enforce it
+ * (e.g. a stale key from an earlier build), construction throws — we never label
+ * an unprotected key as protected.
  *
  * `sign` is invoked from the native libssh2 sign callback (by name/signature),
  * returning the SSH ECDSA signature body `mpint(r) || mpint(s)`.
@@ -71,7 +76,7 @@ class KeystoreSigner(alias: String, requireAuth: Boolean = false) {
                     if (requireAuth) {
                         setUserAuthenticationRequired(true)
                         // Don't invalidate the key when the user enrolls a new
-                        // fingerprint: this is a per-use presence gate, not an
+                        // biometric: this is a per-use presence gate, not an
                         // enrollment binding, and invalidation would mean lockout
                         // from every server trusting the key. The prompt still
                         // requires a strong (class-3) biometric each use.
@@ -99,6 +104,13 @@ class KeystoreSigner(alias: String, requireAuth: Boolean = false) {
         publicKeyBlob = SshKeyFormat.ecdsaP256PublicBlob(x963)
         backing = detectBacking(privateKey)
         requiresAuth = detectRequiresAuth(privateKey)
+        // Fail closed: if the caller asked for an auth-required key but the alias
+        // that exists doesn't actually enforce per-use auth (e.g. a stale key from
+        // an earlier build under this alias), refuse rather than silently present
+        // an unprotected key as protected.
+        require(!requireAuth || requiresAuth) {
+            "Keystore alias exists but does not require per-use authentication"
+        }
     }
 
     /** Read back whether the Keystore enforces per-use authentication for this key. */

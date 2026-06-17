@@ -51,20 +51,23 @@ build. Older builds are not separately patched.
 
 So you know the baseline a report would be measured against:
 
-- **Keys never leave secure hardware where possible.** Hardware-backed keys use
-  the Secure Enclave, the Android Keystore (StrongBox when the device has it,
-  otherwise the TEE), or a YubiKey (PIV); in every case the private key is
-  non-extractable and signing happens on the secure element, never in app memory.
-  Per-signature user verification differs by backend: the **Secure Enclave** key
-  requires Face ID / Touch ID on every signature, and a **YubiKey** requires its
-  PIN (cached per session) plus a physical touch. The everyday **Android
-  Keystore** device key is non-extractable but is *not* gated on a per-use
-  biometric prompt — the optional app lock gates access to the UI, not each
-  signature. For per-signature verification on Android there's an opt-in
-  **biometric-protected device key**: a separate Keystore key generated requiring
-  a strong (class-3) biometric, so every signature prompts for a fingerprint.
-  Software keys are held in an in-process SSH agent and never written to the
-  transport.
+- **Keys never leave secure hardware where the device provides it.** Hardware-backed
+  keys use the Secure Enclave, the Android Keystore, or a YubiKey (PIV); the private
+  key is non-extractable and signing happens in the key store, never in app memory.
+  The actual backing varies by device — iOS is the Secure Enclave; Android is
+  StrongBox or the TEE where present, but falls back to **software** backing on
+  devices without secure hardware. The app reads the real backing from the Keystore
+  and labels each key (StrongBox / TEE / software) so it never claims more than the
+  device offers. Per-signature user verification also differs by backend: the
+  **Secure Enclave** key requires Face ID / Touch ID on every signature, and a
+  **YubiKey** requires its PIN (cached per session) plus a physical touch. The
+  everyday **Android Keystore** device key is non-extractable but is *not* gated on
+  a per-use biometric prompt — the optional app lock gates access to the UI, not
+  each signature. For per-signature verification on Android there's an opt-in
+  **biometric-protected device key**: a separate Keystore key generated requiring a
+  strong (class-3) biometric, so every signature prompts for a strong biometric
+  (fingerprint, face, or iris, depending on the device). Software keys are held in
+  an in-process SSH agent and never written to the transport.
 - **Hosts are verified (TOFU).** Unknown host keys prompt; a *changed* key is
   refused, not silently accepted. ProxyJump verifies the bastion's own key
   before authenticating to it, and the bastion is key/agent-authenticated only.

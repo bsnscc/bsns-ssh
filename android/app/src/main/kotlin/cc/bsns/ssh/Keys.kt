@@ -134,8 +134,10 @@ class KeyManager(context: Context) {
             "ecdsa-sha2-nistp256", hardware = hardwareSigner.isHardwareBacked, signer = hardwareSigner,
             builtIn = true,
         )
-        // The opt-in biometric-protected device key (present only if enrolled).
-        val protectedKey = protectedSigner()?.let { s ->
+        // The opt-in biometric-protected device key — listed only if the alias
+        // exists AND the Keystore actually enforces per-use auth on it (never label
+        // an unprotected key as protected).
+        val protectedKey = protectedSigner()?.takeIf { it.requiresAuth }?.let { s ->
             AppKey(
                 PROTECTED_ALIAS, "Device key (${s.backing.label}, biometric)", s.publicKeyBlob,
                 "ecdsa-sha2-nistp256", hardware = s.isHardwareBacked, signer = s, protectedDeviceKey = true,
@@ -170,7 +172,9 @@ class KeyManager(context: Context) {
         return listOfNotNull(hw, protectedKey) + soft + yubi + fido
     }
 
-    /** The biometric-protected device key, reconstructed if it's been enrolled. */
+    /** The biometric-protected device key, reconstructed if it's enrolled. Returns
+     *  null if the alias is absent or fails the require-auth invariant (the
+     *  KeystoreSigner ctor throws on a stale/unprotected alias). */
     private fun protectedSigner(): KeystoreSigner? =
         if (ks.containsAlias(PROTECTED_ALIAS)) {
             runCatching { KeystoreSigner(PROTECTED_ALIAS, requireAuth = true) }.getOrNull()
@@ -178,12 +182,12 @@ class KeyManager(context: Context) {
             null
         }
 
-    /** Whether the opt-in biometric-protected device key exists yet. */
-    fun hasProtectedDeviceKey(): Boolean = ks.containsAlias(PROTECTED_ALIAS)
-
     /** Generate the biometric-protected device key (a separate Keystore key that
-     *  requires a per-use biometric prompt to sign). Returns its id. */
+     *  requires a per-use biometric prompt to sign). Returns its id. Deletes any
+     *  stale alias first so a non-protected leftover can't block (or masquerade as)
+     *  a genuinely protected key. */
     fun addProtectedDeviceKey(): String {
+        runCatching { ks.deleteEntry(PROTECTED_ALIAS) }
         val signer = KeystoreSigner(PROTECTED_ALIAS, requireAuth = true)   // generates it
         return SshKeyFormat.fingerprintOfPublicKeyBlob(signer.publicKeyBlob)
     }
