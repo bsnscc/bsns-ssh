@@ -181,15 +181,24 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             }
             let moshReadable = fds.prefix(wakeIndex).contains { $0.revents & Int16(POLLIN) != 0 }
             if moshReadable {                                   // a datagram arrived
-                // First contact after a stale gap (background → resume): mosh jumps
-                // from the pre-gap framebuffer to the current one in one step, and
-                // diffing that big jump against the stale baseline leaves stray
-                // colored cells (worst in a full-screen TUI like tmux) — the residue
-                // a manual resize clears. Force the next frame to be an absolute full
-                // repaint so recovery re-syncs the view cleanly, no resize needed.
-                if staleReported { mosh_client_force_repaint(c) }
+                let recovering = staleReported
                 mosh_client_recv(c)
                 lastContactAt = Date()
+                if recovering {
+                    // Recovered after a stale gap (background → resume). Two things,
+                    // both of which a manual resize was doing for us:
+                    // (1) force our renderer to redraw ABSOLUTELY, not as a diff
+                    //     against the stale pre-gap baseline (else stray cells);
+                    // (2) nudge the SERVER to redraw + re-home its cursor with a real
+                    //     size change. A server-side TUI like tmux only re-homes the
+                    //     cursor on SIGWINCH, so a no-op resize leaves the cursor (and
+                    //     typed echo) landing on the wrong row / the status bar. The
+                    //     brief rows-1 wiggle forces two SIGWINCHes ending at the real
+                    //     size (mosh's UserStream delivers both, it doesn't coalesce).
+                    if rows > 1 { mosh_client_resize(c, cols, rows - 1) }
+                    mosh_client_resize(c, cols, rows)
+                    mosh_client_force_repaint(c)
+                }
             }
             mosh_client_tick(c)
             if let ansi = mosh_client_drain_ansi(c) {

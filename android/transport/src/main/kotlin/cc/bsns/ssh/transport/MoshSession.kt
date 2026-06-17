@@ -37,12 +37,17 @@ class MoshSession(
     private val lock = Any()
     private val writeQueue = ArrayList<ByteArray>()
     private var pendingResize: Pair<Int, Int>? = null
+    // Current terminal size (owner-thread view) so recovery can replay it as a
+    // size wiggle, forcing the server to redraw + re-home its cursor.
+    private var lastCols = 0
+    private var lastRows = 0
 
     /** Open the UDP transport with the MOSH CONNECT key, then start the I/O loop.
      *  Returns false if the transport couldn't be opened. */
     fun open(cols: Int, rows: Int): Boolean {
         handle = bridge.nativeMoshOpen(ip, port.toString(), key, cols, rows)
         if (handle == 0L) return false
+        lastCols = cols; lastRows = rows
         running.set(true)
         Thread({ loop() }, "mosh-session").apply { isDaemon = true }.start()
         return true
@@ -75,7 +80,7 @@ class MoshSession(
                     pendingResize = null
                 }
                 for (w in writes) bridge.nativeMoshPush(handle, w)
-                resize?.let { bridge.nativeMoshResize(handle, it.first, it.second) }
+                resize?.let { bridge.nativeMoshResize(handle, it.first, it.second); lastCols = it.first; lastRows = it.second }
 
                 val ansi = bridge.nativeMoshService(handle, 1000)
                 if (ansi != null && ansi.isNotEmpty()) {
@@ -87,7 +92,18 @@ class MoshSession(
                 // nativeMoshService blocks up to ~1s, so staleness is checked
                 // promptly without a separate timer.
                 val stale = bridge.nativeMoshMsSinceContact(handle) > STALE_THRESHOLD_MS
-                if (stale != staleReported) { staleReported = stale; onLiveness?.invoke(stale) }
+                if (stale != staleReported) {
+                    if (!stale && staleReported) {
+                        // Recovered after a gap: nudge the server (e.g. tmux) to redraw
+                        // and re-home its cursor with a real size change — a no-op resize
+                        // won't trigger SIGWINCH, leaving the cursor / typed echo on the
+                        // wrong row. (The absolute repaint half is handled native-side.)
+                        if (lastRows > 1) bridge.nativeMoshResize(handle, lastCols, lastRows - 1)
+                        bridge.nativeMoshResize(handle, lastCols, lastRows)
+                    }
+                    staleReported = stale
+                    onLiveness?.invoke(stale)
+                }
             }
         } finally {
             val err = if (handle != 0L) bridge.nativeMoshLastError(handle) else null
