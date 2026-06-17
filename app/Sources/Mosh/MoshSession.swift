@@ -1,11 +1,11 @@
 import Foundation
 import UIKit
-import os
 import CMosh
 
-/// Diagnostics for the mosh resume/size path — view in Console.app (subsystem
-/// cc.bsns.ssh, category mosh) while reproducing a background→foreground cycle.
-private let moshLog = Logger(subsystem: "cc.bsns.ssh", category: "mosh")
+/// Diagnostics for the mosh resume/size path — view in-app under
+/// Settings → Diagnostics (and mirrored to the unified log at `.notice`,
+/// subsystem cc.bsns.ssh) while reproducing a background→foreground cycle.
+private let moshLog = DiagLog.shared
 
 /// Drives a mosh (UDP) session: opens the client transport with the key the SSH
 /// bootstrap obtained from `mosh-server`, pumps datagrams on a background thread,
@@ -31,6 +31,8 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var client: OpaquePointer?
     private var lastContactAt = Date()
     private var staleReported = false
+    private var lastFbCols: Int32 = 0
+    private var lastFbRows: Int32 = 0
 
     // Connection params, kept so we can re-create the client socket after iOS
     // suspends us in the background (the mosh-server keeps running, so a fresh
@@ -58,7 +60,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         if let err = mosh_client_last_error(c) { mosh_client_free(c); return String(cString: err) }
         client = c
         serverIP = ip; serverPort = port; serverKey = key; self.cols = cols; self.rows = rows
-        moshLog.info("open \(cols, privacy: .public)x\(rows, privacy: .public)")
+        moshLog.log("mosh", "open \(cols)x\(rows)")
         var fds: [Int32] = [-1, -1]
         pipe(&fds)
         wakeRead = fds[0]; wakeWrite = fds[1]
@@ -88,7 +90,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
 
     func resize(cols: Int32, rows: Int32) {
         lock.lock(); pendingResize = (cols, rows); self.cols = cols; self.rows = rows; lock.unlock()
-        moshLog.info("resize \(cols, privacy: .public)x\(rows, privacy: .public)")
+        moshLog.log("mosh", "resize \(cols)x\(rows)")
         wake()
     }
 
@@ -123,7 +125,10 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             // Returning from the background.
             if resume {
                 let silent = Date().timeIntervalSince(lastContactAt)
-                moshLog.info("resume: silent=\(Int(silent), privacy: .public)s size=\(self.cols, privacy: .public)x\(self.rows, privacy: .public)")
+                // The actual size mosh is drawing right now, vs the size we'll re-assert.
+                var fbCols: Int32 = 0, fbRows: Int32 = 0
+                mosh_client_fb_dims(c, &fbCols, &fbRows)
+                moshLog.log("mosh", "resume: silent=\(Int(silent))s ask=\(cols)x\(rows) fb=\(fbCols)x\(fbRows)")
                 // If we'd gone silent past the stale threshold, iOS likely tore down
                 // our suspended UDP socket — hop to a fresh one on the SAME connection
                 // (preserves the crypto sequence the server's replay-protection needs;
@@ -161,6 +166,14 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 let bytes = Array(String(cString: ansi).utf8)
                 free(ansi)
                 onOutput?(bytes[...])
+                // Note when the rendered framebuffer size changes — a value that
+                // diverges from our asked size (cols×rows) is the display desync.
+                var fbCols: Int32 = 0, fbRows: Int32 = 0
+                mosh_client_fb_dims(c, &fbCols, &fbRows)
+                if fbCols != lastFbCols || fbRows != lastFbRows {
+                    lastFbCols = fbCols; lastFbRows = fbRows
+                    moshLog.log("mosh", "frame fb=\(fbCols)x\(fbRows) ask=\(cols)x\(rows)")
+                }
             }
             // Flag staleness on transition (the loop wakes at least ~1/s, so this
             // is checked promptly without a separate timer).

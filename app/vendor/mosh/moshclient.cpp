@@ -124,6 +124,17 @@ void mosh_client_resize(MoshClient* c, int cols, int rows) {
   c->transport->get_current_state().push_back(Parser::Resize(cols, rows));
 }
 
+void mosh_client_fb_dims(MoshClient* c, int* cols, int* rows) {
+  if (cols) *cols = 0;
+  if (rows) *rows = 0;
+  if (!c || !c->transport) return;
+  try {
+    const Terminal::Framebuffer& fb = c->transport->get_latest_remote_state().state.get_fb();
+    if (cols) *cols = fb.ds.get_width();
+    if (rows) *rows = fb.ds.get_height();
+  } catch (...) {}
+}
+
 char* mosh_client_drain_ansi(MoshClient* c) {
   if (!c || !c->transport) return nullptr;
   const uint64_t num = c->transport->get_remote_state_num();

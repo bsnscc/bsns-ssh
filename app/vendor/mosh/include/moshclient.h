@@ -45,6 +45,12 @@ void mosh_client_force_repaint(MoshClient* c);
 void mosh_client_push(MoshClient* c, const char* bytes, int len);
 void mosh_client_resize(MoshClient* c, int cols, int rows);
 
+/// Report the ACTUAL dimensions of the latest synced remote framebuffer (what
+/// mosh is really drawing), as opposed to the size we last asked for. On resume
+/// a mismatch here is the smoking gun for the display desync. Writes 0x0 if no
+/// remote state has arrived yet.
+void mosh_client_fb_dims(MoshClient* c, int* cols, int* rows);
+
 /// If the remote terminal state advanced, returns a malloc'd ANSI frame (caller
 /// frees) to feed the terminal; otherwise NULL.
 char* mosh_client_drain_ansi(MoshClient* c);

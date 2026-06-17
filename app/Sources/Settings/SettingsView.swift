@@ -110,6 +110,9 @@ struct SettingsView: View {
 
             Section("About") {
                 LabeledContent("Version", value: appVersion)
+                NavigationLink { DiagnosticsView() } label: {
+                    Label("Diagnostics", systemImage: "stethoscope")
+                }
             }
         }
         .navigationTitle("Settings")
