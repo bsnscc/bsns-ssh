@@ -184,7 +184,6 @@ public final class SSHShell: @unchecked Sendable {
     private var removedListenerIDs: [UUID] = []      // guarded by lock
     private var pendingOpens: [PendingOpen] = []     // queue-only
     private var forwardConns: [ForwardConn] = []     // queue-only
-    private var bridge: AgentSignBridge? // kept alive for the auth call
     // Self-pipe so write/resize wake the poll loop immediately instead of
     // waiting out the poll timeout — keystrokes are sent with no added latency.
     private var wakeRead: Int32 = -1
@@ -326,7 +325,7 @@ public final class SSHShell: @unchecked Sendable {
         if let password, !password.isEmpty {
             try Self.passwordAuth(session, user: user, password: password)
         } else {
-            try authenticate(session, user: user, identities: identities, agent: agent, host: host)
+            try Self.authenticatePublicKey(session, user: user, identities: identities, agent: agent, host: host)
         }
 
         guard let channel = libssh2_channel_open_ex(session, "session", 7, 2 * 1024 * 1024, 32768, nil, 0) else {
@@ -354,37 +353,6 @@ public final class SSHShell: @unchecked Sendable {
             _ = fcntl(wakeWrite, F_SETFL, O_NONBLOCK)
         }
         lock.lock(); running = true; lock.unlock()
-    }
-
-    private func authenticate(_ session: OpaquePointer, user: String, identities: [SSHPublicKey], agent: Agent, host: String) throws {
-        var lastError = "no identity accepted"
-        for identity in identities {
-            // FIDO2 security keys (sk-ecdsa) sign with the webauthn-sk variant, a
-            // complete signature blob libssh2 must send verbatim — use the raw path.
-            let isSecurityKey = identity.algorithm == .ecdsaSK
-            let bridge = AgentSignBridge(agent: agent, publicKeyBlob: identity.blob,
-                                         signContext: SignContext(host: host, purpose: .sshUserAuth),
-                                         rawSignature: isSecurityKey)
-            self.bridge = bridge
-            var abstract: UnsafeMutableRawPointer? = Unmanaged.passUnretained(bridge).toOpaque()
-            let rc: Int32 = identity.blob.withUnsafeBytes { (pk: UnsafeRawBufferPointer) in
-                withUnsafeMutablePointer(to: &abstract) { absP in
-                    user.withCString { cuser in
-                        let pkPtr = pk.bindMemory(to: UInt8.self).baseAddress
-                        return isSecurityKey
-                            ? libssh2_userauth_publickey_raw(session, cuser, pkPtr, pk.count,
-                                                             agentSignCallback, absP)
-                            : libssh2_userauth_publickey(session, cuser, pkPtr, pk.count,
-                                                         agentSignCallback, absP)
-                    }
-                }
-            }
-            if rc == 0 { return }
-            var message: UnsafeMutablePointer<CChar>?
-            _ = libssh2_session_last_error(session, &message, nil, 0)
-            lastError = message.map { String(cString: $0) } ?? "rc=\(rc)"
-        }
-        throw SSHShellError.authFailed(lastError)
     }
 
     /// Establish the bastion session + a direct-tcpip channel to the target, relayed
@@ -593,16 +561,24 @@ public final class SSHShell: @unchecked Sendable {
         var keepAlive: [AgentSignBridge] = []   // hold bridges for the duration of the call
         var lastError = "no identity accepted"
         for identity in identities {
+            // FIDO2 keys sign with the webauthn-sk variant — a complete signature
+            // blob libssh2 must send verbatim via the raw path (matches `authenticate`).
+            // This path backs mosh bootstrap, SFTP, and port forwarding.
+            let isSecurityKey = identity.algorithm == .ecdsaSK
             let bridge = AgentSignBridge(agent: agent, publicKeyBlob: identity.blob,
-                                         signContext: SignContext(host: host, purpose: .sshUserAuth))
+                                         signContext: SignContext(host: host, purpose: .sshUserAuth),
+                                         rawSignature: isSecurityKey)
             keepAlive.append(bridge)
             var abstract: UnsafeMutableRawPointer? = Unmanaged.passUnretained(bridge).toOpaque()
             let rc: Int32 = identity.blob.withUnsafeBytes { (pk: UnsafeRawBufferPointer) in
                 withUnsafeMutablePointer(to: &abstract) { absP in
                     user.withCString { cuser in
-                        libssh2_userauth_publickey(session, cuser,
-                                                   pk.bindMemory(to: UInt8.self).baseAddress, pk.count,
-                                                   agentSignCallback, absP)
+                        let pkPtr = pk.bindMemory(to: UInt8.self).baseAddress
+                        return isSecurityKey
+                            ? libssh2_userauth_publickey_raw(session, cuser, pkPtr, pk.count,
+                                                             agentSignCallback, absP)
+                            : libssh2_userauth_publickey(session, cuser, pkPtr, pk.count,
+                                                         agentSignCallback, absP)
                     }
                 }
             }
@@ -948,7 +924,6 @@ public final class SSHShell: @unchecked Sendable {
             if jumpFd >= 0 { close(jumpFd); jumpFd = -1 }
         }
         // No libssh2_exit() here — the global init is process-wide (see libssh2Ready).
-        bridge = nil
     }
 
     // MARK: helpers
