@@ -94,3 +94,8 @@ targets:
         com.apple.security.smartcard: true
         # NFC ISO7816 (tag) reading for YubiKey-over-NFC.
         com.apple.developer.nfc.readersession.formats: [TAG]
+        # FIDO2 security keys / passkeys (WebAuthn) — associates the app with the
+        # relying-party domain (tools.bsns.cc serves the matching AASA). Required
+        # for the platform-passkey provider; harmless for external security keys.
+        com.apple.developer.associated-domains:
+          - webcredentials:tools.bsns.cc

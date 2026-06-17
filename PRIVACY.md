@@ -1,6 +1,6 @@
 # Privacy Policy — bsns.cc open-source apps
 
-_Effective 2026-06-16._
+_Effective 2026-06-17._
 
 This policy covers **bsns.SSH** and the other open-source apps published by
 bsns.cc. These apps are deliberately different from the bsns.cc hosted product:
@@ -44,13 +44,26 @@ The app opens a network connection **only** to destinations **you** specify:
 It makes **no** connection to any analytics, crash-reporting, attribution, ad, or
 "home" endpoint of ours. We do not operate a server for these apps.
 
+**FIDO2 security keys / passkeys (iOS).** If you use a FIDO2 security key or a
+passkey to authenticate SSH, the signing ceremony is **local** — between your
+device and the security key (or the Secure Enclave) — and is **not** a network
+call to us or anyone. To allow this, iOS validates that the app is associated with
+the relying-party domain `tools.bsns.cc` by reading a small, public
+`apple-app-site-association` file; that file is fetched by **Apple's CDN** (not by
+the app, and not in a way that identifies you) and contains only the app's
+identifier. The domain is never contacted during SSH authentication. If you enroll
+a **passkey** (rather than an external security key), iOS may back it up via **your
+own iCloud Keychain** — storage you control, the same principle as optional config
+sync; external security keys never leave the token and don't sync.
+
 ## Where your data lives
 
 Everything stays on your device or in storage you control:
 
 - **Keys.** Hardware-backed keys are generated in and never leave the Secure
-  Enclave (iOS) / Android Keystore (StrongBox when available), or a YubiKey
-  (PIV). Software keys are held locally. Private keys never touch the network.
+  Enclave (iOS) / Android Keystore (StrongBox when available), a FIDO2 security
+  key, or a YubiKey (PIV). Software keys are held locally. Private keys never
+  touch the network.
 - **Config** (saved hosts, known_hosts, snippets, command history). Stored
   locally. Command history never leaves your device.
 - **Optional sync.** If you turn it on, your config is encrypted on-device

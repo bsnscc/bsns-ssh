@@ -9,6 +9,8 @@ struct KeysView: View {
     @State private var installTarget: InstallTarget?
     @State private var showYubiKey = false
     @State private var showEnclaveBackupWarning = false
+    @State private var showFidoEnroll = false
+    @State private var fidoName = "bsns"
 
     private struct InstallTarget: Identifiable { let id = UUID(); let key: SSHPublicKey }
 
@@ -24,9 +26,12 @@ struct KeysView: View {
                         HStack(spacing: 8) {
                             Text(key.algorithm.rawValue).font(.headline)
                             if store.isHardware(key) {
+                                let isFido = store.isSecurityKey(key)
                                 let isYubi = store.isYubiKey(key)
-                                Label(isYubi ? "YubiKey" : "Secure Enclave",
-                                      systemImage: isYubi ? "key.radiowaves.forward.fill" : "lock.shield.fill")
+                                let label = isFido ? "FIDO2 security key" : (isYubi ? "YubiKey" : "Secure Enclave")
+                                let icon = isFido ? "key.radiowaves.forward.fill"
+                                    : (isYubi ? "key.radiowaves.forward.fill" : "lock.shield.fill")
+                                Label(label, systemImage: icon)
                                     .font(.caption2.weight(.semibold))
                                     .padding(.horizontal, 7).padding(.vertical, 3)
                                     .background(Color.green.opacity(0.18), in: Capsule())
@@ -103,6 +108,12 @@ struct KeysView: View {
                 } label: {
                     Label("Add YubiKey (NFC / USB-C)", systemImage: "key.radiowaves.forward.fill")
                 }
+                Button {
+                    fidoName = "bsns"
+                    showFidoEnroll = true
+                } label: {
+                    Label("Add FIDO2 security key (USB-C / NFC)", systemImage: "lock.badge.clock")
+                }
                 Button("Ed25519 (software key)") {
                     Task { await store.generateKey(.ed25519) }
                 }
@@ -144,5 +155,21 @@ struct KeysView: View {
                            keyLabel: "\(target.key.algorithm.rawValue)  ·  \(SSHKeyFormat.fingerprint(ofPublicKeyBlob: target.key.blob))")
         }
         .sheet(isPresented: $showYubiKey) { YubiKeyEnrollView() }
+        .alert("Add a FIDO2 security key", isPresented: $showFidoEnroll) {
+            TextField("Label", text: $fidoName)
+            Button("Cancel", role: .cancel) {}
+            Button("Continue") {
+                Task {
+                    do { try await store.enrollSecurityKey(name: fidoName) }
+                    catch { genError = "Couldn't enroll the security key: \(error.localizedDescription)" }
+                }
+            }
+        } message: {
+            Text("""
+            Touch your security key (and enter its PIN if asked) on the next screen. The private key never leaves the key.
+
+            Works with Android and desktop OpenSSH. Like any single hardware key, enroll a backup (another security key, or a software key) so a lost key doesn't lock you out.
+            """)
+        }
     }
 }
