@@ -12,6 +12,10 @@ public struct KeyID: Hashable, Sendable, CustomStringConvertible {
 public enum KeyAlgorithm: String, Sendable, CaseIterable {
     case ed25519 = "ssh-ed25519"
     case ecdsaP256 = "ecdsa-sha2-nistp256"
+    // RSA — the compatibility path for legacy gear (older networking equipment,
+    // appliances) that predates Ed25519/ECDSA support. "ssh-rsa" is the key-blob
+    // type; the signature hash is negotiated separately (see RSASignatureAlgorithm).
+    case rsa = "ssh-rsa"
     // FIDO2-backed key types — v2 (iOS blocks FIDO2 over USB-C, so PIV is the
     // v1 hardware-token path). Declared now so the agent and codecs are shaped
     // for them from the start.
@@ -23,9 +27,20 @@ public enum KeyAlgorithm: String, Sendable, CaseIterable {
     public var isSecurityKey: Bool {
         switch self {
         case .ecdsaSK, .ed25519SK: return true
-        case .ed25519, .ecdsaP256: return false
+        case .ed25519, .ecdsaP256, .rsa: return false
         }
     }
+}
+
+/// The signature hash to use for an `ssh-rsa` key. The public-key blob is always
+/// "ssh-rsa", but RFC 8332 lets the signature use SHA-256/512; legacy gear that
+/// can't do ECDSA usually also expects the original SHA-1 ("ssh-rsa") signature,
+/// which is why that is the default. The raw value is the on-the-wire signature
+/// algorithm name.
+public enum RSASignatureAlgorithm: String, Sendable {
+    case sha1 = "ssh-rsa"
+    case sha256 = "rsa-sha2-256"
+    case sha512 = "rsa-sha2-512"
 }
 
 /// A public key in SSH wire format plus its human comment. `blob` is exactly
@@ -62,10 +77,16 @@ public struct SignContext: Sendable {
 
     public let host: String?
     public let purpose: Purpose
+    /// Which signature hash an `ssh-rsa` key should use. Defaults to SHA-1, which
+    /// matches the "ssh-rsa" method libssh2 advertises for an ssh-rsa blob on the
+    /// userauth callback path (and what legacy gear expects). The agent-protocol
+    /// path overrides this from the request's rsa-sha2 flags.
+    public let rsaAlgorithm: RSASignatureAlgorithm
 
-    public init(host: String? = nil, purpose: Purpose) {
+    public init(host: String? = nil, purpose: Purpose, rsaAlgorithm: RSASignatureAlgorithm = .sha1) {
         self.host = host
         self.purpose = purpose
+        self.rsaAlgorithm = rsaAlgorithm
     }
 }
 

@@ -78,8 +78,14 @@ public actor Agent {
             case .signRequest:
                 let keyBlob = try decoder.readString()
                 let data = try decoder.readString()
-                _ = try decoder.readUInt32() // flags (rsa-sha2 selection) — handled later
-                let signature = try await sign(publicKeyBlob: keyBlob, data: data, context: context)
+                // Flags select the RSA signature hash (RFC 8332): bit 0x04 =
+                // rsa-sha2-512, 0x02 = rsa-sha2-256, none = ssh-rsa (SHA-1).
+                // Ignored by non-RSA backends.
+                let flags = try decoder.readUInt32()
+                let rsaAlg: RSASignatureAlgorithm = (flags & 0x04) != 0 ? .sha512
+                    : (flags & 0x02) != 0 ? .sha256 : .sha1
+                let ctx = SignContext(host: context.host, purpose: context.purpose, rsaAlgorithm: rsaAlg)
+                let signature = try await sign(publicKeyBlob: keyBlob, data: data, context: ctx)
                 return SSHEncoder.build {
                     $0.writeByte(SSHAgentMessageType.signResponse.rawValue)
                     $0.writeString(signature.blob)

@@ -105,11 +105,16 @@ struct KeysView: View {
                 Button("ECDSA P-256 (software key)") {
                     Task { await store.generateKey(.ecdsaP256) }
                 }
+                Button("RSA 3072 (software key)") {
+                    Task { await store.generateKey(.rsa) }
+                }
             } header: {
                 Text("Generate")
             } footer: {
                 if store.enclaveAvailable {
-                    Text("A Secure Enclave key never leaves this device and asks for Face ID each time it signs in. It can't be exported or copied off the phone.")
+                    Text("A Secure Enclave key never leaves this device and asks for Face ID each time it signs in. It can't be exported or copied off the phone.\n\nUse RSA only for older gear (some network equipment) that can't accept Ed25519 or ECDSA keys.")
+                } else {
+                    Text("Use RSA only for older gear (some network equipment) that can't accept Ed25519 or ECDSA keys.")
                 }
             }
 

@@ -40,6 +40,9 @@ public struct FileKey: KeyBackend {
                         publicBlob: SSHKeyFormat.ecdsaP256PublicBlob(x963Point: key.publicKey.x963Representation),
                         material: key.rawRepresentation,
                         comment: comment)
+        case .rsa:
+            let (publicBlob, material) = try RSAKeySupport.generate()
+            return make(.rsa, publicBlob: publicBlob, material: material, comment: comment)
         case .ecdsaSK, .ed25519SK:
             throw KeyBackendError.unsupportedAlgorithm
         }
@@ -61,6 +64,11 @@ public struct FileKey: KeyBackend {
                         publicBlob: SSHKeyFormat.ecdsaP256PublicBlob(x963Point: key.publicKey.x963Representation),
                         material: privateKeyMaterial,
                         comment: comment)
+        case .rsa:
+            return make(.rsa,
+                        publicBlob: try RSAKeySupport.publicBlob(fromMaterial: privateKeyMaterial),
+                        material: privateKeyMaterial,
+                        comment: comment)
         case .ecdsaSK, .ed25519SK:
             throw KeyBackendError.unsupportedAlgorithm
         }
@@ -80,6 +88,10 @@ public struct FileKey: KeyBackend {
             let signature = try key.signature(for: data)
             let body = SSHKeyFormat.ecdsaSignatureBody(rawRS: signature.rawRepresentation)
             return SSHSignature(blob: SSHKeyFormat.signatureBlob(format: "ecdsa-sha2-nistp256", body: body))
+        case .rsa:
+            let body = try RSAKeySupport.sign(material: privateKeyMaterial, data: data,
+                                              algorithm: context.rsaAlgorithm)
+            return SSHSignature(blob: SSHKeyFormat.signatureBlob(format: context.rsaAlgorithm.rawValue, body: body))
         case .ecdsaSK, .ed25519SK:
             throw KeyBackendError.unsupportedAlgorithm
         }

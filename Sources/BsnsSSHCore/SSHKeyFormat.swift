@@ -31,6 +31,16 @@ public enum SSHKeyFormat {
         }
     }
 
+    /// `ssh-rsa` public-key blob: `string("ssh-rsa") || mpint(e) || mpint(n)`
+    /// (RFC 4253 §6.6 — the exponent comes before the modulus).
+    public static func rsaPublicBlob(exponent: Data, modulus: Data) -> Data {
+        SSHEncoder.build {
+            $0.writeString("ssh-rsa")
+            $0.writeMPInt(exponent)
+            $0.writeMPInt(modulus)
+        }
+    }
+
     /// A complete SSH signature blob: `string(format) || string(body)`. This
     /// is the canonical representation (also what the SSH-agent protocol
     /// returns). The libssh2 publickey callback wants only `body`, which it
