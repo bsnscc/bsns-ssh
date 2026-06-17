@@ -9,6 +9,7 @@ struct SFTPBrowserView: View {
     let host: String
     let port: UInt16
     let user: String
+    var keyBlob: Data? = nil
 
     @Environment(AgentStore.self) private var store
     @Environment(KnownHostsStore.self) private var knownHostsStore
@@ -121,7 +122,8 @@ struct SFTPBrowserView: View {
         busy = true; error = nil
         do {
             try await client.connect(host: host, port: port, user: user,
-                                     agent: store.agent, knownHosts: knownHostsStore.knownHosts)
+                                     agent: store.agent, knownHosts: knownHostsStore.knownHosts,
+                                     keyBlob: keyBlob)
             connected = true
             await reload()
         } catch SSHShellError.unknownHostKey(let key) {

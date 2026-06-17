@@ -21,6 +21,8 @@ struct ConnectView: View {
     @State private var group = ""
     @State private var jump = ""
     @State private var password = ""
+    /// Fingerprint of the key to authenticate with — auth offers only this one.
+    @State private var selectedKeyFP = ""
     @State private var useMosh = false
     @State private var showSFTP = false
     @State private var showImport = false
@@ -88,6 +90,18 @@ struct ConnectView: View {
                 }
             }
 
+            if !store.identities.isEmpty {
+                Section("Key") {
+                    Picker("Authenticate with", selection: $selectedKeyFP) {
+                        ForEach(store.identities, id: \.blob) { id in
+                            Text(keyLabel(id)).tag(fp(id))
+                        }
+                    }
+                    Text("Only this key is offered when connecting — so a host that limits auth attempts won't reject you, and other keys don't prompt.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
             Section("Password (optional)") {
                 SecureField("password — for login or installing a key", text: $password)
                     .textContentType(.password)
@@ -124,12 +138,14 @@ struct ConnectView: View {
             }
         }
         .navigationTitle("Connect")
+        .onAppear { ensureKeySelection() }
+        .onChange(of: store.identities) { _, _ in ensureKeySelection() }
         .toolbar {
             if !hostStore.hosts.isEmpty { EditButton() }
         }
         .sheet(isPresented: $showSFTP) {
             if let p = UInt16(port), p > 0 {
-                SFTPBrowserView(host: host, port: p, user: user)
+                SFTPBrowserView(host: host, port: p, user: user, keyBlob: selectedKey?.blob)
             }
         }
         .sheet(isPresented: $showImport) { ImportConfigView() }
@@ -204,10 +220,39 @@ struct ConnectView: View {
             .foregroundStyle(color)
     }
 
+    // MARK: key selection
+
+    private func fp(_ id: SSHPublicKey) -> String { SSHKeyFormat.fingerprint(ofPublicKeyBlob: id.blob) }
+
+    /// The currently chosen identity (the one auth will offer).
+    private var selectedKey: SSHPublicKey? { store.identities.first { fp($0) == selectedKeyFP } }
+
+    private func keyLabel(_ id: SSHPublicKey) -> String {
+        let kind = store.isYubiKey(id) ? "YubiKey"
+            : store.isHardware(id) ? "Secure Enclave"
+            : id.algorithm.rawValue.replacingOccurrences(of: "ssh-", with: "")
+                .replacingOccurrences(of: "ecdsa-sha2-nistp256", with: "ecdsa")
+        return id.comment.isEmpty ? kind : "\(id.comment) · \(kind)"
+    }
+
+    /// Keep a valid key selected (default to the first) — auth always offers
+    /// exactly one chosen key, so the picker must never be empty when keys exist.
+    private func ensureKeySelection() {
+        if !store.identities.contains(where: { fp($0) == selectedKeyFP }) {
+            selectedKeyFP = store.identities.first.map(fp) ?? ""
+        }
+    }
+
     private func loadHost(_ saved: SavedHost) {
         host = saved.host; port = String(saved.port); user = saved.user
         useMosh = saved.useMosh ?? false
         group = saved.group ?? ""; jump = saved.jump ?? ""
+        // Restore the saved key if it still exists, else fall back to the default.
+        if let kid = saved.keyID, store.identities.contains(where: { fp($0) == kid }) {
+            selectedKeyFP = kid
+        } else {
+            ensureKeySelection()
+        }
     }
 
     /// Fire "run on connect" snippets once the shell has settled.
@@ -223,7 +268,8 @@ struct ConnectView: View {
         hostStore.add(SavedHost(label: "", host: host, port: Int(port) ?? 22, user: user,
                                 useMosh: useMosh,
                                 jump: jump.trimmingCharacters(in: .whitespaces).isEmpty ? nil : jump.trimmingCharacters(in: .whitespaces),
-                                group: group.trimmingCharacters(in: .whitespaces).isEmpty ? nil : group.trimmingCharacters(in: .whitespaces)))
+                                group: group.trimmingCharacters(in: .whitespaces).isEmpty ? nil : group.trimmingCharacters(in: .whitespaces),
+                                keyID: selectedKeyFP.isEmpty ? nil : selectedKeyFP))
     }
 
     private enum JumpParseError: Error { case invalidPort }
@@ -260,16 +306,18 @@ struct ConnectView: View {
         let shell = SSHShell()
         let known = knownHostsStore.knownHosts
         let pw = password.isEmpty ? nil : password
+        let keyBlob = selectedKey?.blob
         Task {
             do {
                 try await shell.connect(host: host, port: portValue, user: user, agent: store.agent,
-                                        knownHosts: known, password: pw, jump: hop)
+                                        knownHosts: known, password: pw, jump: hop, keyBlob: keyBlob)
                 await MainActor.run {
                     busy = false
                     let title = hop.map { "\(user)@\(host) ⇢ \($0.host)" } ?? "\(user)@\(host)"
                     let spec = TerminalSession.Spec(host: host, port: portValue, user: user,
                                                     agent: store.agent,
-                                                    knownHosts: knownHostsStore.knownHosts, jump: hop)
+                                                    knownHosts: knownHostsStore.knownHosts, jump: hop,
+                                                    keyBlob: keyBlob)
                     let s = TerminalSession(spec: spec, title: title)
                     s.adopt(shell)
                     sessions.add(s)
@@ -287,7 +335,8 @@ struct ConnectView: View {
     private func attemptConnectMosh(_ portValue: UInt16) {
         error = nil; notice = nil; busy = true
         let spec = TerminalSession.Spec(host: host, port: portValue, user: user, agent: store.agent,
-                                        knownHosts: knownHostsStore.knownHosts, useMosh: true)
+                                        knownHosts: knownHostsStore.knownHosts, useMosh: true,
+                                        keyBlob: selectedKey?.blob)
         let hostName = host, userName = user
         Task {
             do {
@@ -315,7 +364,8 @@ struct ConnectView: View {
     private func attemptInstall() {
         guard let portValue = UInt16(port), portValue > 0 else { error = "Invalid port."; return }
         error = nil; notice = nil; busy = true
-        let lines = store.identities.map(authorizedKeysLine)
+        // Install just the chosen key (the one you'll authenticate with), not every key.
+        let lines = (selectedKey.map { [$0] } ?? store.identities).map(authorizedKeysLine)
         let known = knownHostsStore.knownHosts
         let pw = password
         Task {

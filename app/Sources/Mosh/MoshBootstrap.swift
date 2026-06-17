@@ -39,7 +39,7 @@ enum MoshBootstrap {
             output = try await SSHShell.execCapturing(
                 host: spec.host, port: spec.port, user: spec.user,
                 agent: spec.agent, password: nil,
-                command: serverCommand, knownHosts: spec.knownHosts)
+                command: serverCommand, knownHosts: spec.knownHosts, keyBlob: spec.keyBlob)
         } catch let e as SSHShellError {
             throw e
         } catch {

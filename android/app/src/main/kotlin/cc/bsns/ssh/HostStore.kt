@@ -13,6 +13,9 @@ data class SavedHost(
     val user: String,
     val jump: String? = null,
     val group: String? = null,
+    /** Id of the key to authenticate with; null (or unknown on load) falls back
+     *  to the first key. */
+    val keyId: String? = null,
 ) {
     val label: String get() = "$user@$host${if (port == 22) "" else ":$port"}"
 }
@@ -26,7 +29,8 @@ class HostStore(context: Context) {
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             SavedHost(o.getString("host"), o.getInt("port"), o.getString("user"),
-                o.optString("jump").ifEmpty { null }, o.optString("group").ifEmpty { null })
+                o.optString("jump").ifEmpty { null }, o.optString("group").ifEmpty { null },
+                o.optString("keyId").ifEmpty { null })
         }
     } catch (e: Exception) {
         emptyList()   // never crash the connect screen on a corrupt store
@@ -38,6 +42,7 @@ class HostStore(context: Context) {
             val o = JSONObject().put("host", it.host).put("port", it.port).put("user", it.user)
             if (it.jump != null) o.put("jump", it.jump)
             if (it.group != null) o.put("group", it.group)
+            if (it.keyId != null) o.put("keyId", it.keyId)
             arr.put(o)
         }
         // commit() (synchronous) so a saved host survives even if the process is

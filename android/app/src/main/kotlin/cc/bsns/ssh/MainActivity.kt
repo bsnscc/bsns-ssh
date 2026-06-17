@@ -855,6 +855,8 @@ fun ConnectScreen(
                             Modifier.fillMaxWidth().clickable {
                                 host = h.host; port = h.port.toString(); user = h.user
                                 group = h.group ?: ""; jump = h.jump ?: ""
+                                // Restore the saved key if it still exists.
+                                if (h.keyId != null && keys.any { it.id == h.keyId }) onSelectKey(h.keyId)
                                 status = "loaded ${h.label}"
                             }.padding(vertical = 6.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -903,7 +905,8 @@ fun ConnectScreen(
                     val p = validPort(port)
                     if (p == null) { status = "port must be a number from 1 to 65535"; return@OutlinedButton }
                     savedHosts = hostStore.add(SavedHost(host, p, user,
-                        jump = jump.trim().ifEmpty { null }, group = group.trim().ifEmpty { null }))
+                        jump = jump.trim().ifEmpty { null }, group = group.trim().ifEmpty { null },
+                        keyId = key.id))
                     status = "saved $user@$host"
                 },
             ) { Text("Save this host") }

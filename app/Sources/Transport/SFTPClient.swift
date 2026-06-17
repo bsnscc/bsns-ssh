@@ -46,8 +46,8 @@ final class SFTPClient: @unchecked Sendable {
     /// Connect, authenticate, and open the SFTP subsystem. Rethrows the SSH
     /// host-key / auth errors so the UI can run its TOFU prompt and retry.
     func connect(host: String, port: UInt16, user: String, agent: Agent,
-                 knownHosts: KnownHosts) async throws {
-        let identities = await agent.identities()
+                 knownHosts: KnownHosts, keyBlob: Data? = nil) async throws {
+        let identities = SSHShell.restrict(await agent.identities(), to: keyBlob)
         try await run {
             let (fd, session) = try SSHShell.openAuthenticatedSession(
                 host: host, port: port, user: user, agent: agent,

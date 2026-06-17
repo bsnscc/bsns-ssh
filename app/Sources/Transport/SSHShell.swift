@@ -170,13 +170,23 @@ public final class SSHShell: @unchecked Sendable {
     /// Connect, authenticate through `agent`, open a PTY + shell, and start the
     /// I/O loop. Returns once the shell is live (output then streams via
     /// `onOutput`). `knownHosts` mismatches are refused.
+    /// Restrict offered identities to a single chosen key (by public-key blob), so
+    /// auth sends exactly that key instead of trying every installed one — which
+    /// wastes the server's auth-attempt budget and fires a touch/PIN per hardware
+    /// key. `nil` keeps all identities (e.g. password-only paths).
+    static func restrict(_ identities: [SSHPublicKey], to keyBlob: Data?) -> [SSHPublicKey] {
+        guard let keyBlob else { return identities }
+        return identities.filter { $0.blob == keyBlob }
+    }
+
     public func connect(host: String, port: UInt16, user: String, agent: Agent,
                         cols: Int32 = 80, rows: Int32 = 24,
                         knownHosts: KnownHosts = KnownHosts(),
                         password: String? = nil,
-                        jump: JumpHop? = nil) async throws {
+                        jump: JumpHop? = nil,
+                        keyBlob: Data? = nil) async throws {
         let usingPassword = !(password ?? "").isEmpty
-        let identities = await agent.identities()
+        let identities = Self.restrict(await agent.identities(), to: keyBlob)
         guard usingPassword || !identities.isEmpty else { throw SSHShellError.noIdentities }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             queue.async {
@@ -459,8 +469,9 @@ public final class SSHShell: @unchecked Sendable {
     /// Used to bootstrap mosh (`mosh-server new` prints `MOSH CONNECT ...`).
     public static func execCapturing(host: String, port: UInt16, user: String,
                                      agent: Agent?, password: String?,
-                                     command: String, knownHosts: KnownHosts) async throws -> String {
-        let identities = agent == nil ? [] : await agent!.identities()
+                                     command: String, knownHosts: KnownHosts,
+                                     keyBlob: Data? = nil) async throws -> String {
+        let identities = agent == nil ? [] : Self.restrict(await agent!.identities(), to: keyBlob)
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {

@@ -14,6 +14,9 @@ struct SavedHost: Codable, Identifiable, Hashable {
     var useMosh: Bool?
     var jump: String?
     var group: String?
+    /// Fingerprint of the key to authenticate with (SSHKeyFormat fingerprint).
+    /// Decodes as nil from older saved hosts — those fall back to the first key.
+    var keyID: String?
 }
 
 private func appSupportURL(_ name: String) -> URL {
