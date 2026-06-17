@@ -65,6 +65,40 @@ bsns.cc is an operations platform for small business with many tools and a share
 **Support / Marketing URL:** `https://bsns.cc` · **Privacy policy:** `https://tools.bsns.cc/open-source/privacy`
 **Privacy nutrition label:** Data Not Collected (no data is collected or linked).
 
+**App Review notes** (App Store Connect → App Review Information → Notes). Plain
+text; paste verbatim. ⚠️ Keep the demo account (`apptester` / `sextant.upgo.in`)
+live through the review window — it's the only way a reviewer can exercise a
+connection.
+
+```
+bsns.SSH is an SSH, Mosh, and SFTP client. No account or registration is required, and the app collects no data.
+
+HOW TO TEST (SSH with a password):
+1. Open the app — it starts on the "Connect" tab.
+2. Enter:
+   • Host: sextant.upgo.in
+   • Port: 22
+   • User: apptester
+   • Password: Testing123!
+3. Tap "Connect".
+4. On the first connection the app shows a trust-on-first-use host-key prompt — tap "Trust" to proceed.
+5. You'll land in a live interactive shell. Run a command (e.g. ls, whoami) to confirm it works.
+
+This demo account is on a publicly reachable server and will stay active through the review period.
+
+OPTIONAL — to also test Mosh:
+On the Connect screen tap "Install my key (ssh-copy-id)" (this uses the password above to add the app's key to the host), then turn on the "Use mosh" toggle and tap Connect. (The demo host has mosh-server installed.)
+
+NOTES:
+• Hardware-backed keys are optional and not required to verify the app — they need physical hardware: a FIDO2 security key (NFC or USB-C, via Apple's standard WebAuthn / AuthenticationServices), a smart card / PIV token, or an on-device Secure Enclave key.
+• The app's Associated Domains entitlement (webcredentials:tools.bsns.cc) exists only so iOS can validate a FIDO2 security-key credential for SSH — the standard WebAuthn mechanism. It carries no personal data, and that domain is never contacted during your SSH/Mosh sessions (signing happens locally between the device and the key).
+• Mosh and ProxyJump use an in-app SSH key (agent) rather than a password.
+• "Browse files (SFTP)" on the Connect tab opens an SFTP browser to the same host.
+• The app makes no network connections other than to the SSH/Mosh host you enter — no analytics or telemetry.
+
+Thank you for reviewing!
+```
+
 ---
 
 ## Google Play (Android)
