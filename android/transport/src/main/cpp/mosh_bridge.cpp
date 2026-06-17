@@ -80,23 +80,37 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshService(
     if (waitMs < 0) waitMs = 1000;
     if (maxMs >= 0 && maxMs < waitMs) waitMs = maxMs;
 
-    int mfd = mosh_client_fd(h->client);
-    struct pollfd pfds[2];
+    // Poll EVERY mosh UDP socket, not just one: after a port hop mosh keeps the
+    // old socket(s) briefly while sending on the newest, so polling a single fd
+    // can miss the server's recovery reply and leave the session hung after a
+    // background/resume (mirrors the iOS fix).
+    int mfds[16];
+    int nf = mosh_client_fds(h->client, mfds, 16);
+    struct pollfd pfds[17];
     int n = 0;
-    if (mfd >= 0) { pfds[n].fd = mfd; pfds[n].events = POLLIN; pfds[n].revents = 0; n++; }
-    if (h->wake[0] >= 0) { pfds[n].fd = h->wake[0]; pfds[n].events = POLLIN; pfds[n].revents = 0; n++; }
+    for (int i = 0; i < nf; i++) { pfds[n].fd = mfds[i]; pfds[n].events = POLLIN; pfds[n].revents = 0; n++; }
+    int wakeIdx = -1;
+    if (h->wake[0] >= 0) { wakeIdx = n; pfds[n].fd = h->wake[0]; pfds[n].events = POLLIN; pfds[n].revents = 0; n++; }
 
     int r = poll(pfds, n, waitMs);
     if (r > 0) {
+        int gotData = 0;
         for (int i = 0; i < n; i++) {
             if (!(pfds[i].revents & POLLIN)) continue;
-            if (pfds[i].fd == mfd) {
-                mosh_client_recv(h->client);
-                h->lastContactMs = nowMonoMs();   // a datagram arrived from the server
-            } else {
+            if (i == wakeIdx) {
                 char buf[64];
                 while (read(h->wake[0], buf, sizeof(buf)) > 0) {}   // drain
+            } else {
+                gotData = 1;
             }
+        }
+        if (gotData) {
+            // First contact after a stale gap: redraw the recovered framebuffer
+            // absolutely rather than diffing it against the stale pre-gap baseline,
+            // which would leave stray colored cells until a manual resize (mirrors iOS).
+            if (nowMonoMs() - h->lastContactMs > 8000) mosh_client_force_repaint(h->client);
+            mosh_client_recv(h->client);
+            h->lastContactMs = nowMonoMs();   // a datagram arrived from the server
         }
     }
     mosh_client_tick(h->client);
