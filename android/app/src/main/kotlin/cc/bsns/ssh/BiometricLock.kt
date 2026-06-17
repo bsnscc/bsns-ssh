@@ -28,6 +28,13 @@ private const val AUTHENTICATORS =
 fun biometricAvailable(context: Context): Boolean =
     BiometricManager.from(context).canAuthenticate(AUTHENTICATORS) == BiometricManager.BIOMETRIC_SUCCESS
 
+/** True if a *strong* (class-3) biometric is enrolled — the only kind that can
+ *  unlock a Keystore key for signing via a CryptoObject. Gates the opt-in
+ *  biometric-protected device key. */
+fun strongBiometricAvailable(context: Context): Boolean =
+    BiometricManager.from(context)
+        .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+
 private fun promptUnlock(activity: FragmentActivity, onSuccess: () -> Unit) {
     val prompt = BiometricPrompt(
         activity, ContextCompat.getMainExecutor(activity),

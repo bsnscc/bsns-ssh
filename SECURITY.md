@@ -57,11 +57,14 @@ So you know the baseline a report would be measured against:
   non-extractable and signing happens on the secure element, never in app memory.
   Per-signature user verification differs by backend: the **Secure Enclave** key
   requires Face ID / Touch ID on every signature, and a **YubiKey** requires its
-  PIN (cached per session) plus a physical touch. **Android Keystore** keys are
-  non-extractable but are *not* currently gated on a per-use biometric/credential
-  prompt — the optional app lock gates access to the UI, not each individual
-  signature (per-use auth is a planned opt-in). Software keys are held in an
-  in-process SSH agent and never written to the transport.
+  PIN (cached per session) plus a physical touch. The everyday **Android
+  Keystore** device key is non-extractable but is *not* gated on a per-use
+  biometric prompt — the optional app lock gates access to the UI, not each
+  signature. For per-signature verification on Android there's an opt-in
+  **biometric-protected device key**: a separate Keystore key generated requiring
+  a strong (class-3) biometric, so every signature prompts for a fingerprint.
+  Software keys are held in an in-process SSH agent and never written to the
+  transport.
 - **Hosts are verified (TOFU).** Unknown host keys prompt; a *changed* key is
   refused, not silently accepted. ProxyJump verifies the bastion's own key
   before authenticating to it, and the bastion is key/agent-authenticated only.

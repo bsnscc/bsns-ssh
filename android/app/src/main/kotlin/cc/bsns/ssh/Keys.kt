@@ -19,6 +19,9 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** A signer usable by the JNI bridge (it calls `sign([B): [B` by name). */
 private const val HARDWARE_ALIAS = "bsns-app-key"
+/** The opt-in biometric-protected device key — a separate Keystore alias generated
+ *  requiring per-use authentication (the everyday HARDWARE_ALIAS key is left alone). */
+private const val PROTECTED_ALIAS = "bsns-app-key-protected"
 
 /** Wraps a software FileKey so the JNI sign callback gets the signature *body*
  *  (libssh2 frames the rest), matching what KeystoreSigner returns. */
@@ -67,6 +70,7 @@ class AppKey(
     val yubiKey: Boolean = false,
     val builtIn: Boolean = false,   // the always-present device Keystore key (not deletable)
     val fido: Boolean = false,      // FIDO2 sk key — uses libssh2's sk-userauth path (direct only)
+    val protectedDeviceKey: Boolean = false,  // opt-in Keystore key gated by a per-use biometric prompt
 ) {
     val fingerprint: String get() = SshKeyFormat.fingerprintOfPublicKeyBlob(publicKeyBlob)
     val authLine: String get() = "$algorithm ${Base64.getEncoder().encodeToString(publicKeyBlob)} bsns"
@@ -115,6 +119,7 @@ private class SecureKeyStore(context: Context) {
 class KeyManager(context: Context) {
     private val hardwareSigner = KeystoreSigner(HARDWARE_ALIAS)
     private val store = SecureKeyStore(context)
+    private val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
     // Enrolled YubiKeys: just the public blob (the private key lives on the token).
     private val yubiPrefs = context.getSharedPreferences("yubikeys", Context.MODE_PRIVATE)
     // Enrolled FIDO2 (sk) keys: "base64(publicBlob)|base64(credentialId)|flags".
@@ -129,6 +134,13 @@ class KeyManager(context: Context) {
             "ecdsa-sha2-nistp256", hardware = hardwareSigner.isHardwareBacked, signer = hardwareSigner,
             builtIn = true,
         )
+        // The opt-in biometric-protected device key (present only if enrolled).
+        val protectedKey = protectedSigner()?.let { s ->
+            AppKey(
+                PROTECTED_ALIAS, "Device key (${s.backing.label}, biometric)", s.publicKeyBlob,
+                "ecdsa-sha2-nistp256", hardware = s.isHardwareBacked, signer = s, protectedDeviceKey = true,
+            )
+        }
         val soft = store.loadAll().map { (id, algo, material) ->
             val fk = FileKey.from(KeyAlgorithm.fromWire(algo)!!, material, "bsns")
             val short = algo.removePrefix("ssh-").removePrefix("ecdsa-sha2-")
@@ -155,8 +167,29 @@ class KeyManager(context: Context) {
             AppKey(id, "FIDO2 security key", blob, "sk-ecdsa-sha2-nistp256@openssh.com",
                 hardware = true, signer = signer, fido = true)
         }
-        return listOf(hw) + soft + yubi + fido
+        return listOfNotNull(hw, protectedKey) + soft + yubi + fido
     }
+
+    /** The biometric-protected device key, reconstructed if it's been enrolled. */
+    private fun protectedSigner(): KeystoreSigner? =
+        if (ks.containsAlias(PROTECTED_ALIAS)) {
+            runCatching { KeystoreSigner(PROTECTED_ALIAS, requireAuth = true) }.getOrNull()
+        } else {
+            null
+        }
+
+    /** Whether the opt-in biometric-protected device key exists yet. */
+    fun hasProtectedDeviceKey(): Boolean = ks.containsAlias(PROTECTED_ALIAS)
+
+    /** Generate the biometric-protected device key (a separate Keystore key that
+     *  requires a per-use biometric prompt to sign). Returns its id. */
+    fun addProtectedDeviceKey(): String {
+        val signer = KeystoreSigner(PROTECTED_ALIAS, requireAuth = true)   // generates it
+        return SshKeyFormat.fingerprintOfPublicKeyBlob(signer.publicKeyBlob)
+    }
+
+    /** Delete the biometric-protected device key (the everyday device key is untouched). */
+    fun removeProtectedDeviceKey() { runCatching { ks.deleteEntry(PROTECTED_ALIAS) } }
 
     /** Enroll a YubiKey (blocking — prompts a tap); returns the new key's id. */
     fun enrollYubiKey(pin: String): String {

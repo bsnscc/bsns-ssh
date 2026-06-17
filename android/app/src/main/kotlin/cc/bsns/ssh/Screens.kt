@@ -54,6 +54,7 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
     var yubiStatus by remember { mutableStateOf<String?>(null) }
     var fidoPin by remember { mutableStateOf("") }
     var fidoStatus by remember { mutableStateOf<String?>(null) }
+    var protectedStatus by remember { mutableStateOf<String?>(null) }
     val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
     fun refresh() { keys = keyManager.keys() }
@@ -90,6 +91,7 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                                 when {
                                     k.fido -> "FIDO2"
                                     k.yubiKey -> "Smart card"
+                                    k.protectedDeviceKey -> "Biometric"
                                     k.hardware -> "Hardware"
                                     else -> "Software"
                                 },
@@ -107,6 +109,8 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                                 TextButton(onClick = { keyManager.forgetYubiKey(k.id); refresh() }) { Text("Forget", fontSize = 13.sp) }
                             } else if (k.fido) {
                                 TextButton(onClick = { keyManager.forgetFido(k.id); refresh() }) { Text("Forget", fontSize = 13.sp) }
+                            } else if (k.protectedDeviceKey) {
+                                TextButton(onClick = { keyManager.removeProtectedDeviceKey(); refresh() }) { Text("Remove", fontSize = 13.sp) }
                             } else if (!k.builtIn) {
                                 TextButton(onClick = { confirmDelete = k }) { Text("Delete", fontSize = 13.sp) }
                             }
@@ -129,6 +133,35 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                     gen("+ ed25519", KeyAlgorithm.ED25519)
                     gen("+ ecdsa", KeyAlgorithm.ECDSA_P256)
                     gen("+ rsa", KeyAlgorithm.RSA)
+                }
+            }
+
+            // Opt-in: a separate Keystore key that demands a fingerprint on every
+            // signature. Only offered when a strong biometric is enrolled and the
+            // key doesn't exist yet; once added it appears above with a "Biometric"
+            // tag and a Remove action. The everyday device key is never changed.
+            if (strongBiometricAvailable(context) && !keys.any { it.protectedDeviceKey }) {
+                Section(
+                    title = "Add a biometric-protected device key",
+                    footer = "A second non-extractable device key that requires your fingerprint " +
+                        "(class-3 biometric) for every signature — so a connection can't be made " +
+                        "while the phone is unlocked but unattended. It's a new key with its own " +
+                        "public key: add it to your servers and pick it per host. Your everyday " +
+                        "device key is left as is.",
+                ) {
+                    Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            protectedStatus = "generating…"
+                            thread {
+                                val result = runCatching { keyManager.addProtectedDeviceKey() }
+                                mainHandler.post {
+                                    result.onSuccess { protectedStatus = "added"; refresh() }
+                                        .onFailure { protectedStatus = it.message ?: "couldn't create the key" }
+                                }
+                            }
+                        }) { Text("Add protected key") }
+                        protectedStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
+                    }
                 }
             }
 

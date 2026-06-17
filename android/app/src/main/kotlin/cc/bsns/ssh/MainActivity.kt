@@ -92,6 +92,8 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         YubiKeyManager.attach(this)   // for NFC reader-mode + USB discovery
         FidoKeyManager.attach(this)   // FIDO2/CTAP2 over the same NFC/USB transports
+        // Per-use biometric prompt for an auth-required (protected) Keystore key.
+        cc.bsns.ssh.transport.KeystoreSigner.authorizer = BiometricKeyAuthorizer(this)
         // Set the secure flag up front so the very first recents snapshot is
         // protected — don't wait for a resume round-trip (a privacy guarantee).
         applySecureFlag(window, SettingsStore(this).appLock)
@@ -124,6 +126,12 @@ class MainActivity : FragmentActivity() {
             val app = applicationContext
             thread { runCatching { ConfigSync.push(app) } }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Drop the activity-bound biometric authorizer so we don't leak this activity.
+        cc.bsns.ssh.transport.KeystoreSigner.authorizer = null
     }
 }
 

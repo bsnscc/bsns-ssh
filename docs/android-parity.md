@@ -53,7 +53,7 @@ ported + cross-verified) is now wired into the app across passes P3–P6 below.
 | Find-in-scrollback | ✅ | ✅ `TerminalSearch` + search bar in `TerminalPane` | **DONE** (scan buffer, scroll-to-match, ↑/↓, counter) |
 | mosh | ✅ | 🟡 built + transport-proven, live session on-device-pending | NDK `libmosh.a` + JNI + `MoshSession` + connect toggle |
 | YubiKey (NFC/USB PIV) | ✅ | 🟡 built (`YubiKeyManager` + yubikit-android), tap/sign on-device-pending | enroll + sign over NFC/USB-C, slot 9A P-256 |
-| Secure Enclave ↔ StrongBox + biometric gate | ✅ | 🟡 Keystore non-biometric | P3/P5 (add user-auth requirement) |
+| Secure Enclave ↔ StrongBox + biometric gate | ✅ | ✅ everyday Keystore key (non-biometric) + opt-in biometric-protected device key | **DONE** (separate auth-required Keystore key; per-sign CryptoObject BiometricPrompt) |
 
 ## Build passes
 
