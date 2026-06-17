@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import CoreNFC
 import CryptoKit
+import CryptoTokenKit
 import YubiKit
 import BsnsSSHCore
 
@@ -157,7 +158,7 @@ final class YubiKeyCoordinator {
             // Slot 9A is empty, so mint a key — which requires PIV management-key
             // auth (the PIN alone isn't enough; the card rejects generate with
             // 0x6982 otherwise).
-            try await authenticateManagementKey(session, managementKeyHex: managementKeyHex)
+            try await authenticateManagementKey(conn, session, managementKeyHex: managementKeyHex)
             do {
                 pub = try await session.generateKey(in: .authentication, type: .ec(.secp256r1),
                                                     pinPolicy: .once, touchPolicy: .always)
@@ -169,10 +170,13 @@ final class YubiKeyCoordinator {
         return SSHKeyFormat.ecdsaP256PublicBlob(x963Point: ec.x963)
     }
 
-    /// Authenticate the PIV management key: the user-supplied key if given, else
-    /// the factory default — and if the card reports a non-default key and none was
-    /// supplied, ask for it rather than failing with a bare 0x6982.
-    private func authenticateManagementKey(_ session: PIVSession, managementKeyHex: String?) async throws {
+    /// Authenticate the PIV management key. Order: an explicitly-entered hex key;
+    /// else the PIN-protected management key read off the card (the common
+    /// `ykman --protect` setup — the PIN, already verified, unlocks it); else the
+    /// factory default; else, if the card says it's non-default and we couldn't
+    /// recover it, ask for the hex rather than failing with a bare 0x6982.
+    private func authenticateManagementKey(_ conn: SmartCardConnection, _ session: PIVSession,
+                                           managementKeyHex: String?) async throws {
         let key: Data
         if let hex = managementKeyHex?.trimmingCharacters(in: .whitespaces), !hex.isEmpty {
             // A PIV management key is 16 (AES-128), 24 (3DES / AES-192), or 32
@@ -182,19 +186,41 @@ final class YubiKeyCoordinator {
                 throw YubiKeyError.badManagementKey
             }
             key = parsed
+        } else if let stored = await readPinProtectedManagementKey(conn) {
+            key = stored
+        } else if let meta = try? await session.getManagementKeyMetadata(), !meta.isDefault {
+            throw YubiKeyError.managementKeyRequired
         } else {
-            if let meta = try? await session.getManagementKeyMetadata(), !meta.isDefault {
-                throw YubiKeyError.managementKeyRequired
-            }
             key = Self.defaultManagementKey
         }
         do { try await session.authenticate(with: key) }
         catch {
-            // A wrong key surfaces as 0x6982; point at the management-key field.
             throw YubiKeyError.stageFailed(
                 stage: "management-key auth",
-                detail: "\(yubiDetail(error)) — check the management key (hex) you entered")
+                detail: "\(yubiDetail(error)) — wrong management key (or it isn't PIN-protected; enter it as hex)")
         }
+    }
+
+    /// Read the PIN-protected management key stored on the card (`ykman
+    /// --protect`): GET DATA on the protected pivman object (0x5fff01), which
+    /// holds the key as TLV 0x88 → 0x89. Only succeeds after PIN verification;
+    /// returns nil if the card has no such object (i.e. not a PIN-protected setup).
+    /// Built as raw APDU bytes since YubiKit's typed `send(apdu:)` isn't public.
+    private func readPinProtectedManagementKey(_ conn: SmartCardConnection) async -> Data? {
+        // 00 CB 3F FF  Lc=05  5C 03 5F FF 01  Le=00  (GET DATA, tag-list → object 0x5fff01)
+        let apdu = Data([0x00, 0xCB, 0x3F, 0xFF, 0x05, 0x5C, 0x03, 0x5F, 0xFF, 0x01, 0x00])
+        guard let resp = try? await conn.send(data: apdu) else { return nil }
+        let bytes = [UInt8](resp)
+        guard bytes.count >= 2 else { return nil }
+        let sw = (UInt16(bytes[bytes.count - 2]) << 8) | UInt16(bytes[bytes.count - 1])
+        guard sw == 0x9000 else { return nil }   // 0x6A82 etc. = no protected object
+        let body = Data(bytes[0 ..< bytes.count - 2])
+        func records(_ d: Data) -> [TKTLVRecord] { TKBERTLVRecord.sequenceOfRecords(from: d) ?? [] }
+        guard let obj = records(body).first(where: { $0.tag == 0x53 }),
+              let prot = records(obj.value).first(where: { $0.tag == 0x88 }),
+              let keyRec = records(prot.value).first(where: { $0.tag == 0x89 })
+        else { return nil }
+        return keyRec.value
     }
 
     /// Re-supply the PIN after an app restart (validated against the key).

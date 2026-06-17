@@ -42,7 +42,7 @@ struct YubiKeyEnrollView: View {
                         .accessibilityLabel(revealManagementKey ? "Hide management key" : "Show management key")
                     }
                 } footer: {
-                    Text("Only needed to create a new key on the YubiKey, and only if you've changed the PIV management key from its default (010203…08). Leave blank otherwise.")
+                    Text("Leave blank for the default key, or a PIN-protected management key (ykman --protect) — your PIN unlocks that automatically. Only enter a value if you set a specific management key of your own.")
                 }
                 Section {
                     Button(busy ? "Waiting for YubiKey…" : "Connect") { enroll() }
