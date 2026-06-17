@@ -364,6 +364,23 @@ final class ZoomableTerminalView: TerminalView {
     private var pinchStart: CGFloat = defaultFontSize
     private var fontFamily: String = TerminalFont.families[0]
 
+    /// Re-embedded into a window after leaving and returning to the terminal
+    /// (home → back, or a tab switch). The view + its buffer are cached and
+    /// preserved, but a kept buffer won't repaint on its own — and an idle mosh
+    /// session produces no new output to trigger a draw — so it shows blank until
+    /// something happens. Force a full repaint once the view has laid out in the
+    /// new window. (SSH usually escapes this because its shell emits something;
+    /// mosh, being idle, does not — which is why this read as a mosh bug.)
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil else { return }
+            self.getTerminal().updateFullScreen()
+            self.setNeedsDisplay(self.bounds)
+        }
+    }
+
     func setFont(family: String, size: CGFloat) {
         let clamped = min(maxFontSize, max(minFontSize, size))
         currentSize = clamped
