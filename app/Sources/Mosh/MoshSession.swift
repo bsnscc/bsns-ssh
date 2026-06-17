@@ -159,16 +159,28 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             }
             mosh_client_tick(c)
 
-            var fds = [pollfd(fd: mosh_client_fd(c), events: Int16(POLLIN), revents: 0),
-                       pollfd(fd: wakeRead, events: Int16(POLLIN), revents: 0)]
+            // After a mosh port hop, the transport keeps the old UDP socket(s)
+            // around briefly while sending on the newest one. Poll every socket;
+            // polling only the first/old socket is exactly how resume can look
+            // hung even though the new socket is sending.
+            var moshFDs = [Int32](repeating: -1, count: 16)
+            let moshFDCount = Int(mosh_client_fds(c, &moshFDs, Int32(moshFDs.count)))
+            var fds = moshFDs.prefix(max(0, moshFDCount)).map {
+                pollfd(fd: $0, events: Int16(POLLIN), revents: 0)
+            }
+            let wakeIndex = fds.count
+            fds.append(pollfd(fd: wakeRead, events: Int16(POLLIN), revents: 0))
             let timeout = max(1, min(mosh_client_wait_ms(c), 1000))
-            poll(&fds, 2, Int32(timeout))
+            _ = fds.withUnsafeMutableBufferPointer { buf in
+                poll(buf.baseAddress, nfds_t(buf.count), Int32(timeout))
+            }
 
-            if fds[1].revents & Int16(POLLIN) != 0 {            // drain the wake pipe
+            if fds[wakeIndex].revents & Int16(POLLIN) != 0 {    // drain the wake pipe
                 var trash = [UInt8](repeating: 0, count: 64)
                 _ = Darwin.read(wakeRead, &trash, trash.count)
             }
-            if fds[0].revents & Int16(POLLIN) != 0 {            // a datagram arrived
+            let moshReadable = fds.prefix(wakeIndex).contains { $0.revents & Int16(POLLIN) != 0 }
+            if moshReadable {                                   // a datagram arrived
                 mosh_client_recv(c)
                 lastContactAt = Date()
             }

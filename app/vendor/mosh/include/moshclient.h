@@ -14,8 +14,12 @@ typedef struct MoshClient MoshClient;
 MoshClient* mosh_client_create(const char* ip, const char* port, const char* key, int cols, int rows);
 void mosh_client_free(MoshClient* c);
 
-/// The UDP socket to poll for readability.
+/// The newest UDP socket to poll for readability. Kept for simpler bridges.
 int mosh_client_fd(MoshClient* c);
+/// Copy the current UDP sockets into `out` and return the number copied. Mosh
+/// keeps old sockets briefly after a port hop, so clients that support roaming
+/// should poll every fd this returns.
+int mosh_client_fds(MoshClient* c, int* out, int capacity);
 /// Suggested poll timeout (ms) before the next tick is due.
 int mosh_client_wait_ms(MoshClient* c);
 

@@ -69,7 +69,16 @@ void mosh_client_free(MoshClient* c) {
 int mosh_client_fd(MoshClient* c) {
   if (!c || !c->transport) return -1;
   std::vector<int> fds = c->transport->fds();
-  return fds.empty() ? -1 : fds.front();
+  return fds.empty() ? -1 : fds.back();
+}
+
+int mosh_client_fds(MoshClient* c, int* out, int capacity) {
+  if (!c || !c->transport || !out || capacity <= 0) return 0;
+  std::vector<int> fds = c->transport->fds();
+  int n = static_cast<int>(fds.size());
+  if (n > capacity) n = capacity;
+  for (int i = 0; i < n; i++) out[i] = fds[i];
+  return n;
 }
 
 int mosh_client_wait_ms(MoshClient* c) {
