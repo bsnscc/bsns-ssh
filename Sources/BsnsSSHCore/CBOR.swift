@@ -47,6 +47,7 @@ public struct CBORPair: Equatable {
 public enum CBORError: Error, Equatable {
     case truncated
     case unsupported(String)
+    case malformed
 }
 
 public enum CBOR {
@@ -67,10 +68,23 @@ public enum CBOR {
             return bytes[i]
         }
 
+        var remaining: Int { bytes.count - i }
+
         mutating func take(_ n: Int) throws -> Data {
             guard n >= 0, i + n <= bytes.count else { throw CBORError.truncated }
             defer { i += n }
             return Data(bytes[i ..< i + n])
+        }
+
+        /// A length / element-count argument, as a bounded `Int`. A definite-length
+        /// item can't describe more content than there are bytes left, so any value
+        /// past `remaining` is malformed — reject it. This also avoids the
+        /// `UInt64 -> Int` trap and an attacker-sized `reserveCapacity` from a
+        /// hostile/fuzzed authenticator.
+        mutating func length(_ info: UInt8) throws -> Int {
+            let n = try argument(info)
+            guard n <= UInt64(remaining) else { throw CBORError.malformed }
+            return Int(n)
         }
 
         /// Read the argument that follows a major-type's 5-bit additional info.
@@ -100,21 +114,20 @@ public enum CBOR {
                 return .uint(try argument(info))
             case 1:  // negative int = -1 - n
                 let n = try argument(info)
-                return .negint(-1 - Int64(n))
+                guard let signed = Int64(exactly: n) else { throw CBORError.malformed }
+                return .negint(-1 - signed)
             case 2:  // byte string
-                let len = Int(try argument(info))
-                return .bytes(try take(len))
+                return .bytes(try take(try length(info)))
             case 3:  // text string
-                let len = Int(try argument(info))
-                let d = try take(len)
+                let d = try take(try length(info))
                 return .text(String(decoding: d, as: UTF8.self))
             case 4:  // array
-                let count = Int(try argument(info))
+                let count = try length(info)
                 var items: [CBORValue] = []; items.reserveCapacity(count)
                 for _ in 0..<count { items.append(try value()) }
                 return .array(items)
             case 5:  // map
-                let count = Int(try argument(info))
+                let count = try length(info)
                 var pairs: [CBORPair] = []; pairs.reserveCapacity(count)
                 for _ in 0..<count {
                     let k = try value(); let v = try value()

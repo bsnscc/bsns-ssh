@@ -23,7 +23,7 @@ Status key: ✅ done · 🟡 partial · ❌ missing · ⏭ deferred (post-parity
 | SSH wire codec / agent protocol / key formats | ✅ core | ✅ `:core` (30 tests) — wired (FileKey via `KeyManager`, `SshKeyFormat` fingerprints) |
 | known_hosts (TOFU) logic | ✅ | ✅ wired (`KnownHostsStore` + `:core` fingerprints) |
 | Config envelope (PBKDF2+AES-GCM) | ✅ | ✅ `:core` (iOS-bundle verified) — wired in `BackupScreen` |
-| mosh transport | ✅ | ❌ (NDK C++, later) |
+| mosh transport | ✅ | 🟡 built + transport-proven (`libmosh.a` + JNI + `MoshSession`); live session on-device-pending |
 
 The Android `:core` (agent, FileKey ed25519/ecdsa, KnownHosts, config envelope —
 ported + cross-verified) is now wired into the app across passes P3–P6 below.
@@ -115,8 +115,8 @@ ported + cross-verified) is now wired into the app across passes P3–P6 below.
   publish + the emulator's SLIRP double-NAT drops the mosh return path after the
   handshake burst (both directions die, not just upstream → a NAT collapse, not a
   send bug). Live verification needs a real network / on-device, exactly as the iOS
-  mosh plan documented. Follow-up: pin the host key on the bootstrap exec
-  (`nativeAuthAndExec`) like `nativeOpenShell` does; predictive local echo (v2).
+  mosh plan documented. The bootstrap exec (`nativeAuthAndExec`) now pins the
+  host key like `nativeOpenShell` does; predictive local echo is still v2.
 - **Find-in-scrollback — DONE.** `TerminalSearch` scans the Termux buffer
   (history + screen) line by line (`getSelectedText` per row) for a case-insensitive
   substring; a search bar in `TerminalPane` (⌕ toggle) shows the query field

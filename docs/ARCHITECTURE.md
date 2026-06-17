@@ -43,9 +43,13 @@ Key backends share one interface (`KeyBackend`, `Sources/BsnsSSHCore/KeyBackend.
 - **`YubiKeyPIVKey`** — hardware token: smartcard ECDSA over NFC and USB-C,
   producing a normal `ecdsa-sha2-nistp256` key.
 
-FIDO2 `sk-` keys (`ecdsa-sk` / `ed25519-sk`) are a later step: iOS restricts
-FIDO2 over USB-C, so PIV is the better first path. The `sk-` algorithm cases
-exist in `KeyAlgorithm` so the codecs are already shaped for them.
+FIDO2 `sk-` keys (`ecdsa-sk`) are implemented on both platforms, alongside PIV
+(both hardware-token paths are kept). The mechanism differs by platform: Android
+uses native CTAP2 (a native `sk-ecdsa-...@openssh.com` assertion through
+libssh2's `sk` userauth), while iOS uses Apple's WebAuthn security-key API, which
+produces the `webauthn-sk-ecdsa-...@openssh.com` signature variant — carried via
+a libssh2 patch (`libssh2_userauth_publickey_raw`). A single hardware key works
+on both platforms but needs a separate enrollment (key pair) per platform.
 
 ## Stack
 

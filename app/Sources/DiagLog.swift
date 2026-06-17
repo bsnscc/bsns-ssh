@@ -20,12 +20,13 @@ final class DiagLog {
 
     private(set) var entries: [Entry] = []
     private let cap = 600
-    private static let logger = Logger(subsystem: "cc.bsns.ssh", category: "diag")
+    nonisolated private static let logger = Logger(subsystem: "cc.bsns.ssh", category: "diag")
 
-    /// Record an event. Safe to call from any thread (hops to the main actor).
-    nonisolated func log(_ category: String, _ message: String) {
-        Self.logger.notice("[\(category, privacy: .public)] \(message, privacy: .public)")
-        Task { @MainActor in Self.shared.append(category, message) }
+    /// Record an event. Safe to call from any thread/actor: it writes the unified
+    /// log inline (nonisolated) and hops to the main actor to append to the buffer.
+    nonisolated static func log(_ category: String, _ message: String) {
+        logger.notice("[\(category, privacy: .public)] \(message, privacy: .public)")
+        Task { @MainActor in shared.append(category, message) }
     }
 
     private func append(_ category: String, _ message: String) {

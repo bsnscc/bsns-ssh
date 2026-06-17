@@ -52,10 +52,16 @@ build. Older builds are not separately patched.
 So you know the baseline a report would be measured against:
 
 - **Keys never leave secure hardware where possible.** Hardware-backed keys use
-  the Secure Enclave / Android Keystore (StrongBox when available) or a YubiKey
-  (PIV); the private key is non-extractable and signing happens behind a
-  biometric/PIN gate. Software keys are held in an in-process SSH agent and never
-  written to the transport.
+  the Secure Enclave, the Android Keystore (StrongBox when the device has it,
+  otherwise the TEE), or a YubiKey (PIV); in every case the private key is
+  non-extractable and signing happens on the secure element, never in app memory.
+  Per-signature user verification differs by backend: the **Secure Enclave** key
+  requires Face ID / Touch ID on every signature, and a **YubiKey** requires its
+  PIN (cached per session) plus a physical touch. **Android Keystore** keys are
+  non-extractable but are *not* currently gated on a per-use biometric/credential
+  prompt — the optional app lock gates access to the UI, not each individual
+  signature (per-use auth is a planned opt-in). Software keys are held in an
+  in-process SSH agent and never written to the transport.
 - **Hosts are verified (TOFU).** Unknown host keys prompt; a *changed* key is
   refused, not silently accepted. ProxyJump verifies the bastion's own key
   before authenticating to it, and the bastion is key/agent-authenticated only.

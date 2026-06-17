@@ -118,6 +118,10 @@ object FidoKeyManager {
             )
             val a = assertions.first()
             val authData = a.authenticatorData
+            // authData = rpIdHash(32) || flags(1) || counter(4) || ... — a malformed
+            // or fuzzed authenticator could return fewer bytes; validate before
+            // indexing so we fail closed instead of throwing IndexOutOfBounds.
+            require(authData.size >= 37) { "authenticator data too short: ${authData.size}" }
             val flags = authData[32]
             val counter = ((authData[33].toLong() and 0xff) shl 24) or
                 ((authData[34].toLong() and 0xff) shl 16) or

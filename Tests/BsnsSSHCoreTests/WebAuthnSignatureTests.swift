@@ -70,6 +70,22 @@ struct WebAuthnSignatureTests {
         #expect(v.value(intKey: 9) == nil)
     }
 
+    @Test("malformed CBOR fails closed (no trap/hang) on hostile lengths & counts")
+    func cborHardening() {
+        // A malicious/fuzzed authenticator could send a length or count far larger
+        // than the buffer. These must throw, not trap on UInt64->Int or attempt an
+        // attacker-sized allocation. info=27 → an 8-byte argument of 0xFFFF…FF.
+        let huge: [UInt8] = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        let byteStr = [UInt8(0x40 | 27)] + huge   // byte string, length = UInt64.max
+        let textStr = [UInt8(0x60 | 27)] + huge   // text string, length = UInt64.max
+        let array   = [UInt8(0x80 | 27)] + huge   // array, count = UInt64.max
+        let map     = [UInt8(0xa0 | 27)] + huge   // map, count = UInt64.max
+        let negint  = [UInt8(0x20 | 27)] + huge   // negint, n = UInt64.max (> Int64.max)
+        for bad in [byteStr, textStr, array, map, negint] {
+            #expect(throws: (any Error).self) { try CBOR.decode(Data(bad)) }
+        }
+    }
+
     /// Build a synthetic COSE EC2/P-256/ES256 key for `x`,`y`.
     private func coseKey(x: [UInt8], y: [UInt8]) -> [UInt8] {
         cborMap(5) + cborUInt(1) + cborUInt(2) + cborUInt(3) + cborNeg(-7)

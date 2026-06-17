@@ -14,6 +14,13 @@ enum RSAPrivateKeyDER {
     /// (raw, possibly carrying a leading 0x00 sign byte). `iqmp` = q⁻¹ mod p is
     /// supplied by OpenSSH; only dP and dQ are derived.
     static func fromComponents(n: Data, e: Data, d: Data, p: Data, q: Data, iqmp: Data) throws -> Data {
+        // Reject hostile/degenerate primes before any modular arithmetic: p and q
+        // must be > 1 so the moduli p−1 and q−1 are nonzero. A zero modulus makes
+        // BigUInt.mod's feed-and-reduce loop never terminate (acc is always ≥ 0), so
+        // a crafted key with p==1 or q==1 would hang import. Fail closed instead.
+        guard BigUInt.cmp([UInt8](p), [1]) > 0, BigUInt.cmp([UInt8](q), [1]) > 0 else {
+            throw KeyImportError.corrupt
+        }
         let dBytes = [UInt8](d)
         let dp = Data(BigUInt.mod(dBytes, BigUInt.decrement([UInt8](p))))
         let dq = Data(BigUInt.mod(dBytes, BigUInt.decrement([UInt8](q))))
@@ -154,6 +161,9 @@ private enum BigUInt {
     /// at most 255 subtractions per byte.
     static func mod(_ a: [UInt8], _ m: [UInt8]) -> [UInt8] {
         let mod = trim(m)
+        // a mod 0 is undefined and would spin the reduce loop forever (acc is always
+        // ≥ 0 = a zero modulus). Callers must reject this, but guard here too.
+        if mod == [0] { return trim(a) }
         var acc: [UInt8] = [0]
         for byte in trim(a) {
             acc.append(byte)             // acc·256 + byte

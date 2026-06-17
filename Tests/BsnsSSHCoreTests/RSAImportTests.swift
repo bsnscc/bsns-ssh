@@ -134,4 +134,18 @@ D66Ucq9AX+8YCNmicgIhy01i
         let key = try FileKey.from(algorithm: imported.algorithm, privateKeyMaterial: imported.material)
         XCTAssertEqual(key.publicKey.blob.base64EncodedString(), expectedPublicBase64)
     }
+
+    /// A crafted key with a degenerate prime (p or q ≤ 1) makes the CRT modulus
+    /// p−1 / q−1 zero; the reduce loop would never terminate. fromComponents must
+    /// reject it (fail closed) rather than hang. Returns promptly here.
+    func testDegenerateRSAComponentsRejected() {
+        let big = Data(repeating: 0xAB, count: 32)   // stand-in n/e/d/iqmp
+        for (p, q) in [(Data([1]), big), (big, Data([1])), (Data([0]), big), (big, Data([0]))] {
+            XCTAssertThrowsError(
+                try RSAPrivateKeyDER.fromComponents(n: big, e: big, d: big, p: p, q: q, iqmp: big))
+        }
+        // A valid p,q still works (sanity: the guard didn't reject good input).
+        XCTAssertNoThrow(
+            try RSAPrivateKeyDER.fromComponents(n: big, e: big, d: big, p: big, q: big, iqmp: big))
+    }
 }

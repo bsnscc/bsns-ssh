@@ -100,8 +100,10 @@ even save us the NDK, since mosh needs it anyway.
 - **YubiKey** via [yubikit-android](https://github.com/Yubico/yubikit-android)
   (PIV over USB-C + NFC) — same applet/slot model as the iOS YubiKey backend, so
   good parity.
-- **FIDO2 `sk-` keys** are more tractable on Android than iOS, but keep them v2
-  for parity and scope.
+- **FIDO2 `sk-` keys** are implemented (native CTAP2 via yubikit-android → a
+  native `sk-ecdsa` assertion through libssh2's `sk` userauth) — the cleaner path
+  Android was expected to have; iOS reaches the same authorized_keys entry via a
+  separate WebAuthn enrollment.
 
 ## Decision 3 — Terminal view
 
