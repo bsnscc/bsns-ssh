@@ -27,6 +27,8 @@ struct ConnectView: View {
     @State private var showSFTP = false
     @State private var showImport = false
     @State private var busy = false
+    /// The saved host the pointer is hovering (iPad) — reveals its quick-connect button.
+    @State private var hoveredHostID: UUID?
     @State private var error: String?
     @State private var notice: String?
     @State private var pendingHostKey: HostKey?
@@ -62,7 +64,30 @@ struct ConnectView: View {
             ForEach(groupedHosts, id: \.0) { groupName, groupHosts in
                 Section(groupName ?? "Saved") {
                     ForEach(groupHosts) { entry in
-                        Button { loadHost(entry) } label: { savedRow(entry) }
+                        HStack(spacing: 8) {
+                            Button { loadHost(entry) } label: {
+                                savedRow(entry).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            // On iPad with a pointer, hovering a row reveals a one-tap
+                            // connect that loads the host and connects immediately.
+                            if hoveredHostID == entry.id {
+                                Button { loadHost(entry); attemptConnect() } label: {
+                                    Image(systemName: "bolt.horizontal.circle.fill").font(.title3)
+                                }
+                                .buttonStyle(.borderless)
+                                .foregroundStyle(.green)
+                                .help("Quick connect")
+                                .disabled(busy)
+                                .transition(.opacity)
+                            }
+                        }
+                        .onHover { hovering in
+                            withAnimation(.easeInOut(duration: 0.12)) {
+                                if hovering { hoveredHostID = entry.id }
+                                else if hoveredHostID == entry.id { hoveredHostID = nil }
+                            }
+                        }
                     }
                     .onDelete { offsets in offsets.map { groupHosts[$0] }.forEach(hostStore.remove) }
                 }
