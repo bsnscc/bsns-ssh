@@ -145,7 +145,18 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                     mosh_client_push(c, raw.bindMemory(to: CChar.self).baseAddress, Int32(raw.count))
                 }
             }
-            if let (cols, rows) = resize { mosh_client_resize(c, cols, rows) }
+            if let (cols, rows) = resize {
+                mosh_client_resize(c, cols, rows)
+                // SwiftTerm reflows its OWN grid on a bounds change, so its on-screen
+                // content diverges from mosh's last framebuffer. A normal diff frame
+                // would then be applied to the wrong base — the wrong-row wrapping /
+                // frozen display seen after an iPad multitasking resize. Force the
+                // next frame to be an absolute full repaint so it re-syncs the view to
+                // mosh regardless of what SwiftTerm reflowed to. (This also covers iPad
+                // Stage Manager / split-view, where the foreground/resume path that
+                // already force-repaints never fires — only this resize does.)
+                mosh_client_force_repaint(c)
+            }
             mosh_client_tick(c)
 
             var fds = [pollfd(fd: mosh_client_fd(c), events: Int16(POLLIN), revents: 0),
