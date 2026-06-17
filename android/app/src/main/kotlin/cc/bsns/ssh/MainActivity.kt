@@ -678,6 +678,7 @@ fun ConnectScreen(
     val knownHosts = remember { KnownHostsStore(context) }
     var pendingTofu by remember { mutableStateOf<TofuInfo?>(null) }
     var pendingBastionTofu by remember { mutableStateOf<BastionTofu?>(null) }
+    var pendingMismatch by remember { mutableStateOf<MismatchInfo?>(null) }
     var pendingAction by remember { mutableStateOf<((Int, ByteArray) -> Unit)?>(null) }
 
     fun openWith(p: Int, blob: ByteArray) {
@@ -755,7 +756,8 @@ fun ConnectScreen(
                 when {
                     bt == null -> { main.post { busy = false; pendingAction = action; pendingBastionTofu = BastionTofu(js.host, js.port, bkey) }; return@thread }
                     !bt.contentEquals(bkey) -> { main.post { busy = false
-                        status = "⚠ jump host key CHANGED for ${js.host}:${js.port} — refusing. Verify out of band, then forget it under Hosts." }; return@thread }
+                        pendingAction = action
+                        pendingMismatch = MismatchInfo(js.host, js.port, bt, bkey, isJump = true) }; return@thread }
                 }
                 bastionKey = bkey
             } else bastionKey = null
@@ -773,8 +775,8 @@ fun ConnectScreen(
                 trusted == null -> main.post { busy = false; pendingAction = action; pendingTofu = TofuInfo(p, blob) }
                 !trusted.contentEquals(blob) -> main.post {
                     busy = false
-                    status = "⚠ host key CHANGED for $host:$p — refusing. If you expected this, " +
-                        "verify the new fingerprint out of band, then forget the host under Hosts and reconnect."
+                    pendingAction = action
+                    pendingMismatch = MismatchInfo(host, p, trusted, blob, isJump = false)
                 }
                 else -> main.post { busy = false; action(p, blob) }
             }
@@ -1004,6 +1006,42 @@ fun ConnectScreen(
                 )
             }
 
+            pendingMismatch?.let { mm ->
+                val storedFp = remember(mm) { SshKeyFormat.fingerprintOfPublicKeyBlob(mm.stored) }
+                val presentedFp = remember(mm) { SshKeyFormat.fingerprintOfPublicKeyBlob(mm.presented) }
+                val label = if (mm.isJump) "jump host" else "host"
+                AlertDialog(
+                    onDismissRequest = { pendingMismatch = null; pendingAction = null },
+                    title = { Text("⚠ Host key changed") },
+                    text = {
+                        Text(
+                            "The $label key for ${mm.host}:${mm.port} no longer matches the one you " +
+                                "trusted. This can mean the server was rebuilt — or that someone is " +
+                                "intercepting the connection.\n\n" +
+                                "trusted:  $storedFp\n" +
+                                "now:      $presentedFp\n\n" +
+                                "Only forget the saved key if you verified the new fingerprint out of band. " +
+                                "You'll be asked to verify it again before connecting.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            // Forget the stale key, then re-run verification — which falls
+                            // through to a fresh TOFU prompt on the new key (never a silent
+                            // re-trust). For a jump mismatch, verifyThen re-checks the bastion
+                            // first; for a target mismatch it re-checks the target.
+                            knownHosts.forget(mm.host, mm.port)
+                            val act = pendingAction
+                            pendingMismatch = null
+                            if (act != null) verifyThen(act)
+                        }) { Text("Forget key") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingMismatch = null; pendingAction = null }) { Text("Cancel") }
+                    },
+                )
+            }
+
             if (showYubiPin) {
                 AlertDialog(
                     onDismissRequest = { showYubiPin = false; yubiPin = ""; afterPin = null },
@@ -1029,6 +1067,17 @@ fun ConnectScreen(
 
 private class TofuInfo(val port: Int, val blob: ByteArray)
 private class BastionTofu(val host: String, val port: Int, val blob: ByteArray)
+
+/** A host whose presented key no longer matches the one we trusted. Carries
+ *  everything the recovery dialog needs to forget the stale key and re-verify.
+ *  `isJump` distinguishes the bastion's own key from the target's. */
+private class MismatchInfo(
+    val host: String,
+    val port: Int,
+    val stored: ByteArray,
+    val presented: ByteArray,
+    val isJump: Boolean,
+)
 
 
 private fun seq(vararg b: Int) = ByteArray(b.size) { b[it].toByte() }
