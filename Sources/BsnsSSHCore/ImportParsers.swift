@@ -163,6 +163,19 @@ public enum OpenSSHPrivateKey {
                 let comment = (try? priv.readStringUTF8()) ?? ""
                 return ImportedKey(algorithm: .ecdsaP256, material: fixed32(scalar),
                                    comment: comment.isEmpty ? "imported" : comment)
+            case "ssh-rsa":
+                // OpenSSH RSA private: mpint n, e, d, iqmp, p, q. dP/dQ are
+                // recomputed when assembling the PKCS#1 DER that FileKey stores.
+                let n = try priv.readString()
+                let e = try priv.readString()
+                let d = try priv.readString()
+                let iqmp = try priv.readString()
+                let p = try priv.readString()
+                let q = try priv.readString()
+                let comment = (try? priv.readStringUTF8()) ?? ""
+                let pkcs1 = try RSAPrivateKeyDER.fromComponents(n: n, e: e, d: d, p: p, q: q, iqmp: iqmp)
+                return ImportedKey(algorithm: .rsa, material: pkcs1,
+                                   comment: comment.isEmpty ? "imported" : comment)
             default:
                 throw KeyImportError.unsupportedType(type)
             }
@@ -179,5 +192,62 @@ public enum OpenSSHPrivateKey {
         if b.count > 32 { b = Array(b.suffix(32)) }
         if b.count < 32 { b = [UInt8](repeating: 0, count: 32 - b.count) + b }
         return Data(b)
+    }
+}
+
+/// Top-level private-key importer: detects the PEM container and dispatches.
+/// Handles the formats people actually have for an existing key —
+/// `OPENSSH PRIVATE KEY` (modern ssh-keygen), `RSA PRIVATE KEY` (PKCS#1, the
+/// classic id_rsa / network-gear format), and `PRIVATE KEY` (PKCS#8) — so RSA
+/// import covers all three, not just the OpenSSH wrapper.
+public enum PrivateKeyImport {
+    public static func parse(_ text: String) throws -> ImportedKey {
+        if text.contains("BEGIN OPENSSH PRIVATE KEY") {
+            return try OpenSSHPrivateKey.parse(text)
+        }
+        // Legacy/openssl PEM bodies mark passphrase encryption in their headers.
+        if text.contains("ENCRYPTED") && (text.contains("Proc-Type") || text.contains("DEK-Info")) {
+            throw KeyImportError.encrypted
+        }
+        if text.contains("BEGIN RSA PRIVATE KEY") {
+            // PKCS#1 RSAPrivateKey DER is exactly the material FileKey stores.
+            let der = try pemBody(text, marker: "RSA PRIVATE KEY")
+            return try rsaImported(material: der)
+        }
+        if text.contains("BEGIN PRIVATE KEY") {
+            // PKCS#8 — unwrap to the inner PKCS#1 (RSA only; EC PKCS#8 isn't supported here).
+            let pkcs8 = try pemBody(text, marker: "PRIVATE KEY")
+            let der = try RSAPrivateKeyDER.unwrapPKCS8(pkcs8)
+            return try rsaImported(material: der)
+        }
+        if text.contains("BEGIN EC PRIVATE KEY") {
+            throw KeyImportError.unsupportedType("EC PEM (re-export with: ssh-keygen -p -f key)")
+        }
+        throw KeyImportError.notAnOpenSSHKey
+    }
+
+    /// Validate candidate PKCS#1 material by deriving its public blob, then wrap
+    /// it as an RSA ImportedKey. A non-RSA / corrupt DER throws here.
+    private static func rsaImported(material: Data) throws -> ImportedKey {
+        do { _ = try RSAKeySupport.publicBlob(fromMaterial: material) }
+        catch { throw KeyImportError.unsupportedType("RSA (couldn't read the key)") }
+        return ImportedKey(algorithm: .rsa, material: material, comment: "imported")
+    }
+
+    /// Base64 between `-----BEGIN <marker>-----` and `-----END <marker>-----`.
+    private static func pemBody(_ text: String, marker: String) throws -> Data {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let begin = lines.firstIndex(where: { $0.contains("BEGIN \(marker)") }) else {
+            throw KeyImportError.notAnOpenSSHKey
+        }
+        var b64 = ""
+        for l in lines[(begin + 1)...] {
+            if l.contains("END \(marker)") { break }
+            let t = l.trimmingCharacters(in: .whitespaces)
+            if t.contains(":") { continue }   // skip RFC 1421 headers (Proc-Type, DEK-Info)
+            b64 += t
+        }
+        guard let der = Data(base64Encoded: b64) else { throw KeyImportError.corrupt }
+        return der
     }
 }

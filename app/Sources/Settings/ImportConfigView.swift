@@ -89,7 +89,7 @@ struct ImportConfigView: View {
             status = n > 0 ? "trusted \(n) host key(s)" : "no usable host keys (hashed entries can't be imported)"
         case .key:
             do {
-                let k = try OpenSSHPrivateKey.parse(text)
+                let k = try PrivateKeyImport.parse(text)
                 let fileKey = try FileKey.from(algorithm: k.algorithm, privateKeyMaterial: k.material, comment: k.comment)
                 Task { await agentStore.importKey(fileKey) }
                 status = "imported a \(k.algorithm.rawValue.replacingOccurrences(of: "ssh-", with: "")) key"
