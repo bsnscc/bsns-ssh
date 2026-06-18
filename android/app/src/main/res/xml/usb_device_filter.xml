@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Yubico (USB vendor id 0x1050 = 4176). Matching any Yubico device lets the
+         system offer "open bsns.SSH / use by default", which grants the key to the
+         app persistently so it isn't re-prompted for USB permission every use. -->
+    <usb-device vendor-id="4176" />
+</resources>
