@@ -599,10 +599,20 @@ class TerminalHolder(
         if (status == ConnStatus.Reconnecting) return
         status = ConnStatus.Reconnecting
         isStale = false
+        val old = session   // the stale/dropped transport we're replacing
         thread {
             val s = reconnectFactory()
             main.post {
                 if (s != null) {
+                    // Detach + close the old transport so its thread/socket can't keep
+                    // feeding output / closed / liveness callbacks into this holder
+                    // (which would duplicate output and flip status after replacement).
+                    old.onOutput = null
+                    when (old) {
+                        is MoshSession -> { old.onClosed = null; old.onLiveness = null }
+                        is SshSession -> old.onClosed = null
+                    }
+                    old.close()
                     session = s
                     wireOutput(s)
                     terminalView.mEmulator?.let { s.resize(it.mColumns, it.mRows) }

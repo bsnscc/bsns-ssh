@@ -26,6 +26,8 @@ object ConfigBundle {
             val o = JSONObject().put("host", it.host).put("port", it.port).put("user", it.user)
             if (it.jump != null) o.put("jump", it.jump)
             if (it.group != null) o.put("group", it.group)
+            if (it.keyId != null) o.put("keyId", it.keyId)
+            if (it.useMosh) o.put("useMosh", true)
             hosts.put(o)
         }
         root.put("hosts", hosts)
@@ -123,7 +125,8 @@ object ConfigBundle {
                 val user = h.optString("user").trim()
                 if (host.isEmpty() || user.isEmpty() || port !in 1..65535) continue
                 hostStore.add(SavedHost(host, port, user,
-                    h.optString("jump").ifEmpty { null }, h.optString("group").ifEmpty { null })); hosts++
+                    h.optString("jump").ifEmpty { null }, h.optString("group").ifEmpty { null },
+                    h.optString("keyId").ifEmpty { null }, h.optBoolean("useMosh", false))); hosts++
             }
         }
         if (sel.knownHosts) o.optJSONObject("knownHosts")?.let { kh ->
@@ -173,7 +176,7 @@ object ConfigBundle {
                 val material = runCatching { Base64.getDecoder().decode(k.getString("material")) }.getOrNull() ?: continue
                 runCatching {
                     km.importSoftware(k.getString("algorithm"), material, k.optString("comment", "bsns"))
-                }.onSuccess { keys++ }
+                }.onSuccess { if (it == ImportResult.ADDED) keys++ }   // duplicates/unsupported don't count
             }
         }
         return Applied(hosts, known, keys, settings, snippets)

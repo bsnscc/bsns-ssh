@@ -181,7 +181,12 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             }
             let moshReadable = fds.prefix(wakeIndex).contains { $0.revents & Int16(POLLIN) != 0 }
             if moshReadable {                                   // a datagram arrived
-                let recovering = staleReported
+                // Recovery is keyed off ELAPSED SILENCE, computed before we update
+                // lastContactAt — NOT off staleReported. When iOS fully suspends the
+                // app the run loop is frozen, so it never gets to flip staleReported;
+                // on resume the first packet would otherwise update lastContactAt and
+                // skip the repaint/wiggle entirely. The real gap survives suspension.
+                let recovering = Date().timeIntervalSince(lastContactAt) > Self.staleThreshold
                 mosh_client_recv(c)
                 lastContactAt = Date()
                 if recovering {

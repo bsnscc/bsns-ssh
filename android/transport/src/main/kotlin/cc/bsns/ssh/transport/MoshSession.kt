@@ -82,6 +82,10 @@ class MoshSession(
                 for (w in writes) bridge.nativeMoshPush(handle, w)
                 resize?.let { bridge.nativeMoshResize(handle, it.first, it.second); lastCols = it.first; lastRows = it.second }
 
+                // Silence BEFORE servicing — survives a full OS suspension (where the
+                // loop was frozen and never marked stale). The native repaint-on-
+                // recovery uses the same elapsed-gap test; the cursor wiggle must too.
+                val silenceBeforeMs = bridge.nativeMoshMsSinceContact(handle)
                 val ansi = bridge.nativeMoshService(handle, 1000)
                 if (ansi != null && ansi.isNotEmpty()) {
                     synchronized(lock) {
@@ -89,21 +93,19 @@ class MoshSession(
                         if (cb != null) cb(ansi) else preBuffer.add(ansi)
                     }
                 }
+                // Recovered after a real gap (incl. suspension): re-home the server's
+                // cursor with a size wiggle — a no-op resize won't SIGWINCH, leaving
+                // the cursor / typed echo on the wrong row. (The absolute repaint half
+                // is handled native-side, on the same elapsed-gap trigger.)
+                if (silenceBeforeMs > STALE_THRESHOLD_MS &&
+                    bridge.nativeMoshMsSinceContact(handle) < silenceBeforeMs) {
+                    if (lastRows > 1) bridge.nativeMoshResize(handle, lastCols, lastRows - 1)
+                    bridge.nativeMoshResize(handle, lastCols, lastRows)
+                }
                 // nativeMoshService blocks up to ~1s, so staleness is checked
                 // promptly without a separate timer.
                 val stale = bridge.nativeMoshMsSinceContact(handle) > STALE_THRESHOLD_MS
-                if (stale != staleReported) {
-                    if (!stale && staleReported) {
-                        // Recovered after a gap: nudge the server (e.g. tmux) to redraw
-                        // and re-home its cursor with a real size change — a no-op resize
-                        // won't trigger SIGWINCH, leaving the cursor / typed echo on the
-                        // wrong row. (The absolute repaint half is handled native-side.)
-                        if (lastRows > 1) bridge.nativeMoshResize(handle, lastCols, lastRows - 1)
-                        bridge.nativeMoshResize(handle, lastCols, lastRows)
-                    }
-                    staleReported = stale
-                    onLiveness?.invoke(stale)
-                }
+                if (stale != staleReported) { staleReported = stale; onLiveness?.invoke(stale) }
             }
         } finally {
             val err = if (handle != 0L) bridge.nativeMoshLastError(handle) else null

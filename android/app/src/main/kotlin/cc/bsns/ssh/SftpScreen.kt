@@ -3,6 +3,7 @@ package cc.bsns.ssh
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -154,6 +155,10 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
         stack = stack.dropLast(1); path = parent
         scope.launch { reload() }
     }
+
+    // Inside a subfolder, system Back goes up one level (this handler wins over the
+    // root one, which then closes the browser only when we're already at the root).
+    BackHandler(enabled = stack.isNotEmpty()) { goUp() }
 
     Scaffold { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 12.dp)) {
