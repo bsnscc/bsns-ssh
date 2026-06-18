@@ -1,5 +1,8 @@
 package cc.bsns.ssh
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
@@ -522,7 +525,21 @@ class TerminalHolder(
             override fun onResize(columns: Int, rows: Int) = session.resize(columns, rows)
         }
         termSession = TerminalSession(scrollback,
-            BsnsSessionClient({ terminalView.onScreenUpdated() }, { vibrate() }), io)
+            BsnsSessionClient(
+                { terminalView.onScreenUpdated() },
+                { vibrate() },
+                readClipboard = {
+                    val cm = terminalView.context
+                        .getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    cm?.primaryClip?.getItemAt(0)
+                        ?.coerceToText(terminalView.context)?.toString()
+                },
+                writeClipboard = { text ->
+                    val cm = terminalView.context
+                        .getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    cm?.setPrimaryClip(ClipData.newPlainText("bsns.SSH", text))
+                },
+            ), io)
         terminalView.setTerminalViewClient(BsnsViewClient(view = { terminalView }, onEmulatorReady = {
             wireOutput(initialSession)
             terminalView.mEmulator?.let { Appearance.apply(it, theme) }

@@ -9,16 +9,26 @@ import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 
-/** Minimal TerminalSessionClient — bridges emulator screen updates to a redraw. */
+/** Minimal TerminalSessionClient — bridges emulator screen updates to a redraw
+ *  and the terminal's copy/paste hooks to the system clipboard. */
 class BsnsSessionClient(
     private val redraw: () -> Unit,
     private val onBellRung: () -> Unit = {},
+    private val readClipboard: () -> String? = { null },
+    private val writeClipboard: (String) -> Unit = {},
 ) : TerminalSessionClient {
     override fun onTextChanged(changedSession: TerminalSession) = redraw()
     override fun onTitleChanged(changedSession: TerminalSession) {}
     override fun onSessionFinished(finishedSession: TerminalSession) {}
-    override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {}
-    override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+    override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {
+        if (!text.isNullOrEmpty()) writeClipboard(text)
+    }
+    override fun onPasteTextFromClipboard(session: TerminalSession?) {
+        // The text-selection menu's "Paste" routes here. Feed the clipboard
+        // through the emulator so bracketed-paste mode is honored.
+        val text = readClipboard()
+        if (!text.isNullOrEmpty()) session?.emulator?.paste(text)
+    }
     override fun onBell(session: TerminalSession) = onBellRung()
     override fun onColorsChanged(session: TerminalSession) {}
     override fun onTerminalCursorStateChange(state: Boolean) {}
