@@ -180,6 +180,7 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                     OutlinedButton(enabled = fidoPin.isNotEmpty(), onClick = {
                         val pin = fidoPin
                         fidoStatus = "enrolling…"
+                        cc.bsns.ssh.diag.LogBuffer.clear()
                         thread {
                             val result = runCatching { keyManager.enrollFido(pin) }
                             mainHandler.post {
@@ -190,6 +191,8 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                                             append("device: ").append(android.os.Build.MODEL)
                                             append("  android ").append(android.os.Build.VERSION.SDK_INT).append('\n')
                                             append(it.stackTraceToString())
+                                            append("\n\n--- transport log ---\n")
+                                            append(cc.bsns.ssh.diag.LogBuffer.snapshot())
                                         }
                                     }
                             }

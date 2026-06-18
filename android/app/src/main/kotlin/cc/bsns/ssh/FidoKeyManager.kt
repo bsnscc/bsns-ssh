@@ -20,6 +20,7 @@ import com.yubico.yubikit.fido.ctap.ClientPin
 import com.yubico.yubikit.fido.ctap.Ctap2Session
 import com.yubico.yubikit.fido.ctap.PinUvAuthProtocolV2
 import com.yubico.yubikit.fido.webauthn.AuthenticatorData
+import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -44,6 +45,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 object FidoKeyManager {
     const val APPLICATION = "ssh:bsns"
     private val main = Handler(Looper.getMainLooper())
+    private val log = LoggerFactory.getLogger("bsns.fido")
     private var activity: Activity? = null
     private var kit: YubiKitManager? = null
     private var pin: CharArray? = null
@@ -162,11 +164,11 @@ object FidoKeyManager {
             main.post { runCatching { k.stopUsbDiscovery() } }
             if (device.supportsConnection(FidoConnection::class.java)) {
                 device.requestConnection(FidoConnection::class.java) { res ->
-                    box.offer(runCatching { res.value.use { op(Ctap2Session(it)) } })
+                    box.offer(runCatching { res.value.use { op(openCtap(it)) } })
                 }
             } else {
                 device.requestConnection(SmartCardConnection::class.java) { res ->
-                    box.offer(runCatching { res.value.use { op(Ctap2Session(it)) } })
+                    box.offer(runCatching { res.value.use { op(openCtap(it)) } })
                 }
             }
         }
@@ -189,6 +191,31 @@ object FidoKeyManager {
                 runCatching { k.stopUsbDiscovery() }
             }
         }
+    }
+
+    // Opening a Ctap2Session sends CTAPHID_INIT then GET_INFO. On some hosts another
+    // process touches the key's FIDO HID interface intermittently, so that first
+    // exchange comes back framed for the wrong channel (or a short read). INIT is
+    // designed to (re)allocate and resync a channel, so retry the open a few times —
+    // a later attempt can land in a clean window. Each attempt is logged so a field
+    // failure shows the whole sequence in the diagnostic.
+    private fun openCtap(c: FidoConnection): Ctap2Session = retryOpen { Ctap2Session(c) }
+    private fun openCtap(c: SmartCardConnection): Ctap2Session = retryOpen { Ctap2Session(c) }
+
+    private inline fun retryOpen(create: () -> Ctap2Session): Ctap2Session {
+        var last: java.io.IOException? = null
+        for (attempt in 1..6) {
+            try {
+                val s = create()
+                if (attempt > 1) log.info("ctap session opened on attempt {}", attempt)
+                return s
+            } catch (e: java.io.IOException) {
+                last = e
+                log.warn("ctap open attempt {}/6 failed: {}", attempt, e.message)
+                try { Thread.sleep(200L * attempt) } catch (ignored: InterruptedException) {}
+            }
+        }
+        throw last ?: java.io.IOException("couldn't open a CTAP session")
     }
 
     /** Cancel a pending tap: unblock the waiting worker with a failure, stop NFC/USB
