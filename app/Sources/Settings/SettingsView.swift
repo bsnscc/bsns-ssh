@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.terminalType) private var terminalType = "xterm-256color"
     @AppStorage(SettingsKey.appLock) private var appLock = false
     @AppStorage(SettingsKey.commandHistory) private var commandHistory = true
+    @AppStorage(SettingsKey.uploadDir) private var uploadDir = "~/.bsns-ssh-drops"
 
     private let scrollbackOptions = [500, 1000, 2000, 5000, 10000]
     private let keepAliveOptions = [15, 30, 60, 120]
@@ -83,6 +84,16 @@ struct SettingsView: View {
                 Text("Security")
             } footer: {
                 Text("Command history stays on this device and is never synced. Type a command with a leading space to keep that one out of history.")
+            }
+
+            Section {
+                TextField("Drop directory", text: $uploadDir)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            } header: {
+                Text("Image drop")
+            } footer: {
+                Text("Drag-drop or paste (⌘V) an image onto a terminal to upload it here over SFTP. The absolute remote path is then inserted at the cursor, so you can reference it in a prompt. A leading ~ expands to your home directory on the server.")
             }
 
             Section("Snippets") {

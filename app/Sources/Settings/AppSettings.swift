@@ -19,6 +19,7 @@ enum SettingsKey {
     static let terminalType = "session.terminalType"
     static let appLock = "security.appLock"
     static let commandHistory = "privacy.commandHistory"   // record run commands locally
+    static let uploadDir = "transfer.uploadDir"             // remote drop dir for dropped/pasted images
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -37,6 +38,7 @@ enum SettingsKey {
             terminalType: "xterm-256color",
             appLock: false,
             commandHistory: true,
+            uploadDir: "~/.bsns-ssh-drops",
         ])
     }
 }

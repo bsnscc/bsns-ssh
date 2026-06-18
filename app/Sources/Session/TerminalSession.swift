@@ -37,6 +37,10 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// status stays `.connected` (mosh may still recover by roaming), but the UI
     /// surfaces staleness so a dead session isn't shown as a reassuring green.
     private(set) var isStale = false
+    /// Transient status for an in-flight image drop/paste upload (nil = hidden).
+    /// The terminal screen shows it as a small overlay banner. Always mutated on
+    /// the main queue (it drives UI), same discipline as `status` / `isStale`.
+    private(set) var transferStatus: String?
     let spec: Spec
     let title: String
 
@@ -136,6 +140,71 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         guard case .connected = status else { return }
         let text = command.hasSuffix("\n") ? command : command + "\n"
         write(Array(text.utf8)[...])
+    }
+
+    /// Upload an image dropped or pasted onto the terminal to the configured
+    /// remote drop directory (over a fresh SFTP connection built from this
+    /// session's spec — so it works even when the live session is mosh, which has
+    /// no file channel), then inject the absolute remote path at the cursor so the
+    /// user can reference it in a prompt. Status surfaces via `transferStatus`.
+    func uploadImage(_ data: Data, ext: String) {
+        let spec = self.spec
+        setTransfer("Uploading image…")
+        Task { @Sendable in
+            let client = SFTPClient()
+            do {
+                try await client.connect(host: spec.host, port: spec.port, user: spec.user,
+                                         agent: spec.agent, knownHosts: spec.knownHosts, keyBlob: spec.keyBlob)
+
+                // Resolve the drop dir. Absolute stays as-is; "~"-relative expands
+                // against the SFTP session's home (realpath of "."); anything else is
+                // treated as relative to home too.
+                let configured = (UserDefaults.standard.string(forKey: SettingsKey.uploadDir) ?? "~/.bsns-ssh-drops")
+                    .trimmingCharacters(in: .whitespaces)
+                let raw = configured.isEmpty ? "~/.bsns-ssh-drops" : configured
+                let dir: String
+                if raw.hasPrefix("/") {
+                    dir = raw
+                } else {
+                    let home = try await client.realpath(".")
+                    let rel = raw.hasPrefix("~") ? String(raw.dropFirst()).drop(while: { $0 == "/" }) : raw[...]
+                    dir = rel.isEmpty ? home : home + "/" + rel
+                }
+                try await client.mkdir(dir)
+
+                let fmt = DateFormatter()
+                fmt.locale = Locale(identifier: "en_US_POSIX")
+                fmt.dateFormat = "yyyyMMdd-HHmmss"
+                let stamp = fmt.string(from: Date())
+                let suffix = String(UInt32.random(in: 0..<0x10000), radix: 16)
+                let safeExt = ext.isEmpty ? "png" : ext
+                let name = "shot-\(stamp)-\(suffix).\(safeExt)"
+                let path = dir + "/" + name
+
+                try await client.upload(data, to: path)
+                client.disconnect()
+
+                await MainActor.run {
+                    self.write(Array((path + " ").utf8)[...])
+                    self.setTransfer("Uploaded → \(name)")
+                }
+            } catch {
+                client.disconnect()
+                self.setTransfer("Upload failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// Set the transient transfer banner and auto-clear it after ~4s (the clear
+    /// only fires if no newer status replaced it in the meantime).
+    private func setTransfer(_ text: String?) {
+        DispatchQueue.main.async {
+            self.transferStatus = text
+            guard text != nil else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                if self.transferStatus == text { self.transferStatus = nil }
+            }
+        }
     }
 
     // Local command history: watch the keystroke byte-stream, accumulate a line

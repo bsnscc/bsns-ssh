@@ -42,6 +42,10 @@ final class SFTPClient: @unchecked Sendable {
     private static let FXF_TRUNC: UInt = 0x10
     private static let S_IFMT: UInt32 = 0o170000
     private static let S_IFDIR: UInt32 = 0o040000
+    // libssh2_sftp_realpath() resolves "." / "~"-relative to an absolute path.
+    private static let REALPATH: Int32 = 2
+    // SFTP status code: the directory already exists — a benign mkdir failure.
+    private static let FX_FILE_ALREADY_EXISTS: UInt = 11
 
     /// Connect, authenticate, and open the SFTP subsystem. Rethrows the SSH
     /// host-key / auth errors so the UI can run its TOFU prompt and retry.
@@ -203,6 +207,45 @@ final class SFTPClient: @unchecked Sendable {
             guard let sftp = self.sftp else { throw SFTPError.initFailed }
             let rc = path.withCString { libssh2_sftp_mkdir_ex(sftp, $0, UInt32(strlen($0)), 0o755) }
             if rc != 0 { throw SFTPError.op("Couldn't create folder.") }
+        }
+    }
+
+    /// Resolve a server-side path ("." for the SFTP home, a "~"-relative path,
+    /// or any relative path) to an absolute one. Used to expand the drop dir.
+    func realpath(_ path: String) async throws -> String {
+        try await run {
+            guard let sftp = self.sftp else { throw SFTPError.initFailed }
+            var target = [CChar](repeating: 0, count: 2048)
+            let n = path.withCString { p -> Int32 in
+                libssh2_sftp_symlink_ex(sftp, p, UInt32(strlen(p)), &target, UInt32(target.count - 1), Self.REALPATH)
+            }
+            if n < 0 { throw SFTPError.op("Couldn't resolve \(path) on the server.") }
+            // The resolved name isn't NUL-terminated and is bounded by the returned
+            // length — decode exactly n bytes (mirrors the readdir handling above).
+            let bytes = target.prefix(Int(n)).map { UInt8(bitPattern: $0) }
+            return String(decoding: bytes, as: UTF8.self)
+        }
+    }
+
+    /// Create a directory, treating "already exists" as success. Used for the
+    /// image-drop directory, which is created on demand on every upload.
+    func mkdir(_ path: String) async throws {
+        try await run {
+            guard let sftp = self.sftp else { throw SFTPError.initFailed }
+            let rc = path.withCString { libssh2_sftp_mkdir_ex(sftp, $0, UInt32(strlen($0)), 0o755) }
+            if rc == 0 { return }
+            // Non-zero is also returned when the dir already exists; only surface a
+            // real failure. libssh2 reports LIBSSH2_FX_FILE_ALREADY_EXISTS for that,
+            // but some servers answer FX_FAILURE — so treat any mkdir error as
+            // benign as long as the path then resolves to an existing directory.
+            let code = libssh2_sftp_last_error(sftp)
+            if code == Self.FX_FILE_ALREADY_EXISTS { return }
+            var attrs = LIBSSH2_SFTP_ATTRIBUTES()
+            let statRC = path.withCString {
+                libssh2_sftp_stat_ex(sftp, $0, UInt32(strlen($0)), 0 /* LIBSSH2_SFTP_STAT */, &attrs)
+            }
+            if statRC == 0, (UInt32(attrs.permissions) & Self.S_IFMT) == Self.S_IFDIR { return }
+            throw SFTPError.op("Couldn't create the drop directory \(path).")
         }
     }
 

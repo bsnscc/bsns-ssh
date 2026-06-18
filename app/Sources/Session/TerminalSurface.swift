@@ -23,6 +23,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         view.terminalDelegate = self
         view.onZoomChange = { [weak self] newSize in self?.onZoomChange?(newSize) }
         view.onSendBytes = { [weak self] bytes in self?.session.write(bytes[...]) }
+        view.onImageDropped = { [weak self] data, ext in self?.session.uploadImage(data, ext: ext) }
         view.installZoomGestures()
         view.setFont(family: fontFamily, size: fontSize)
         TerminalTheme.named(themeId).apply(to: view)

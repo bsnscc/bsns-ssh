@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import SwiftTerm
+import UniformTypeIdentifiers
 
 private let minFontSize: CGFloat = 8
 private let maxFontSize: CGFloat = 30
@@ -48,6 +49,7 @@ struct LiveTerminalScreen: View {
                                 fontFamily: fontFamily,
                                 hardwareKeyboard: hwKeyboard.isConnected,
                                 prefs: "\(cursorStyle)\(cursorBlink)\(optionAsMeta)")
+                .overlay(alignment: .top) { transferBanner }
             // Our key row is redundant with SwiftTerm's soft-keyboard accessory,
             // so only show it when the soft keyboard is down. With a physical
             // keyboard it collapses to just Esc (see TerminalKeyBar.minimal).
@@ -126,6 +128,24 @@ struct LiveTerminalScreen: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 9)
             .background(.bar)
+        }
+    }
+
+    /// Transient banner for an in-flight image drop/paste upload — floats over the
+    /// top of the terminal so it doesn't reflow the buffer, then auto-dismisses.
+    @ViewBuilder private var transferBanner: some View {
+        if let status = session.transferStatus {
+            HStack(spacing: 8) {
+                Image(systemName: "photo.on.rectangle.angled").foregroundStyle(Brand.accent)
+                Text(status).font(.callout).lineLimit(2)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(.bar, in: Capsule())
+            .overlay(Capsule().strokeBorder(.separator))
+            .padding(.top, 8)
+            .shadow(radius: 4, y: 1)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(.easeInOut(duration: 0.2), value: session.transferStatus)
         }
     }
 
@@ -359,6 +379,10 @@ final class ZoomableTerminalView: TerminalView {
     var onZoomChange: ((CGFloat) -> Void)?
     /// Send raw bytes to the remote (set by the surface → session.write).
     var onSendBytes: (([UInt8]) -> Void)?
+    /// An image was dropped or pasted onto the terminal — (PNG/JPEG data, ext).
+    /// Set by the surface → session.uploadImage.
+    var onImageDropped: ((Data, String) -> Void)?
+    private var dropInteractionInstalled = false
     private var editMenu: UIEditMenuInteraction?
     private var currentSize: CGFloat = defaultFontSize
     private var pinchStart: CGFloat = defaultFontSize
@@ -402,6 +426,16 @@ final class ZoomableTerminalView: TerminalView {
         addInteraction(menu)
         editMenu = menu
         addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(showEditMenu(_:))))
+        installImageDrop()
+    }
+
+    /// Accept image drag-drops onto the terminal. Idempotent — only adds the
+    /// interaction once even if setup runs again.
+    private func installImageDrop() {
+        guard !dropInteractionInstalled else { return }
+        dropInteractionInstalled = true
+        isUserInteractionEnabled = true
+        addInteraction(UIDropInteraction(delegate: self))
     }
 
     @objc private func showEditMenu(_ gesture: UILongPressGestureRecognizer) {
@@ -456,6 +490,78 @@ final class ZoomableTerminalView: TerminalView {
     @objc private func zoomIn() { onZoomChange?(min(maxFontSize, currentSize + 1)) }
     @objc private func zoomOut() { onZoomChange?(max(minFontSize, currentSize - 1)) }
     @objc private func zoomReset() { onZoomChange?(defaultFontSize) }
+
+    // MARK: Image paste (⌘V)
+
+    /// Intercept ⌘V when the clipboard holds an image: upload it (consume the
+    /// event). For text, defer to SwiftTerm's own paste so normal paste is intact.
+    override func paste(_ sender: Any?) {
+        if let (data, ext) = Self.imageFromPasteboard() {
+            onImageDropped?(data, ext)
+            return   // consume — don't fall through to text paste
+        }
+        super.paste(sender)
+    }
+
+    // Note: no canPerformAction override is needed — SwiftTerm's TerminalView
+    // already returns true for paste(_:) unconditionally (it's `public override`,
+    // not `open`, so it can't be overridden here anyway), so ⌘V / the Paste menu
+    // item stays enabled even when the clipboard holds only an image.
+
+    /// Pull image bytes off the general pasteboard, preferring native PNG/JPEG so
+    /// we keep the original encoding; falls back to re-encoding a UIImage as PNG.
+    static func imageFromPasteboard() -> (Data, String)? {
+        let pb = UIPasteboard.general
+        guard pb.hasImages else { return nil }
+        if let png = pb.data(forPasteboardType: UTType.png.identifier) { return (png, "png") }
+        if let jpeg = pb.data(forPasteboardType: UTType.jpeg.identifier) { return (jpeg, "jpg") }
+        if let png = pb.image?.pngData() { return (png, "png") }
+        return nil
+    }
+}
+
+extension ZoomableTerminalView: UIDropInteractionDelegate {
+    func dropInteraction(_ interaction: UIDropInteraction, canHandle session: UIDropSession) -> Bool {
+        session.hasItemsConforming(toTypeIdentifiers: [UTType.image.identifier])
+    }
+
+    func dropInteraction(_ interaction: UIDropInteraction,
+                         sessionDidUpdate session: UIDropSession) -> UIDropProposal {
+        UIDropProposal(operation: .copy)
+    }
+
+    func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
+        guard let item = session.items.first else { return }
+        let provider = item.itemProvider
+
+        // Prefer the raw representation so we get the real PNG/JPEG bytes + a precise
+        // ext from the UTI; fall back to re-encoding a loaded UIImage as PNG.
+        let imageTypes = provider.registeredTypeIdentifiers.filter {
+            UTType($0)?.conforms(to: .image) == true
+        }
+        if let typeID = imageTypes.first(where: { $0 == UTType.png.identifier })
+            ?? imageTypes.first(where: { $0 == UTType.jpeg.identifier })
+            ?? imageTypes.first {
+            provider.loadDataRepresentation(forTypeIdentifier: typeID) { [weak self] data, _ in
+                guard let self, let data else {
+                    self?.dropFallbackToUIImage(provider)
+                    return
+                }
+                let ext = (UTType(typeID)?.preferredFilenameExtension) ?? "png"
+                DispatchQueue.main.async { self.onImageDropped?(data, ext) }
+            }
+        } else {
+            dropFallbackToUIImage(provider)
+        }
+    }
+
+    private func dropFallbackToUIImage(_ provider: NSItemProvider) {
+        guard provider.canLoadObject(ofClass: UIImage.self) else { return }
+        provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in
+            guard let self, let image = object as? UIImage, let data = image.pngData() else { return }
+            DispatchQueue.main.async { self.onImageDropped?(data, "png") }
+        }
+    }
 }
 
 extension ZoomableTerminalView: UIEditMenuInteractionDelegate {
