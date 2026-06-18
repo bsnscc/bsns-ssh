@@ -26,6 +26,7 @@ import java.security.SecureRandom
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * FIDO2 (CTAP2) security-key SSH keys (`sk-ecdsa-sha2-nistp256@openssh.com`). The
@@ -146,8 +147,19 @@ object FidoKeyManager {
         val box = ArrayBlockingQueue<Result<T>>(1)
         @Suppress("UNCHECKED_CAST")
         pending = box as ArrayBlockingQueue<Result<*>>
+        // Discovery can deliver the same key more than once (the USB attach
+        // broadcast plus the already-connected enumeration, or a re-enumeration on
+        // PIN/touch). Opening a second connection to a key already mid-operation
+        // allocates a second CTAPHID channel whose responses interleave with the
+        // first — the "wrong channel ID" failure. Claim the first device and ignore
+        // the rest, and stop USB discovery as soon as we've claimed one so it can't
+        // be re-opened underneath the running op. NFC discovery is left running:
+        // its connection needs reader mode held for the duration of the tap.
+        val claimed = AtomicBoolean(false)
 
         fun handle(device: YubiKeyDevice) {
+            if (!claimed.compareAndSet(false, true)) return
+            main.post { runCatching { k.stopUsbDiscovery() } }
             if (device.supportsConnection(FidoConnection::class.java)) {
                 device.requestConnection(FidoConnection::class.java) { res ->
                     box.offer(runCatching { res.value.use { op(Ctap2Session(it)) } })
