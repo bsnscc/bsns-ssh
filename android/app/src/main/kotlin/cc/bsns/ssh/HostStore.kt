@@ -16,6 +16,8 @@ data class SavedHost(
     /** Id of the key to authenticate with; null (or unknown on load) falls back
      *  to the first key. */
     val keyId: String? = null,
+    /** Whether this host connects over mosh (UDP, roaming) by default. */
+    val useMosh: Boolean = false,
 ) {
     val label: String get() = "$user@$host${if (port == 22) "" else ":$port"}"
 }
@@ -30,7 +32,7 @@ class HostStore(context: Context) {
             val o = arr.getJSONObject(i)
             SavedHost(o.getString("host"), o.getInt("port"), o.getString("user"),
                 o.optString("jump").ifEmpty { null }, o.optString("group").ifEmpty { null },
-                o.optString("keyId").ifEmpty { null })
+                o.optString("keyId").ifEmpty { null }, o.optBoolean("useMosh", false))
         }
     } catch (e: Exception) {
         emptyList()   // never crash the connect screen on a corrupt store
@@ -43,6 +45,7 @@ class HostStore(context: Context) {
             if (it.jump != null) o.put("jump", it.jump)
             if (it.group != null) o.put("group", it.group)
             if (it.keyId != null) o.put("keyId", it.keyId)
+            if (it.useMosh) o.put("useMosh", true)
             arr.put(o)
         }
         // commit() (synchronous) so a saved host survives even if the process is

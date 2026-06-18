@@ -15,7 +15,7 @@
         android:supportsRtl="true"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@style/Theme.BsnsSsh">
         <!-- Handle config changes ourselves (Compose re-lays-out) so resizing the
              window, rotating, or entering multi-window does NOT recreate the
              Activity and drop live SSH/mosh sessions. -->

@@ -25,7 +25,7 @@ import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -90,6 +90,7 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
     var entries by remember { mutableStateOf<List<SftpEntry>>(emptyList()) }
     var status by remember { mutableStateOf<String?>("connecting…") }
     var connected by remember { mutableStateOf(false) }
+    var canRetry by remember { mutableStateOf(false) }   // true when the last status is a retryable failure
     var pendingDelete by remember { mutableStateOf<SftpEntry?>(null) }
     var askNewFolder by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
@@ -99,8 +100,15 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
 
     suspend fun reload() {
         withContext(Dispatchers.IO) { runCatching { client.list(path) } }
-            .onSuccess { entries = it; status = null }
-            .onFailure { status = "couldn't list ${if (path == ".") "~" else path}" }
+            .onSuccess { entries = it; status = null; canRetry = false }
+            .onFailure { status = "couldn't list ${if (path == ".") "~" else path}"; canRetry = true }
+    }
+
+    suspend fun connectThenLoad() {
+        status = "connecting…"; canRetry = false
+        val ok = withContext(Dispatchers.IO) { runCatching { client.connect() }.getOrDefault(false) }
+        if (ok) { connected = true; reload() }
+        else { status = "couldn't open SFTP (is your key installed?)"; canRetry = true }
     }
 
     val saveDoc = rememberLauncherForActivityResult(
@@ -132,11 +140,7 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
         }
     }
 
-    LaunchedEffect(Unit) {
-        val ok = withContext(Dispatchers.IO) { runCatching { client.connect() }.getOrDefault(false) }
-        if (ok) { connected = true; reload() }
-        else status = "couldn't open SFTP (is your key installed?)"
-    }
+    LaunchedEffect(Unit) { connectThenLoad() }
     DisposableEffect(Unit) { onDispose { Thread { client.close() }.start() } }
 
     fun openEntry(e: SftpEntry) {
@@ -175,8 +179,16 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
                 }
             }
             status?.let {
-                Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(vertical = 4.dp))
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                    if (canRetry) {
+                        TextButton(onClick = {
+                            scope.launch { if (connected) reload() else connectThenLoad() }
+                        }) { Text("Retry", fontSize = 13.sp) }
+                    }
+                }
             }
             LazyColumn(Modifier.fillMaxSize()) {
                 items(entries, key = { it.name }) { e ->
@@ -198,7 +210,7 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 if (e.isDirectory) "" else byteSize(e.size),
-                                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             IconButton(onClick = { pendingDelete = e }) {
                                 Icon(Icons.Default.DeleteOutline, "delete",
@@ -206,7 +218,7 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
                             }
                         }
                     }
-                    Divider()
+                    HorizontalDivider()
                 }
             }
         }
@@ -222,7 +234,18 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
                     val entry = e; pendingDelete = null
                     scope.launch {
                         val ok = withContext(Dispatchers.IO) { client.remove(childPath(entry.name), entry.isDirectory) }
-                        if (ok) reload() else status = "couldn't delete ${entry.name}"
+                        if (ok) reload()
+                        else {
+                            // The native remove only reports a bare boolean, so to give
+                            // a useful message on a directory failure we re-list it: a
+                            // non-empty folder is the common cause servers reject rmdir for.
+                            val nonEmpty = entry.isDirectory && withContext(Dispatchers.IO) {
+                                runCatching { client.list(childPath(entry.name)).isNotEmpty() }.getOrDefault(false)
+                            }
+                            status = if (nonEmpty) "couldn't delete ${entry.name} — the folder isn't empty"
+                                     else "couldn't delete ${entry.name}"
+                            canRetry = false
+                        }
                     }
                 }) { Text("Delete") }
             },

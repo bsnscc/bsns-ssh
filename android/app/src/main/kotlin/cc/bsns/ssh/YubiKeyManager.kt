@@ -22,6 +22,7 @@ import java.security.PublicKey
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -46,6 +47,11 @@ object YubiKeyManager {
     /** Non-null while a YubiKey tap is being awaited — the UI shows it as a prompt. */
     var awaitingTap by mutableStateOf<String?>(null)
         private set
+
+    // The blocking op's result queue, exposed so [cancel] can unblock the waiting
+    // worker. Set at the start of [withKey] and nulled in its finally. @Volatile so
+    // a UI-thread cancel sees the value the SSH worker just published.
+    @Volatile private var pending: ArrayBlockingQueue<Result<*>>? = null
 
     val unlocked: Boolean get() = pin != null
 
@@ -88,6 +94,8 @@ object YubiKeyManager {
         val act = activity ?: throw IllegalStateException("YubiKey not ready (no activity)")
         val k = kit ?: throw IllegalStateException("YubiKey not ready")
         val box = ArrayBlockingQueue<Result<T>>(1)
+        @Suppress("UNCHECKED_CAST")
+        pending = box as ArrayBlockingQueue<Result<*>>
 
         fun handle(device: YubiKeyDevice) {
             device.requestConnection(SmartCardConnection::class.java) { result ->
@@ -107,9 +115,25 @@ object YubiKeyManager {
                 ?: throw java.io.IOException("no YubiKey detected — tap it to the phone or plug it in")
             return r.getOrThrow()
         } finally {
+            pending = null
             main.post {
                 awaitingTap = null
                 runCatching { k.stopNfcDiscovery(act) }
+                runCatching { k.stopUsbDiscovery() }
+            }
+        }
+    }
+
+    /** Cancel a pending tap: unblock the waiting worker with a failure, stop NFC/USB
+     *  discovery, and clear the prompt. Safe to call when nothing is pending. */
+    fun cancel() {
+        pending?.offer(Result.failure<Any>(CancellationException("cancelled")))
+        val act = activity
+        val k = kit
+        main.post {
+            awaitingTap = null
+            if (k != null) {
+                if (act != null) runCatching { k.stopNfcDiscovery(act) }
                 runCatching { k.stopUsbDiscovery() }
             }
         }

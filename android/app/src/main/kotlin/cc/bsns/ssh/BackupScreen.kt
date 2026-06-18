@@ -99,6 +99,7 @@ fun BackupScreen(onBack: () -> Unit) {
                     val sealed = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                         ?: error("unreadable")
                     val encrypted = ConfigEnvelope.isEncrypted(sealed)
+                    if (encrypted && passphrase.isEmpty()) throw NeedPassphrase()
                     val plain = if (encrypted) ConfigEnvelope.decrypt(sealed, passphrase) else sealed
                     PendingImport(ConfigBundle.parse(plain), encrypted)
                 }
@@ -107,6 +108,7 @@ fun BackupScreen(onBack: () -> Unit) {
                 .onSuccess { pendingImport = it; status = null }
                 .onFailure {
                     status = when (it) {
+                        is NeedPassphrase -> "this backup is encrypted — enter its passphrase above, then tap Import again"
                         is BadPassphraseException -> "wrong passphrase"
                         is BadEnvelopeException -> "not a valid backup file"
                         else -> "couldn't read backup"
@@ -144,8 +146,10 @@ fun BackupScreen(onBack: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(enabled = passphrase.isNotEmpty(),
                     onClick = { exportDoc.launch("bsns-ssh-backup.json") }) { Text("Export") }
-                OutlinedButton(enabled = passphrase.isNotEmpty(),
-                    onClick = { importDoc.launch("*/*") }) { Text("Import") }
+                // Import is always available: an unencrypted bundle needs no
+                // passphrase, and for an encrypted one the passphrase is only needed
+                // after the file is picked (the picker tells you if it's missing).
+                OutlinedButton(onClick = { importDoc.launch("*/*") }) { Text("Import") }
             }
 
             Divider()
@@ -169,7 +173,13 @@ fun BackupScreen(onBack: () -> Unit) {
                     }
                 }
             } else {
-                OutlinedButton(enabled = passphrase.isNotEmpty(), onClick = { pickFolder.launch(null) }) {
+                // Always tappable: like Import, the passphrase is only needed once a
+                // folder is picked. If it's missing the picker callback explains why,
+                // rather than the button silently sitting disabled with no reason.
+                OutlinedButton(onClick = {
+                    if (passphrase.isEmpty()) status = "set a passphrase above first, then choose the folder"
+                    else pickFolder.launch(null)
+                }) {
                     Text("Choose a sync folder")
                 }
             }
@@ -232,6 +242,8 @@ fun BackupScreen(onBack: () -> Unit) {
 
 /** A parsed bundle awaiting the import review, plus whether it came encrypted. */
 private class PendingImport(val bundle: org.json.JSONObject, val encrypted: Boolean)
+/** Thrown when an encrypted backup is picked but no passphrase was entered. */
+private class NeedPassphrase : Exception()
 
 @Composable
 private fun ImportToggle(label: String, value: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {

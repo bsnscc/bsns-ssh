@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -86,8 +86,12 @@ fun ImportConfigScreen(onBack: () -> Unit) {
             status = withContext(Dispatchers.IO) {
                 try {
                     val k = PrivateKeyImport.parse(readText(uri) ?: "")
-                    KeyManager(context).importSoftware(k.algorithm.wireName, k.material, k.comment)
-                    "imported a ${k.algorithm.wireName.removePrefix("ssh-")} key"
+                    val short = k.algorithm.wireName.removePrefix("ssh-")
+                    when (KeyManager(context).importSoftware(k.algorithm.wireName, k.material, k.comment)) {
+                        ImportResult.ADDED -> "imported a $short key"
+                        ImportResult.DUPLICATE -> "that key is already imported"
+                        ImportResult.UNSUPPORTED -> "that key type isn't supported yet"
+                    }
                 } catch (e: KeyImportException) {
                     e.message ?: "couldn't import that key"
                 } catch (e: Exception) {
@@ -111,19 +115,19 @@ fun ImportConfigScreen(onBack: () -> Unit) {
                 "your device, and everything is added alongside what you already have.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-            Divider()
+            HorizontalDivider()
             OutlinedButton(onClick = { pickConfig.launch("*/*") }, modifier = Modifier.fillMaxWidth()) {
                 Text("Import an ssh config")
             }
             Text("Reads Host blocks (HostName, Port, User, ProxyJump) into your saved hosts.",
-                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             OutlinedButton(onClick = { pickKnown.launch("*/*") }, modifier = Modifier.fillMaxWidth()) {
                 Text("Import known_hosts")
             }
             Text("Trusts the host keys you already accepted. Hashed (anonymized) entries " +
                 "can't be recovered and are skipped.",
-                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             OutlinedButton(onClick = { pickKey.launch("*/*") }, modifier = Modifier.fillMaxWidth()) {
                 Text("Import a private key")
@@ -131,9 +135,9 @@ fun ImportConfigScreen(onBack: () -> Unit) {
             Text("Unencrypted ed25519, ecdsa-p256, or RSA keys — OpenSSH format, or RSA in " +
                 "PKCS#1/PKCS#8 PEM. Decrypt a passphrase-protected key first (ssh-keygen -p), " +
                 "or generate a new device key instead.",
-                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-            status?.let { Divider(); Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }
+            status?.let { HorizontalDivider(); Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }
         }
     }
 

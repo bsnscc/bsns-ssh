@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -82,7 +82,7 @@ fun PortForwardsScreen(session: ForwardSession, onStopAll: () -> Unit, onClose: 
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             if (forwards.isNotEmpty()) {
-                Divider()
+                HorizontalDivider()
                 Text("Active", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
                 forwards.forEach { f ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
@@ -90,7 +90,7 @@ fun PortForwardsScreen(session: ForwardSession, onStopAll: () -> Unit, onClose: 
                         Column {
                             Text("localhost:${f.listenPort}  →  ${f.destHost}:${f.destPort}",
                                 fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-                            Text(f.error ?: "● listening", fontSize = 11.sp,
+                            Text(f.error ?: "● listening", fontSize = 12.sp,
                                 color = if (f.error != null) MaterialTheme.colorScheme.error
                                         else MaterialTheme.colorScheme.primary)
                         }
@@ -102,7 +102,7 @@ fun PortForwardsScreen(session: ForwardSession, onStopAll: () -> Unit, onClose: 
                 }
             }
 
-            Divider()
+            HorizontalDivider()
             Text("New forward", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
             OutlinedTextField(listenPort, { listenPort = it }, label = { Text("local port — e.g. 8080") },
                 singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -114,7 +114,7 @@ fun PortForwardsScreen(session: ForwardSession, onStopAll: () -> Unit, onClose: 
 
             status?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.error) }
 
-            Divider()
+            HorizontalDivider()
             OutlinedButton(onClick = onStopAll) { Text("Disconnect all tunnels") }
         }
     }

@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -40,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.History
@@ -53,6 +55,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -72,6 +75,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -109,7 +119,21 @@ class MainActivity : FragmentActivity() {
                 surface = Brand.nearBlack,
                 surfaceVariant = Brand.surface,
                 onPrimary = Brand.nearBlack,
-            )) { App() }
+                // Neutral on*-roles so content reads as light gray on the near-black
+                // background instead of Material's purple-tinted defaults.
+                onSurface = Color(0xFFE8E8E8),
+                onBackground = Color(0xFFE8E8E8),
+                onSurfaceVariant = Color(0xFFB8B8B8),
+                error = Color(0xFFFF6B6B),
+                outline = Color(0xFF555555),
+            )) {
+                // Wrap in a Surface so LocalContentColor resolves to onSurface (light)
+                // everywhere — not just inside Scaffold screens. Without it, content
+                // that isn't under a Scaffold (the terminal pane's top-bar icons)
+                // inherits Material's default black content color → invisible on the
+                // near-black background.
+                Surface(modifier = Modifier.fillMaxSize()) { App() }
+            }
         }
     }
 
@@ -312,13 +336,38 @@ fun App() {
         }
     }
 
+    // Hardware Back navigates the hierarchy instead of exiting + dropping sessions.
+    // Each handler only intercepts when there's somewhere to go back to; the bare
+    // Connect screen (no session) leaves Back to its default (exit). Ordering mirrors
+    // the visible-screen precedence in the Column above (forwards → sftp → session →
+    // route). SFTP subfolder→up is handled inside SftpScreen's own BackHandler.
+    BackHandler(enabled = showForwards && forwardSession != null) { showForwards = false }
+    BackHandler(enabled = !(showForwards && forwardSession != null) && sftpTarget != null) {
+        sftpTarget = null
+    }
+    BackHandler(
+        enabled = !(showForwards && forwardSession != null) && sftpTarget == null &&
+            activeIndex in sessions.indices,
+    ) { activeIndex = -1 }   // back to the Connect screen, session stays alive
+    BackHandler(
+        enabled = !(showForwards && forwardSession != null) && sftpTarget == null &&
+            activeIndex !in sessions.indices && route != Route.Connect,
+    ) { route = Route.Connect }
+
     // Global overlay while a YubiKey (PIV) or FIDO2 operation waits for a tap/insert.
+    // The overlay otherwise traps the user for the full tap timeout — Cancel aborts
+    // the pending tap (YubiKeyManager.cancel / FidoKeyManager.cancel unblock the worker).
     (YubiKeyManager.awaitingTap ?: FidoKeyManager.awaitingTap)?.let { msg ->
+        val cancelTap = {
+            YubiKeyManager.cancel()
+            FidoKeyManager.cancel()
+        }
         AlertDialog(
-            onDismissRequest = { },
+            onDismissRequest = { cancelTap() },
             title = { Text("Security key") },
             text = { Text("$msg\n\nHold your key to the back of the phone (NFC) or plug it into USB-C.") },
             confirmButton = {},
+            dismissButton = { TextButton(onClick = { cancelTap() }) { Text("Cancel") } },
         )
     }
 }
@@ -601,7 +650,9 @@ fun TabStrip(titles: List<String>, active: Int, onSelect: (Int) -> Unit, onClose
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    title.substringAfter('@').take(18),
+                    // Keep user@host so root@db and deploy@db are distinguishable
+                    // (was substringAfter('@'), which collapsed both to "db").
+                    title.take(18),
                     fontFamily = FontFamily.Monospace, fontSize = 13.sp,
                     color = if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -627,11 +678,13 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
     var hits by remember { mutableStateOf<List<Int>>(emptyList()) }
     var hitIdx by remember { mutableStateOf(0) }
     val findFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
 
     // When the search bar opens, take focus off the terminal View so the IME types
-    // into the find field (a traditional View otherwise keeps Android focus).
+    // into the find field (a traditional View otherwise keeps Android focus), and
+    // explicitly raise the soft keyboard — requestFocus alone doesn't always show it.
     LaunchedEffect(searching) {
-        if (searching) { holder.terminalView.clearFocus(); findFocus.requestFocus() }
+        if (searching) { holder.terminalView.clearFocus(); findFocus.requestFocus(); keyboard?.show() }
     }
 
     fun runSearch(q: String) {
@@ -659,6 +712,8 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                 OutlinedTextField(
                     query, { runSearch(it) },
                     label = { Text("find") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { step(1) }),
                     modifier = Modifier.weight(1f).focusRequester(findFocus),
                 )
                 Text(
@@ -685,7 +740,15 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                     holder.isStale -> Color(0xFFFFCC00)
                     else -> Color(0xFF34C759)
                 }
-                StatusDot(dotColor)
+                // The dot conveys connection state by color only — give it a
+                // text/state alternative for TalkBack.
+                val dotState = when {
+                    holder.status == ConnStatus.Reconnecting -> "Reconnecting"
+                    holder.status == ConnStatus.Disconnected -> "Disconnected"
+                    holder.isStale -> "Stale — no recent contact"
+                    else -> "Connected"
+                }
+                Box(Modifier.semantics { stateDescription = dotState }) { StatusDot(dotColor) }
                 Spacer(Modifier.width(8.dp))
                 // Flex + ellipsize the title so a long (jumped) title never pushes the
                 // action buttons off the right edge.
@@ -693,8 +756,12 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                     maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { showHistory = true }) { Icon(Icons.Default.History, "command history") }
-                    IconButton(onClick = { showSnippets = true }) { Icon(Icons.Default.Code, "snippets") }
+                    // History/snippets act on the live session — disable when not
+                    // connected so they don't silently no-op. Find reads the local
+                    // buffer, so it stays available.
+                    val live = holder.status == ConnStatus.Connected
+                    IconButton(onClick = { showHistory = true }, enabled = live) { Icon(Icons.Default.History, "command history") }
+                    IconButton(onClick = { showSnippets = true }, enabled = live) { Icon(Icons.Default.Code, "snippets") }
                     IconButton(onClick = { searching = true }) { Icon(Icons.Default.Search, "find") }
                     OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
                 }
@@ -721,12 +788,20 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
             }
         } else if (holder.isStale) {
             // mosh stays "Connected" while it roams, but flag prolonged silence so a
-            // dead session isn't shown as live (amber, not the error red).
-            Text(
-                "mosh: no contact with the server — it may have dropped",
-                fontSize = 13.sp, color = Color(0xFFB8860B),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-            )
+            // dead session isn't shown as live (amber, not the error red). Offer a
+            // Reconnect so a wedged session can be re-bootstrapped without dropping it.
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "mosh: no contact with the server — it may have dropped",
+                    fontSize = 13.sp, color = Color(0xFFFFCC00),
+                    modifier = Modifier.weight(1f, fill = false).padding(end = 8.dp),
+                )
+                Button(onClick = { holder.reconnect() }) { Text("Reconnect") }
+            }
         }
         AndroidView(
             factory = { FrameLayout(it) },
@@ -739,10 +814,14 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                 }
                 if (!searching) v.requestFocus()   // let the search field keep focus
             },
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            modifier = Modifier.weight(1f).fillMaxWidth()
+                .semantics { contentDescription = "Terminal output" },
         )
         // Local autocomplete: chips from your own command history (no phone-home).
-        val suggestions = holder.suggestionsFor(holder.currentLine)
+        // Only when connected — applying a completion writes to the live session, so
+        // a dead session shouldn't offer chips that silently no-op.
+        val suggestions = if (holder.status == ConnStatus.Connected)
+            holder.suggestionsFor(holder.currentLine) else emptyList()
         if (suggestions.isNotEmpty()) {
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
@@ -841,6 +920,12 @@ fun ConnectScreen(
     var pendingBastionTofu by remember { mutableStateOf<BastionTofu?>(null) }
     var pendingMismatch by remember { mutableStateOf<MismatchInfo?>(null) }
     var pendingAction by remember { mutableStateOf<((Int, ByteArray) -> Unit)?>(null) }
+    // A saved host queued for delete-confirm (Item 11) and one queued for quick-
+    // connect (Item 12). Quick-connect loads the host's fields, then a LaunchedEffect
+    // fires the connect once state reflects the load (state writes aren't visible in
+    // the same frame).
+    var pendingRemove by remember { mutableStateOf<SavedHost?>(null) }
+    var quickConnectTick by remember { mutableStateOf(0) }
 
     fun openWith(p: Int, blob: ByteArray) {
         busy = true; status = "connecting…"
@@ -877,7 +962,13 @@ fun ConnectScreen(
         thread {
             val fs = cc.bsns.ssh.transport.ForwardSession(host, p, user, key.publicKeyBlob, key.signer, expectedHostKey = blob)
             if (fs.open()) main.post { busy = false; onForwards(fs) }
-            else main.post { busy = false; status = "couldn't open the tunnel connection" }
+            else {
+                // The forward open goes through the same libssh2 open as Connect, so
+                // its per-category reason is in the process-global last-open reason —
+                // surface the same auth/unreachable/no-shell language as Connect.
+                val reason = OpenReason.fromCode(SshBridge().nativeLastOpenReason())
+                main.post { busy = false; status = describeOpenFailure(reason) }
+            }
         }
     }
 
@@ -958,6 +1049,17 @@ fun ConnectScreen(
     val fidoKey = key.fido
     val jumpWithFido = hasJump && fidoKey
     var showPublicKey by remember { mutableStateOf(false) }
+
+    // The shared connect path used by both the Connect button and quick-connect:
+    // verify the host key, then open a shell (or mosh, when enabled + no jump host).
+    fun connectNow() {
+        if (busy || jumpWithFido) return
+        withYubiPin { verifyThen { p, blob -> if (useMosh && !hasJump) openMosh(p, blob) else openWith(p, blob) } }
+    }
+    // Quick-connect: ConnectScreen has already loaded the host's fields and bumped
+    // quickConnectTick; fire once state reflects the load (skip the initial 0).
+    LaunchedEffect(quickConnectTick) { if (quickConnectTick > 0) connectNow() }
+
     Scaffold { pad ->
         Column(
             Modifier.fillMaxSize().padding(pad).padding(Spacing.screen).verticalScroll(rememberScrollState()),
@@ -982,13 +1084,26 @@ fun ConnectScreen(
                     Section(title = g ?: "Saved hosts") {
                         grouped[g]!!.forEachIndexed { i, h ->
                             if (i > 0) RowDivider()
+                            // Load the host's fields into the form (shared by row-tap +
+                            // quick-connect). Returns true if the pinned key resolved.
+                            val loadHost = {
+                                host = h.host; port = h.port.toString(); user = h.user
+                                group = h.group ?: ""; jump = h.jump ?: ""
+                                useMosh = h.useMosh
+                                if (h.keyId != null && keys.any { it.id == h.keyId }) onSelectKey(h.keyId)
+                            }
+                            // Which key this host is bound to — its label, or a clear
+                            // fallback so a stale/missing pin doesn't silently mislead.
+                            val boundKeyLabel = when {
+                                h.keyId == null -> null
+                                else -> keys.firstOrNull { it.id == h.keyId }?.label
+                                    ?: "key no longer available — using default"
+                            }
                             Row(
-                                // Whole row loads the host (a big, reliable tap target); the ✕ removes it.
+                                // Whole row loads the host (a big, reliable tap target); the
+                                // bolt loads + connects, the ✕ asks to remove.
                                 Modifier.fillMaxWidth().heightIn(min = Spacing.rowMinHeight).clickable {
-                                    host = h.host; port = h.port.toString(); user = h.user
-                                    group = h.group ?: ""; jump = h.jump ?: ""
-                                    if (h.keyId != null && keys.any { it.id == h.keyId }) onSelectKey(h.keyId)
-                                    status = "loaded ${h.label}"
+                                    loadHost(); status = "loaded ${h.label}"
                                 },
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
@@ -999,8 +1114,18 @@ fun ConnectScreen(
                                     h.jump?.let {
                                         Text("⇢ $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
+                                    boundKeyLabel?.let {
+                                        Text("🔑 $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    if (h.useMosh) Text("mosh", fontSize = 11.sp, color = Brand.accent)
                                 }
-                                IconButton(onClick = { savedHosts = hostStore.remove(h) }) {
+                                // One-tap connect (load + connect), mirroring iOS quick-connect.
+                                IconButton(enabled = !busy, onClick = {
+                                    loadHost(); status = "connecting to ${h.label}…"; quickConnectTick++
+                                }) {
+                                    Icon(Icons.Default.Bolt, "quick connect", tint = MaterialTheme.colorScheme.primary)
+                                }
+                                IconButton(onClick = { pendingRemove = h }) {
                                     Icon(Icons.Default.Close, "remove", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
@@ -1045,7 +1170,9 @@ fun ConnectScreen(
                     )
                 }
                 RowDivider()
-                SettingRow("Use mosh (UDP — roams, survives sleep)", enabled = !hasJump) {
+                val moshLabel = if (hasJump) "Use mosh (disabled with a jump host)"
+                    else "Use mosh (UDP — roams, survives sleep)"
+                SettingRow(moshLabel, enabled = !hasJump) {
                     androidx.compose.material3.Switch(checked = useMosh, enabled = !hasJump,
                         onCheckedChange = { useMosh = it })
                 }
@@ -1074,7 +1201,7 @@ fun ConnectScreen(
                 ) {
                     Button(enabled = !busy && !jumpWithFido, onClick = {
                         // A jump host tunnels the shell only; ignore mosh when one is set.
-                        withYubiPin { verifyThen { p, blob -> if (useMosh && !hasJump) openMosh(p, blob) else openWith(p, blob) } }
+                        connectNow()
                     }) { Text(if (useMosh && !hasJump) "Connect (mosh)" else "Connect") }
 
                     OutlinedButton(enabled = !busy && !hasJump && !fidoKey, onClick = {
@@ -1096,11 +1223,18 @@ fun ConnectScreen(
                         verifyThen { p, blob ->
                             busy = true; status = "installing key…"
                             thread {
-                                val ok = SshBridge().nativeInstallKey(host, p, user, password, authLine, blob)
+                                val bridge = SshBridge()
+                                val ok = bridge.nativeInstallKey(host, p, user, password, authLine, blob)
+                                // On failure, distinguish auth (wrong password) vs
+                                // unreachable vs no-shell via the same last-open reason
+                                // Connect uses, instead of a flat "install failed".
+                                val reason = if (ok) OpenReason.Ok
+                                    else OpenReason.fromCode(bridge.nativeLastOpenReason())
                                 main.post {
                                     busy = false
                                     if (ok) password = ""   // don't keep the password in UI state after use
-                                    status = if (ok) "key installed — now Connect" else "install failed"
+                                    status = if (ok) "key installed — now Connect"
+                                        else "install failed — ${describeOpenFailure(reason)}"
                                 }
                             }
                         }
@@ -1114,7 +1248,7 @@ fun ConnectScreen(
                             if (p == null) { status = "port must be a number from 1 to 65535"; return@OutlinedButton }
                             savedHosts = hostStore.add(SavedHost(host, p, user,
                                 jump = jump.trim().ifEmpty { null }, group = group.trim().ifEmpty { null },
-                                keyId = key.id))
+                                keyId = key.id, useMosh = useMosh))
                             status = "saved $user@$host"
                         },
                     ) { Text("Save host") }
@@ -1147,6 +1281,23 @@ fun ConnectScreen(
                             modifier = Modifier.padding(bottom = 8.dp))
                     }
                 }
+            }
+
+            // Confirm before removing a saved host — the ✕ used to delete instantly.
+            pendingRemove?.let { h ->
+                AlertDialog(
+                    onDismissRequest = { pendingRemove = null },
+                    title = { Text("Remove saved host?") },
+                    text = { Text("Remove ${h.label} from your saved hosts? This doesn't affect the server.") },
+                    confirmButton = {
+                        TextButton(onClick = { pendingRemove = null }) { Text("Cancel") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = {
+                            savedHosts = hostStore.remove(h); pendingRemove = null
+                        }) { Text("Remove") }
+                    },
+                )
             }
 
             pendingTofu?.let { tofu ->
@@ -1221,7 +1372,12 @@ fun ConnectScreen(
                                 "You'll be asked to verify it again before connecting.",
                         )
                     },
+                    // Cancel is the PROMINENT (affirmative) action so a reflex confirm
+                    // doesn't forget a possibly-MITM'd key. Forgetting is the secondary.
                     confirmButton = {
+                        TextButton(onClick = { pendingMismatch = null; pendingAction = null }) { Text("Cancel") }
+                    },
+                    dismissButton = {
                         TextButton(onClick = {
                             // Forget the stale key, then re-run verification — which falls
                             // through to a fresh TOFU prompt on the new key (never a silent
@@ -1232,9 +1388,6 @@ fun ConnectScreen(
                             pendingMismatch = null
                             if (act != null) verifyThen(act)
                         }) { Text("Forget key") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { pendingMismatch = null; pendingAction = null }) { Text("Cancel") }
                     },
                 )
             }

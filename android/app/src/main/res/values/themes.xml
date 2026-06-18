@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark, no-action-bar app theme. The only thing it adds over the platform
+         Material NoActionBar parent is a near-black window background so a cold
+         start doesn't flash white before Compose paints the dark UI. The icon
+         background color (#0F0F0F) is reused so the launch surface matches. -->
+    <style name="Theme.BsnsSsh" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
+    </style>
+</resources>

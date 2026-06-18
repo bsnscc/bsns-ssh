@@ -232,11 +232,16 @@ class KeyManager(context: Context) {
     fun exportSoftware(): List<Triple<String, ByteArray, String>> =
         store.loadAll().map { (_, algo, material) -> Triple(algo, material, "bsns") }
 
-    /** Re-import a software key from a config bundle (skips dup public keys). */
-    fun importSoftware(algorithm: String, material: ByteArray, comment: String) {
-        val algo = KeyAlgorithm.fromWire(algorithm) ?: return
+    /** Re-import a software key from a config bundle (skips dup public keys).
+     *  Returns what happened so the caller can tell the user the truth. */
+    fun importSoftware(algorithm: String, material: ByteArray, comment: String): ImportResult {
+        val algo = KeyAlgorithm.fromWire(algorithm) ?: return ImportResult.UNSUPPORTED
         val blob = FileKey.from(algo, material, comment).publicKey.blob
-        if (keys().any { it.publicKeyBlob.contentEquals(blob) }) return
+        if (keys().any { it.publicKeyBlob.contentEquals(blob) }) return ImportResult.DUPLICATE
         store.save(algorithm, material, comment)
+        return ImportResult.ADDED
     }
 }
+
+/** Outcome of [KeyManager.importSoftware]. */
+enum class ImportResult { ADDED, DUPLICATE, UNSUPPORTED }

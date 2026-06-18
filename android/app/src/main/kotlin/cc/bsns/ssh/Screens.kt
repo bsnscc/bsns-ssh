@@ -14,7 +14,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -98,7 +97,7 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                                 if (k.hardware) Brand.accent else softwareTag,
                             )
                         }
-                        Text(k.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
+                        Text(k.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 4.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
@@ -238,6 +237,7 @@ fun KnownHostsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val store = remember { KnownHostsStore(context) }
     var hosts by remember { mutableStateOf(store.all()) }
+    var confirmForget by remember { mutableStateOf<KnownHostEntry?>(null) }
 
     Scaffold { pad ->
         Column(
@@ -257,20 +257,35 @@ fun KnownHostsScreen(onBack: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             hosts.forEach { h ->
-                Divider()
+                RowDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.padding(end = 8.dp)) {
                         Text(h.id, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.primary)
                         SelectionContainer {
-                            Text(h.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                            Text(h.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                         }
                     }
-                    TextButton(onClick = { store.forgetId(h.id); hosts = store.all() }) { Text("Forget") }
+                    TextButton(onClick = { confirmForget = h }) { Text("Forget") }
                 }
             }
         }
+    }
+
+    confirmForget?.let { h ->
+        AlertDialog(
+            onDismissRequest = { confirmForget = null },
+            title = { Text("Forget host key?") },
+            text = { Text("Forget the trusted host key for ${h.id}? " +
+                "You'll be asked to verify it again next time you connect.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    store.forgetId(h.id); hosts = store.all(); confirmForget = null
+                }) { Text("Forget") }
+            },
+            dismissButton = { TextButton(onClick = { confirmForget = null }) { Text("Cancel") } },
+        )
     }
 }
 

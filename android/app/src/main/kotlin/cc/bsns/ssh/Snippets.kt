@@ -8,11 +8,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -81,6 +86,7 @@ fun SnippetsScreen(onBack: () -> Unit) {
     val store = remember { SnippetStore(context) }
     var snippets by remember { mutableStateOf(store.load()) }
     var editing by remember { mutableStateOf<Snippet?>(null) }   // the snippet being added/edited
+    var confirmDelete by remember { mutableStateOf<Snippet?>(null) }
 
     Scaffold { pad ->
         Column(
@@ -97,7 +103,7 @@ fun SnippetsScreen(onBack: () -> Unit) {
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             snippets.forEach { s ->
-                Divider()
+                HorizontalDivider()
                 Row(Modifier.fillMaxWidth().clickable { editing = s }.padding(vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -105,15 +111,32 @@ fun SnippetsScreen(onBack: () -> Unit) {
                             fontFamily = FontFamily.Monospace, fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.primary)
                         Text(s.command.lines().firstOrNull().orEmpty().take(48),
-                            fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    TextButton(onClick = { snippets = store.remove(s.id) }) { Text("✕") }
+                    IconButton(onClick = { confirmDelete = s }, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Delete snippet ${s.name}",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
 
-            Divider()
+            HorizontalDivider()
             Button(onClick = { editing = Snippet(UUID.randomUUID().toString(), "", "") }) { Text("New snippet") }
         }
+    }
+
+    confirmDelete?.let { s ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text("Delete snippet?") },
+            text = { Text("Delete the snippet \"${s.name}\"? This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    snippets = store.remove(s.id); confirmDelete = null
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
+        )
     }
 
     editing?.let { snip ->
@@ -165,7 +188,7 @@ fun SnippetPickerDialog(onPick: (Snippet) -> Unit, onDismiss: () -> Unit) {
                         Text(s.name, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.primary)
                         Text(s.command.lines().firstOrNull().orEmpty().take(48),
-                            fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
