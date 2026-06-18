@@ -44,7 +44,7 @@ A POWERFUL, NATIVE TERMINAL
 
 ADVANCED OPERATOR TOOLS
 • In-process SSH agent authentication (keys never touch the transport layer).
-• Full SFTP file browsing and local port forwarding.
+• SFTP file browser — browse, upload, download, delete, and create folders — plus local port forwarding.
 • Single-hop ProxyJump (key-authenticated and host-verified bastions).
 • Built on a modern, pinned crypto stack (OpenSSL 3.5 + libssh2 1.11) compiled reproducibly from source.
 • Engineered for accessibility with VoiceOver-labeled controls, Dynamic Type, and high-contrast dark themes.
