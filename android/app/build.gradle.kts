@@ -15,7 +15,7 @@ android {
         applicationId = "cc.bsns.ssh"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
+        versionCode = 26
         versionName = "1.0"
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -64,9 +64,9 @@ dependencies {
     // biometric:1.1.0 pulls an old fragment whose startActivityForResult clashes with
     // the Compose ActivityResultRegistry ("lower 16 bits for requestCode"); force-upgrade.
     implementation("androidx.fragment:fragment:1.8.5")
-    implementation("com.yubico.yubikit:android:2.5.0")          // YubiKey NFC/USB transport
-    implementation("com.yubico.yubikit:piv:2.5.0")              // PIV applet (slot 9A signing)
-    implementation("com.yubico.yubikit:fido:2.5.0")             // FIDO2/CTAP2 (sk- security-key SSH keys)
+    implementation("com.yubico.yubikit:android:2.9.0")          // YubiKey NFC/USB transport
+    implementation("com.yubico.yubikit:piv:2.9.0")              // PIV applet (slot 9A signing)
+    implementation("com.yubico.yubikit:fido:2.9.0")             // FIDO2/CTAP2 (sk- security-key SSH keys)
     implementation("androidx.documentfile:documentfile:1.0.1")  // SAF folder access for sync
     implementation(platform("androidx.compose:compose-bom:2024.10.00"))
     implementation("androidx.compose.material3:material3")
