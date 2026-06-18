@@ -121,27 +121,23 @@ static int sign_cb(LIBSSH2_SESSION* session, unsigned char** sig, size_t* sig_le
 }
 
 // ---- FIDO2 security-key (sk-ecdsa) auth ----------------------------------
-// libssh2's sk path parses the application/flags/key-handle out of an
-// OpenSSH-format sk private key (privatekeydata) and, to sign, calls this back.
-// We hand `data` to Kotlin's signer.signSk([B)[B, which asks the authenticator
-// (YubiKey) for an assertion and returns a packed blob:
-//   flags(1) | counter(uint32 BE) | rlen(uint32 BE) | r | slen(uint32 BE) | s
-// We unpack it into LIBSSH2_SK_SIG_INFO with RAW r/s (libssh2 mpint-encodes and
-// frees sig_r/sig_s itself).
+// Authenticate through the patched libssh2_userauth_publickey_raw (vendor
+// patch libssh2-1.11.0-webauthn-sk.patch): the sign callback returns a
+// COMPLETE SSH signature blob, emitted verbatim, while the pubkey-algorithm
+// field carries the key type from `blob`. We hand `data` to Kotlin's
+// signer.signSk([B)[B, which asks the authenticator (YubiKey) for an assertion
+// and returns the full native sk-ecdsa signature:
+//   string "sk-ecdsa-sha2-nistp256@openssh.com" | string(mpint r || mpint s) |
+//   byte flags | uint32 counter
+// (Stock libssh2_userauth_publickey_sk frames the sk packet in a way OpenSSH
+// rejects with "parse publickey packet: invalid format"; the raw path matches
+// the validated iOS bridge and needs no private-key blob — the callback owns
+// the whole signature.)
 typedef struct { JNIEnv* env; jobject signer; jmethodID signSk; } SkSignCtx;
 
-static uint32_t rd_be32(const unsigned char* p) {
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
-}
-
-static int sk_sign_cb(LIBSSH2_SESSION* session, LIBSSH2_SK_SIG_INFO* sig_info,
-                      const unsigned char* data, size_t data_len,
-                      int algorithm, uint8_t flags, const char* application,
-                      const unsigned char* key_handle, size_t handle_len,
-                      void** abstract) {
-    (void)session; (void)algorithm; (void)flags; (void)application;
-    (void)key_handle; (void)handle_len;
+static int sk_raw_sign_cb(LIBSSH2_SESSION* session, unsigned char** sig, size_t* sig_len,
+                          const unsigned char* data, size_t data_len, void** abstract) {
+    (void)session;
     SkSignCtx* c = (SkSignCtx*)(*abstract);
     JNIEnv* env = c->env;
     jbyteArray jdata = (*env)->NewByteArray(env, (jsize)data_len);
@@ -151,44 +147,28 @@ static int sk_sign_cb(LIBSSH2_SESSION* session, LIBSSH2_SK_SIG_INFO* sig_info,
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return -1; }
     if (!jout) return -1;
     jsize n = (*env)->GetArrayLength(env, jout);
-    unsigned char* buf = (unsigned char*)malloc((size_t)n);
+    unsigned char* buf = (unsigned char*)malloc((size_t)n ? (size_t)n : 1);
     if (!buf) { (*env)->DeleteLocalRef(env, jout); return -1; }
     (*env)->GetByteArrayRegion(env, jout, 0, n, (jbyte*)buf);
     (*env)->DeleteLocalRef(env, jout);
-    // flags(1) counter(4) rlen(4) r slen(4) s — bounds-check every step.
-    if ((size_t)n < 1 + 4 + 4) { free(buf); return -1; }
-    size_t off = 0;
-    sig_info->flags = buf[off]; off += 1;
-    sig_info->counter = rd_be32(buf + off); off += 4;
-    uint32_t rlen = rd_be32(buf + off); off += 4;
-    if (off + (size_t)rlen + 4 > (size_t)n) { free(buf); return -1; }
-    unsigned char* r = (unsigned char*)malloc(rlen ? rlen : 1);
-    if (!r) { free(buf); return -1; }
-    memcpy(r, buf + off, rlen); off += rlen;
-    uint32_t slen = rd_be32(buf + off); off += 4;
-    if (off + (size_t)slen > (size_t)n) { free(r); free(buf); return -1; }
-    unsigned char* s = (unsigned char*)malloc(slen ? slen : 1);
-    if (!s) { free(r); free(buf); return -1; }
-    memcpy(s, buf + off, slen);
-    free(buf);
-    sig_info->sig_r = r; sig_info->sig_r_len = rlen;
-    sig_info->sig_s = s; sig_info->sig_s_len = slen;
+    *sig = buf;                 // libssh2 takes ownership and frees it
+    *sig_len = (size_t)n;
     return 0;
 }
 
 // Authenticate `s` with an sk key. Returns 0 on success (the caller keeps the
 // session), non-zero on failure (the caller tears the session down). The signer
-// exposes signSk([B)[B; `priv` is the OpenSSH-format sk private key (the handle,
-// not a secret) libssh2 needs to learn the key handle/application.
+// exposes signSk([B)[B. The raw path needs no private-key blob, so `priv` /
+// `privlen` are still accepted by callers but unused here.
 static int sk_authenticate(JNIEnv* env, LIBSSH2_SESSION* s, const char* user,
                            const unsigned char* blob, size_t bloblen,
                            const char* priv, size_t privlen, jobject signer) {
+    (void)priv; (void)privlen;
     jclass cls = (*env)->GetObjectClass(env, signer);
     jmethodID signSk = (*env)->GetMethodID(env, cls, "signSk", "([B)[B");
     SkSignCtx ctx = { env, signer, signSk };
     void* abstract = &ctx;
-    int rc = libssh2_userauth_publickey_sk(s, user, strlen(user), blob, bloblen,
-                                           priv, privlen, NULL, sk_sign_cb, &abstract);
+    int rc = libssh2_userauth_publickey_raw(s, user, blob, bloblen, sk_raw_sign_cb, &abstract);
     if (rc != 0) {
         char* msg = NULL; libssh2_session_last_error(s, &msg, NULL, 0);
         LOG("sk auth failed rc=%d: %s", rc, msg ? msg : "");

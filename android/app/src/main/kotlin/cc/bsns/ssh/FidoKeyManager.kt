@@ -225,15 +225,23 @@ class FidoSkKey(
         get() = OpenSshSkKey.ecdsaSkPem(point, application, credentialId, flags)
 
     /** Called by the native sk sign callback. Asks the authenticator for an
-     *  assertion over `data` and packs it the way sshbridge.c unpacks it:
-     *  flags(1) | counter(uint32 BE) | string(r) | string(s). */
+     *  assertion over `data` and returns the COMPLETE native sk-ecdsa SSH
+     *  signature blob, which libssh2_userauth_publickey_raw emits verbatim:
+     *    string "sk-ecdsa-sha2-nistp256@openssh.com"
+     *    string (mpint r || mpint s)
+     *    byte   flags
+     *    uint32 counter */
     fun signSk(data: ByteArray): ByteArray {
         val sig = FidoKeyManager.assertion(data, credentialId)
+        val ecdsaSig = SshEncoder.build {
+            it.writeMPInt(sig.sigR)
+            it.writeMPInt(sig.sigS)
+        }
         return SshEncoder.build {
+            it.writeString(OpenSshSkKey.SK_ECDSA_TYPE)
+            it.writeString(ecdsaSig)
             it.writeByte(sig.flags.toInt() and 0xff)
             it.writeUInt32(sig.counter and 0xFFFFFFFFL)
-            it.writeString(sig.sigR)
-            it.writeString(sig.sigS)
         }
     }
 }

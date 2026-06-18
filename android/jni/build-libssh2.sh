@@ -23,6 +23,13 @@ echo "==> fetching + verifying sources"
 curl -fsSL "https://github.com/openssl/openssl/releases/download/openssl-$OSSL_VER/openssl-$OSSL_VER.tar.gz" -o o.tgz; verify o.tgz "$OSSL_SHA"; tar xzf o.tgz
 curl -fsSL "https://github.com/libssh2/libssh2/releases/download/libssh2-$SSH2_VER/libssh2-$SSH2_VER.tar.gz" -o s.tgz; verify s.tgz "$SSH2_SHA"; tar xzf s.tgz
 
+# webauthn-sk patch: adds libssh2_userauth_publickey_raw (sign callback returns
+# a complete signature blob), the same FIDO2/sk path the iOS build uses. Without
+# it the sk userauth packet is framed in a way OpenSSH rejects as "invalid
+# format". Shared with the iOS build (app/vendor/build-cssh.sh applies the same).
+echo "==> applying webauthn-sk patch"
+( cd "libssh2-$SSH2_VER" && patch -p1 < "$HERE/../../app/vendor/patches/libssh2-1.11.0-webauthn-sk.patch" )
+
 export ANDROID_NDK_ROOT="$NDK"
 export PATH="$TC/bin:$PATH"
 rm -rf "$OUT"; mkdir -p "$OUT"
