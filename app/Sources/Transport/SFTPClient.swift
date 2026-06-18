@@ -281,6 +281,40 @@ final class SFTPClient: @unchecked Sendable {
         }
     }
 
+    /// Recursively download a remote directory tree into `localDir` (created if
+    /// absent). Files stream straight to disk; subdirectories recurse. Symlinks
+    /// list as non-directories, so a directory symlink won't drive an infinite
+    /// loop — it's fetched as a single file.
+    func downloadDirectory(_ remotePath: String, to localDir: URL) async throws {
+        try FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
+        for entry in try await list(remotePath) {
+            let remoteChild = "\(remotePath)/\(entry.name)"
+            let localChild = localDir.appendingPathComponent(entry.name)
+            if entry.isDirectory {
+                try await downloadDirectory(remoteChild, to: localChild)
+            } else {
+                try await download(remoteChild, toFile: localChild)
+            }
+        }
+    }
+
+    /// Recursively upload a local directory tree to `remotePath` (created on the
+    /// server, tolerant of already-exists). Subdirectories recurse; files stream up.
+    func uploadDirectory(_ localDir: URL, to remotePath: String) async throws {
+        try await mkdir(remotePath)
+        let items = try FileManager.default.contentsOfDirectory(
+            at: localDir, includingPropertiesForKeys: [.isDirectoryKey], options: [])
+        for url in items {
+            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let remoteChild = "\(remotePath)/\(url.lastPathComponent)"
+            if isDir {
+                try await uploadDirectory(url, to: remoteChild)
+            } else {
+                try await upload(fromFile: url, to: remoteChild)
+            }
+        }
+    }
+
     /// Change the permission bits of `path` (chmod). `mode` is the low 12 bits
     /// (e.g. 0o644); the file-type bits are ignored.
     func setPermissions(_ path: String, mode: UInt32) async throws {

@@ -2,10 +2,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 import BsnsSSHCore
 
-/// An SFTP file browser over one host: navigate folders, download files, upload,
-/// make folders, delete, rename/move, and change permissions (chmod). Mode bits
-/// are shown in the listing. Authenticates through the agent (same as the shell)
-/// and runs the first-connection host-key prompt inline.
+/// An SFTP file browser over one host: navigate folders, download/upload files
+/// or whole folders (recursively), make folders, delete, rename/move, and change
+/// permissions (chmod). Mode bits are shown in the listing. Authenticates through
+/// the agent (same as the shell) and runs the first-connection host-key prompt inline.
 struct SFTPBrowserView: View {
     let host: String
     let port: UInt16
@@ -31,6 +31,7 @@ struct SFTPBrowserView: View {
     @State private var chmodText = ""
 
     @State private var showUpload = false
+    @State private var showUploadFolder = false
     @State private var newFolderName = ""
     @State private var askNewFolder = false
     @State private var exportFileURL: URL?       // a streamed-to temp file, exported via fileMover
@@ -69,7 +70,9 @@ struct SFTPBrowserView: View {
                     .contextMenu {
                         Button { startRename(entry) } label: { Label("Rename", systemImage: "pencil") }
                         Button { startChmod(entry) } label: { Label("Permissions", systemImage: "lock.shield") }
-                        if !entry.isDirectory {
+                        if entry.isDirectory {
+                            Button { downloadFolder(entry) } label: { Label("Download folder", systemImage: "square.and.arrow.down") }
+                        } else {
                             Button { download(entry) } label: { Label("Download", systemImage: "square.and.arrow.down") }
                         }
                         Button(role: .destructive) { pendingDelete = entry } label: { Label("Delete", systemImage: "trash") }
@@ -96,6 +99,9 @@ struct SFTPBrowserView: View {
                     Button { showUpload = true } label: { Image(systemName: "square.and.arrow.up") }
                         .disabled(!connected)
                         .accessibilityLabel("Upload file")
+                    Button { showUploadFolder = true } label: { Image(systemName: "folder.badge.gearshape") }
+                        .disabled(!connected)
+                        .accessibilityLabel("Upload folder")
                 }
             }
         }
@@ -151,6 +157,9 @@ struct SFTPBrowserView: View {
         }
         .fileImporter(isPresented: $showUpload, allowedContentTypes: [.data, .item]) { result in
             if case .success(let url) = result { upload(url) }
+        }
+        .fileImporter(isPresented: $showUploadFolder, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result { uploadFolder(url) }
         }
         // Move the streamed-to temp file to the user's chosen location — no
         // in-memory Data, so a large download won't OOM.
@@ -215,6 +224,34 @@ struct SFTPBrowserView: View {
                 try await client.download(childPath(entry.name), toFile: tmp)
                 exportFileURL = tmp
                 showExport = true
+            } catch { self.error = TerminalSession.describe(error) }
+        }
+    }
+
+    private func downloadFolder(_ entry: SFTPEntry) {
+        Task {
+            do {
+                // Stream the tree into a temp folder, then hand the whole folder to
+                // the system file mover (it moves a directory URL wholesale).
+                let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(entry.name)
+                try? FileManager.default.removeItem(at: tmp)
+                busy = true; defer { busy = false }
+                try await client.downloadDirectory(childPath(entry.name), to: tmp)
+                exportFileURL = tmp
+                showExport = true
+            } catch { self.error = TerminalSession.describe(error) }
+        }
+    }
+
+    private func uploadFolder(_ url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        let name = url.lastPathComponent
+        Task {
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                busy = true; defer { busy = false }
+                try await client.uploadDirectory(url, to: childPath(name))
+                await reload()
             } catch { self.error = TerminalSession.describe(error) }
         }
     }

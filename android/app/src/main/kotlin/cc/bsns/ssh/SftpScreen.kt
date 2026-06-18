@@ -1,8 +1,10 @@
 package cc.bsns.ssh
 
+import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.documentfile.provider.DocumentFile
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.DriveFolderUpload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreVert
@@ -80,9 +83,51 @@ private fun byteSize(n: Long): String = when {
     else -> "$n B"
 }
 
-/** An SFTP browser over one host: navigate folders, download, upload, make
- *  folders, delete, rename/move, and change permissions (chmod); mode bits are
- *  shown in the listing. Mirrors the iOS `SFTPBrowserView`. */
+// Recursively copy the remote directory `remotePath` into a new subfolder `name`
+// under `parent` (a SAF tree). Files stream straight from SFTP into each created
+// document — no whole-file buffering. Blocking; call on an IO dispatcher.
+// Returns false on the first failure. A directory symlink lists as a non-dir, so
+// it's fetched as a single file rather than driving an infinite loop.
+private fun downloadTreeInto(
+    client: SftpClient, resolver: ContentResolver, remotePath: String, parent: DocumentFile, name: String,
+): Boolean {
+    val dir = parent.createDirectory(name) ?: return false
+    for (e in client.list(remotePath)) {
+        val child = "$remotePath/${e.name}"
+        if (e.isDirectory) {
+            if (!downloadTreeInto(client, resolver, child, dir, e.name)) return false
+        } else {
+            val doc = dir.createFile("application/octet-stream", e.name) ?: return false
+            val ok = resolver.openOutputStream(doc.uri)?.use { client.downloadTo(child, it) } ?: false
+            if (!ok) return false
+        }
+    }
+    return true
+}
+
+// Recursively upload a SAF source tree `src` to the remote `remotePath` (created,
+// tolerating already-exists). Each file streams up. Blocking; call on IO.
+private fun uploadTree(
+    client: SftpClient, resolver: ContentResolver, src: DocumentFile, remotePath: String,
+): Boolean {
+    client.mkdir(remotePath)   // a real (non-exists) failure surfaces on the file writes below
+    for (child in src.listFiles()) {
+        val name = child.name ?: continue
+        val rchild = "$remotePath/$name"
+        if (child.isDirectory) {
+            if (!uploadTree(client, resolver, child, rchild)) return false
+        } else {
+            val ok = resolver.openInputStream(child.uri)?.use { client.uploadFrom(rchild, it) } ?: false
+            if (!ok) return false
+        }
+    }
+    return true
+}
+
+/** An SFTP browser over one host: navigate folders, download/upload files or
+ *  whole folders (recursively, via SAF document trees), make folders, delete,
+ *  rename/move, and change permissions (chmod); mode bits are shown in the
+ *  listing. Mirrors the iOS `SFTPBrowserView`. */
 @Composable
 fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
     val context = LocalContext.current
@@ -101,6 +146,7 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
     var askNewFolder by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
     var pendingDownload by remember { mutableStateOf<SftpEntry?>(null) }
+    var pendingDirDownload by remember { mutableStateOf<SftpEntry?>(null) }
     var pendingRename by remember { mutableStateOf<SftpEntry?>(null) }
     var renameText by remember { mutableStateOf("") }
     var pendingChmod by remember { mutableStateOf<SftpEntry?>(null) }
@@ -149,6 +195,33 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
             if (ok) { status = null; reload() } else status = "upload failed"
         }
     }
+    // Folder download: the user picks a destination tree; we recreate the remote
+    // folder tree under it and stream each file in.
+    val pickDownloadTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
+        val entry = pendingDirDownload; pendingDirDownload = null
+        if (treeUri != null && entry != null) scope.launch {
+            status = "downloading ${entry.name}…"
+            val root = DocumentFile.fromTreeUri(context, treeUri)
+            val ok = root != null && withContext(Dispatchers.IO) {
+                runCatching { downloadTreeInto(client, context.contentResolver, childPath(entry.name), root, entry.name) }
+                    .getOrDefault(false)
+            }
+            status = if (ok) "saved ${entry.name}" else "folder download failed"; canRetry = false
+        }
+    }
+    // Folder upload: the user picks a source tree; we mkdir it on the server and
+    // stream each file up, recreating subfolders.
+    val pickUploadTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
+        if (treeUri != null) scope.launch {
+            val src = DocumentFile.fromTreeUri(context, treeUri)
+            val name = src?.name ?: "folder"
+            status = "uploading $name…"
+            val ok = src != null && withContext(Dispatchers.IO) {
+                runCatching { uploadTree(client, context.contentResolver, src, childPath(name)) }.getOrDefault(false)
+            }
+            if (ok) { status = null; reload() } else { status = "folder upload failed"; canRetry = false }
+        }
+    }
 
     LaunchedEffect(Unit) { connectThenLoad() }
     DisposableEffect(Unit) { onDispose { Thread { client.close() }.start() } }
@@ -189,6 +262,9 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
                     }
                     IconButton(enabled = connected, onClick = { pickUpload.launch("*/*") }) {
                         Icon(Icons.Default.UploadFile, "upload a file")
+                    }
+                    IconButton(enabled = connected, onClick = { pickUploadTree.launch(null) }) {
+                        Icon(Icons.Default.DriveFolderUpload, "upload a folder")
                     }
                 }
             }
@@ -247,8 +323,10 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
                                     DropdownMenuItem(text = { Text("Permissions") }, onClick = {
                                         menuOpen = false; chmodText = e.permissions.toString(8); pendingChmod = e
                                     })
-                                    if (!e.isDirectory) DropdownMenuItem(text = { Text("Download") }, onClick = {
-                                        menuOpen = false; openEntry(e)
+                                    DropdownMenuItem(text = { Text("Download") }, onClick = {
+                                        menuOpen = false
+                                        if (e.isDirectory) { pendingDirDownload = e; pickDownloadTree.launch(null) }
+                                        else openEntry(e)
                                     })
                                     DropdownMenuItem(text = { Text("Delete") }, onClick = {
                                         menuOpen = false; pendingDelete = e
