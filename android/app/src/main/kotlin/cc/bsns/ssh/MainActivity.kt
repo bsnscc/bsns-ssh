@@ -977,22 +977,44 @@ fun ConnectScreen(
     fun openMosh(p: Int, blob: ByteArray) {
         busy = true; status = "starting mosh-server…"
         val skPem = (key.signer as? FidoSkKey)?.privatePem
+        // Captures why a bootstrap attempt failed (set + read on the same worker
+        // thread, where the native per-thread open-reason is valid).
+        var bootstrapError: String? = null
         val factory: () -> TerminalTransport? = {
+            bootstrapError = null
+            val bridge = SshBridge()
             val out = if (skPem != null)
-                SshBridge().nativeAuthAndExecSk(host, p, user, key.publicKeyBlob, skPem, key.signer,
+                bridge.nativeAuthAndExecSk(host, p, user, key.publicKeyBlob, skPem, key.signer,
                     MoshBootstrap.SERVER_CMD, blob)
-            else SshBridge().nativeAuthAndExec(host, p, user, key.publicKeyBlob, key.signer,
+            else bridge.nativeAuthAndExec(host, p, user, key.publicKeyBlob, key.signer,
                 MoshBootstrap.SERVER_CMD, blob)
-            val conn = MoshBootstrap.parse(out)
-            if (conn != null) {
-                val m = MoshSession(host, conn.port, conn.key)
-                if (m.open(80, 24)) m else null
-            } else null
+            when {
+                // null = the SSH side failed (couldn't reach / wrong key / host-key
+                // mismatch). Report THAT, not a misleading "is mosh on the host?".
+                out == null -> {
+                    bootstrapError = describeOpenFailure(OpenReason.fromCode(bridge.nativeLastOpenReason()))
+                    null
+                }
+                else -> {
+                    val conn = MoshBootstrap.parse(out)
+                    when {
+                        conn == null -> {   // SSH worked but no MOSH CONNECT line — genuinely a mosh-server issue
+                            bootstrapError = "mosh-server didn't start (is mosh installed on the host?)"
+                            null
+                        }
+                        else -> {
+                            val m = MoshSession(host, conn.port, conn.key)
+                            if (m.open(80, 24)) m
+                            else { bootstrapError = "reached the host, but couldn't open the mosh UDP session"; null }
+                        }
+                    }
+                }
+            }
         }
         thread {
             val m = factory()
             if (m != null) main.post { busy = false; onConnected(m, "mosh·$user@$host", factory) }
-            else main.post { busy = false; status = "mosh-server didn't start (is mosh on the host?)" }
+            else { val err = bootstrapError ?: "couldn't start mosh"; main.post { busy = false; status = err } }
         }
     }
 

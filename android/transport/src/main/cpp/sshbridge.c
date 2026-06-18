@@ -22,6 +22,20 @@
 
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "sshbridge", __VA_ARGS__)
 
+// Why the last open on THIS thread failed, so the UI can show something better
+// than one generic error. Set by every connect path (shell, exec/mosh-bootstrap,
+// forwards) and read immediately after on the same (factory) thread — thread-local
+// is safe and needs no locking. Mirrors the categories of iOS TerminalSession.describe.
+enum {
+    OPEN_OK = 0,
+    OPEN_UNREACHABLE,     // TCP connect / bastion tunnel failed
+    OPEN_HANDSHAKE,       // SSH handshake / algorithm policy failed
+    OPEN_AUTH,            // public-key (or sk) auth rejected
+    OPEN_HOST_KEY,        // pinned host key didn't match (possible MITM)
+    OPEN_NO_SHELL,        // authed, but couldn't open the channel / PTY / shell
+};
+static __thread int g_open_reason = OPEN_OK;
+
 static int tcp_connect(const char* host, int port) {
     struct addrinfo hints, *res;
     memset(&hints, 0, sizeof(hints));
@@ -283,9 +297,11 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExec(
     jsize bloblen = (*env)->GetArrayLength(env, jpubblob);
     jbyte* blob = (*env)->GetByteArrayElements(env, jpubblob, 0);
     jstring result = NULL;
+    g_open_reason = OPEN_UNREACHABLE;   // refined as we get further in
     int fd = tcp_connect(host, port);
     if (fd >= 0) {
         LIBSSH2_SESSION* s = open_session(fd);
+        if (!s) g_open_reason = OPEN_HANDSHAKE;
         if (s && jexpectedHostKey != NULL) {
             // Pin the host key (the mosh bootstrap runs after the connect screen's
             // TOFU check — refuse if the key changed underneath us).
@@ -297,6 +313,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExec(
             (*env)->ReleaseByteArrayElements(env, jexpectedHostKey, exp, JNI_ABORT);
             if (mismatch) {
                 LOG("authAndExec: host key mismatch — refusing");
+                g_open_reason = OPEN_HOST_KEY;
                 libssh2_session_disconnect(s, "host key mismatch");
                 libssh2_session_free(s);
                 s = NULL;
@@ -320,11 +337,18 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExec(
                         total += n;
                     }
                     out[total > 0 ? total : 0] = 0;
+                    // SSH side succeeded; a missing MOSH CONNECT in the output is a
+                    // mosh-server problem, not an auth/connect one — keep OK so the
+                    // caller shows "is mosh on the host?" only in that case.
+                    g_open_reason = OPEN_OK;
                     result = (*env)->NewStringUTF(env, out);
                     libssh2_channel_close(c);
                     libssh2_channel_free(c);
+                } else {
+                    g_open_reason = OPEN_NO_SHELL;
                 }
             } else {
+                g_open_reason = OPEN_AUTH;
                 char* msg = NULL;
                 libssh2_session_last_error(s, &msg, NULL, 0);
                 LOG("pubkey auth failed rc=%d: %s", rc, msg ? msg : "");
@@ -421,19 +445,6 @@ static void ssh_client_wake(SshClient* c) {
     if (c && c->wake[1] >= 0) { char b = 1; ssize_t w = write(c->wake[1], &b, 1); (void)w; }
 }
 
-// Why the last open on THIS thread failed, so the UI can show something better
-// than one generic "couldn't open the session". Open runs synchronously on the
-// factory thread, which reads this immediately after — so thread-local is safe
-// and needs no locking. Mirrors the categories of iOS TerminalSession.describe.
-enum {
-    OPEN_OK = 0,
-    OPEN_UNREACHABLE,     // TCP connect / bastion tunnel failed
-    OPEN_HANDSHAKE,       // SSH handshake / algorithm policy failed
-    OPEN_AUTH,            // public-key (or sk) auth rejected
-    OPEN_HOST_KEY,        // pinned host key didn't match (possible MITM)
-    OPEN_NO_SHELL,        // authed, but couldn't open the channel / PTY / shell
-};
-static __thread int g_open_reason = OPEN_OK;
 
 // Relay bytes between the local socketpair end and the bastion's tunnel channel
 // until either side closes. Owns the bastion session exclusively (libssh2 isn't
@@ -843,9 +854,11 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExecSk(
     jsize bloblen = (*env)->GetArrayLength(env, jpubblob);
     jbyte* blob = (*env)->GetByteArrayElements(env, jpubblob, 0);
     jstring result = NULL;
+    g_open_reason = OPEN_UNREACHABLE;   // refined as we get further in
     int fd = tcp_connect(host, port);
     if (fd >= 0) {
         LIBSSH2_SESSION* s = open_session(fd);
+        if (!s) g_open_reason = OPEN_HANDSHAKE;
         if (s && jexpectedHostKey != NULL) {
             size_t hklen = 0; int hktype = 0;
             const char* hk = libssh2_session_hostkey(s, &hklen, &hktype);
@@ -855,6 +868,7 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExecSk(
             (*env)->ReleaseByteArrayElements(env, jexpectedHostKey, exp, JNI_ABORT);
             if (mismatch) {
                 LOG("authAndExecSk: host key mismatch — refusing");
+                g_open_reason = OPEN_HOST_KEY;
                 libssh2_session_disconnect(s, "host key mismatch");
                 libssh2_session_free(s); s = NULL;
             }
@@ -873,10 +887,15 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExecSk(
                         total += n;
                     }
                     out[total > 0 ? total : 0] = 0;
+                    g_open_reason = OPEN_OK;   // SSH OK; a missing MOSH CONNECT = mosh-server problem
                     result = (*env)->NewStringUTF(env, out);
                     libssh2_channel_close(c);
                     libssh2_channel_free(c);
+                } else {
+                    g_open_reason = OPEN_NO_SHELL;
                 }
+            } else {
+                g_open_reason = OPEN_AUTH;
             }
             libssh2_session_disconnect(s, "bye");
             libssh2_session_free(s);
