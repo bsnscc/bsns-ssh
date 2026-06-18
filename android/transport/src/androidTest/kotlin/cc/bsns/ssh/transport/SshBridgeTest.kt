@@ -96,6 +96,38 @@ class SshBridgeTest {
     }
 
     @Test
+    fun sftpRenameAndChmod() {
+        val signer = KeystoreSigner("bsns-spike-key")
+        val bridge = SshBridge()
+        val hostKey = bridge.nativeHostKeyBlob("10.0.2.2", 2222)
+        val authLine = "ecdsa-sha2-nistp256 " +
+            Base64.getEncoder().encodeToString(signer.publicKeyBlob) + " bsns-spike"
+        assertTrue("install", bridge.nativeInstallKey("10.0.2.2", 2222, "tester", "testpw", authLine, hostKey))
+
+        val client = SftpClient("10.0.2.2", 2222, "tester", signer.publicKeyBlob, signer, hostKey)
+        assertTrue("sftp connect", client.connect())
+        try {
+            assertTrue("upload", client.uploadFrom("bsns-rename-src.bin", ByteArray(64).inputStream()))
+
+            // Rename → the new name lists, the old name is gone.
+            assertTrue("rename", client.rename("bsns-rename-src.bin", "bsns-rename-dst.bin"))
+            val names = client.list(".").map { it.name }
+            assertTrue("renamed file present", names.contains("bsns-rename-dst.bin"))
+            assertTrue("old name gone", !names.contains("bsns-rename-src.bin"))
+
+            // chmod 600 → the listing reports the new mode bits.
+            val mode600 = "600".toInt(8)
+            assertTrue("chmod", client.setPermissions("bsns-rename-dst.bin", mode600))
+            val entry = client.list(".").first { it.name == "bsns-rename-dst.bin" }
+            org.junit.Assert.assertEquals("mode is 600", mode600, entry.permissions)
+
+            client.remove("bsns-rename-dst.bin", false)
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
     fun sshSessionStreamsInteractiveOutput() {
         val signer = KeystoreSigner("bsns-spike-key")
         val authLine = "ecdsa-sha2-nistp256 " +

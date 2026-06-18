@@ -3,8 +3,9 @@ package cc.bsns.ssh.transport
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 
-/** One directory entry from an SFTP listing. */
-class SftpEntry(val name: String, val isDirectory: Boolean, val size: Long)
+/** One directory entry from an SFTP listing. `permissions` is the low 12 mode
+ *  bits (0 if the server didn't report them). */
+class SftpEntry(val name: String, val isDirectory: Boolean, val size: Long, val permissions: Int = 0)
 
 /**
  * A persistent SFTP session over its own authenticated libssh2 connection.
@@ -40,9 +41,9 @@ class SftpClient(
         val rows = bridge.nativeSftpList(handle, path)
             ?: throw java.io.IOException("couldn't open directory: $path")
         rows.mapNotNull { row ->
-            val p = row.split('\t', limit = 3)
-            if (p.size < 3) null
-            else SftpEntry(p[2], p[0] == "d", p[1].toLongOrNull() ?: 0L)
+            val p = row.split('\t', limit = 4)
+            if (p.size < 4) null
+            else SftpEntry(p[3], p[0] == "d", p[1].toLongOrNull() ?: 0L, p[2].toIntOrNull(8) ?: 0)
         }.sortedWith(compareByDescending<SftpEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
     }
 
@@ -80,6 +81,12 @@ class SftpClient(
 
     fun mkdir(path: String): Boolean = on { bridge.nativeSftpMkdir(handle, path) }
     fun remove(path: String, isDir: Boolean): Boolean = on { bridge.nativeSftpRemove(handle, path, isDir) }
+
+    /** Rename or move `from` to `to` (both full server paths). */
+    fun rename(from: String, to: String): Boolean = on { bridge.nativeSftpRename(handle, from, to) }
+
+    /** chmod `path` to `mode` (low 12 permission bits, e.g. 0o644). */
+    fun setPermissions(path: String, mode: Int): Boolean = on { bridge.nativeSftpSetPermissions(handle, path, mode) }
 
     fun close() {
         try { on { if (handle != 0L) bridge.nativeSftpClose(handle); handle = 0L } } catch (_: Exception) {}

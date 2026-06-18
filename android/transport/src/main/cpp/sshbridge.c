@@ -1007,7 +1007,9 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeSftpList(
                     LIBSSH2_SFTP_S_ISDIR(attrs.permissions);
         unsigned long long size =
             (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE) ? (unsigned long long)attrs.filesize : 0ULL;
-        snprintf(line, sizeof(line), "%c\t%llu\t%s", isdir ? 'd' : 'f', size, namebuf);
+        unsigned mode =
+            (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) ? (unsigned)(attrs.permissions & 07777) : 0u;
+        snprintf(line, sizeof(line), "%c\t%llu\t%o\t%s", isdir ? 'd' : 'f', size, mode, namebuf);
         if (count == cap) {
             jsize ncap = cap * 2;
             jobjectArray narr = (*env)->NewObjectArray(env, ncap, strCls, NULL);
@@ -1196,6 +1198,47 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeSftpRemove(
     unsigned plen = (unsigned)strlen(path);
     int rc = isDir ? libssh2_sftp_rmdir_ex(c->sftp, path, plen)
                    : libssh2_sftp_unlink_ex(c->sftp, path, plen);
+    (*env)->ReleaseStringUTFChars(env, jpath, path);
+    return rc == 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeSftpRename(
+    JNIEnv* env, jobject thiz, jlong handle, jstring jfrom, jstring jto) {
+    (void)thiz;
+    SftpClient* c = (SftpClient*)(intptr_t)handle;
+    if (!c) return JNI_FALSE;
+    const char* from = (*env)->GetStringUTFChars(env, jfrom, 0);
+    const char* to = (*env)->GetStringUTFChars(env, jto, 0);
+    // overwrite | atomic | native — best-effort POSIX rename/move.
+    long flags = LIBSSH2_SFTP_RENAME_OVERWRITE | LIBSSH2_SFTP_RENAME_ATOMIC |
+                 LIBSSH2_SFTP_RENAME_NATIVE;
+    int rc = libssh2_sftp_rename_ex(c->sftp, from, (unsigned)strlen(from),
+                                    to, (unsigned)strlen(to), flags);
+    if (rc != 0)
+        LOG("sftp rename '%s'->'%s' failed rc=%d sftperr=%lu", from, to, rc,
+            libssh2_sftp_last_error(c->sftp));
+    (*env)->ReleaseStringUTFChars(env, jfrom, from);
+    (*env)->ReleaseStringUTFChars(env, jto, to);
+    return rc == 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_cc_bsns_ssh_transport_SshBridge_nativeSftpSetPermissions(
+    JNIEnv* env, jobject thiz, jlong handle, jstring jpath, jint mode) {
+    (void)thiz;
+    SftpClient* c = (SftpClient*)(intptr_t)handle;
+    if (!c) return JNI_FALSE;
+    const char* path = (*env)->GetStringUTFChars(env, jpath, 0);
+    LIBSSH2_SFTP_ATTRIBUTES attrs;
+    memset(&attrs, 0, sizeof(attrs));
+    attrs.flags = LIBSSH2_SFTP_ATTR_PERMISSIONS;
+    attrs.permissions = (unsigned long)(mode & 07777);
+    int rc = libssh2_sftp_stat_ex(c->sftp, path, (unsigned)strlen(path),
+                                  LIBSSH2_SFTP_SETSTAT, &attrs);
+    if (rc != 0)
+        LOG("sftp setstat '%s' mode=%o failed rc=%d sftperr=%lu", path, mode & 07777,
+            rc, libssh2_sftp_last_error(c->sftp));
     (*env)->ReleaseStringUTFChars(env, jpath, path);
     return rc == 0 ? JNI_TRUE : JNI_FALSE;
 }

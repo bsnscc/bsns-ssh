@@ -53,7 +53,7 @@ class SshBridge {
     // SFTP — its own authenticated session (handle, 0 on failure). Serialise all
     // calls onto one thread (libssh2 isn't thread-safe).
     external fun nativeSftpOpen(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, expectedHostKey: ByteArray?): Long
-    /** Each row is "d\t<size>\t<name>" or "f\t<size>\t<name>"; null if path unreadable. */
+    /** Each row is "d\t<size>\t<octal-mode>\t<name>" (or "f\t…"); null if path unreadable. */
     external fun nativeSftpList(handle: Long, path: String): Array<String>?
     external fun nativeSftpRead(handle: Long, path: String): ByteArray?
     external fun nativeSftpWrite(handle: Long, path: String, data: ByteArray): Boolean
@@ -67,6 +67,9 @@ class SshBridge {
     external fun nativeSftpCloseFile(fileHandle: Long)
     external fun nativeSftpMkdir(handle: Long, path: String): Boolean
     external fun nativeSftpRemove(handle: Long, path: String, isDir: Boolean): Boolean
+    external fun nativeSftpRename(handle: Long, from: String, to: String): Boolean
+    /** chmod: `mode` is the low 12 permission bits (e.g. 0o644). */
+    external fun nativeSftpSetPermissions(handle: Long, path: String, mode: Int): Boolean
     external fun nativeSftpClose(handle: Long)
 
     // Local (-L) port forwarding — one connection hosts several forwards. open()

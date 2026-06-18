@@ -46,6 +46,13 @@ final class SFTPClient: @unchecked Sendable {
     private static let REALPATH: Int32 = 2
     // SFTP status code: the directory already exists — a benign mkdir failure.
     private static let FX_FILE_ALREADY_EXISTS: UInt = 11
+    // rename flags: overwrite | atomic | native (best-effort POSIX rename).
+    private static let RENAME_FLAGS: Int = 0x07
+    // setstat type for libssh2_sftp_stat_ex, + the permissions attr flag.
+    private static let SETSTAT: Int32 = 2
+    private static let ATTR_PERMISSIONS: UInt = 0x00000004
+    // Just the mode bits (incl. setuid/setgid/sticky), masking off the file-type.
+    static let MODE_MASK: UInt32 = 0o7777
 
     /// Connect, authenticate, and open the SFTP subsystem. Rethrows the SSH
     /// host-key / auth errors so the UI can run its TOFU prompt and retry.
@@ -257,6 +264,33 @@ final class SFTPClient: @unchecked Sendable {
                             : libssh2_sftp_unlink_ex(sftp, c, UInt32(strlen(c)))
             }
             if rc != 0 { throw SFTPError.op("Couldn't delete \(path).") }
+        }
+    }
+
+    /// Rename (or move) `from` to `to`. Both are full server paths; a different
+    /// parent directory in `to` moves the entry. Overwrites an existing target.
+    func rename(_ from: String, to: String) async throws {
+        try await run {
+            guard let sftp = self.sftp else { throw SFTPError.initFailed }
+            let rc = from.withCString { f in
+                to.withCString { t in
+                    libssh2_sftp_rename_ex(sftp, f, UInt32(strlen(f)), t, UInt32(strlen(t)), Self.RENAME_FLAGS)
+                }
+            }
+            if rc != 0 { throw SFTPError.op("Couldn't rename \(from).") }
+        }
+    }
+
+    /// Change the permission bits of `path` (chmod). `mode` is the low 12 bits
+    /// (e.g. 0o644); the file-type bits are ignored.
+    func setPermissions(_ path: String, mode: UInt32) async throws {
+        try await run {
+            guard let sftp = self.sftp else { throw SFTPError.initFailed }
+            var attrs = LIBSSH2_SFTP_ATTRIBUTES()
+            attrs.flags = Self.ATTR_PERMISSIONS
+            attrs.permissions = UInt(mode & Self.MODE_MASK)
+            let rc = path.withCString { libssh2_sftp_stat_ex(sftp, $0, UInt32(strlen($0)), Self.SETSTAT, &attrs) }
+            if rc != 0 { throw SFTPError.op("Couldn't change permissions on \(path).") }
         }
     }
 

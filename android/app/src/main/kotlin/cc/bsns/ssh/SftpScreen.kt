@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,8 +23,11 @@ import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.HorizontalDivider
@@ -76,8 +80,9 @@ private fun byteSize(n: Long): String = when {
     else -> "$n B"
 }
 
-/** A minimal SFTP browser over one host: navigate folders, download, upload,
- *  make folders, delete. Mirrors the iOS `SFTPBrowserView`. */
+/** An SFTP browser over one host: navigate folders, download, upload, make
+ *  folders, delete, rename/move, and change permissions (chmod); mode bits are
+ *  shown in the listing. Mirrors the iOS `SFTPBrowserView`. */
 @Composable
 fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
     val context = LocalContext.current
@@ -96,6 +101,10 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
     var askNewFolder by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
     var pendingDownload by remember { mutableStateOf<SftpEntry?>(null) }
+    var pendingRename by remember { mutableStateOf<SftpEntry?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var pendingChmod by remember { mutableStateOf<SftpEntry?>(null) }
+    var chmodText by remember { mutableStateOf("") }
 
     fun childPath(name: String) = if (path == ".") name else "$path/$name"
 
@@ -197,6 +206,7 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
             }
             LazyColumn(Modifier.fillMaxSize()) {
                 items(entries, key = { it.name }) { e ->
+                    var menuOpen by remember(e.name) { mutableStateOf(false) }
                     Row(
                         Modifier.fillMaxWidth().clickable { openEntry(e) }.padding(vertical = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -213,13 +223,37 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
                             Text(e.name, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (e.permissions != 0) {
+                                Text(
+                                    e.permissions.toString(8),
+                                    fontFamily = FontFamily.Monospace, fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(end = 8.dp),
+                                )
+                            }
                             Text(
                                 if (e.isDirectory) "" else byteSize(e.size),
                                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            IconButton(onClick = { pendingDelete = e }) {
-                                Icon(Icons.Default.DeleteOutline, "delete",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Box {
+                                IconButton(onClick = { menuOpen = true }) {
+                                    Icon(Icons.Default.MoreVert, "actions",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                    DropdownMenuItem(text = { Text("Rename") }, onClick = {
+                                        menuOpen = false; renameText = e.name; pendingRename = e
+                                    })
+                                    DropdownMenuItem(text = { Text("Permissions") }, onClick = {
+                                        menuOpen = false; chmodText = e.permissions.toString(8); pendingChmod = e
+                                    })
+                                    if (!e.isDirectory) DropdownMenuItem(text = { Text("Download") }, onClick = {
+                                        menuOpen = false; openEntry(e)
+                                    })
+                                    DropdownMenuItem(text = { Text("Delete") }, onClick = {
+                                        menuOpen = false; pendingDelete = e
+                                    })
+                                }
                             }
                         }
                     }
@@ -275,6 +309,49 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
                 }) { Text("Create") }
             },
             dismissButton = { TextButton(onClick = { askNewFolder = false; newFolderName = "" }) { Text("Cancel") } },
+        )
+    }
+
+    pendingRename?.let { e ->
+        AlertDialog(
+            onDismissRequest = { pendingRename = null; renameText = "" },
+            title = { Text("Rename ${e.name}") },
+            text = { OutlinedTextField(renameText, { renameText = it }, label = { Text("new name") }) },
+            confirmButton = {
+                TextButton(onClick = {
+                    val newName = renameText.trim(); pendingRename = null; renameText = ""
+                    if (newName.isNotEmpty() && newName != e.name && !newName.contains('/')) scope.launch {
+                        val ok = withContext(Dispatchers.IO) { client.rename(childPath(e.name), childPath(newName)) }
+                        if (ok) reload() else { status = "couldn't rename ${e.name}"; canRetry = false }
+                    }
+                }) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { pendingRename = null; renameText = "" }) { Text("Cancel") } },
+        )
+    }
+
+    pendingChmod?.let { e ->
+        AlertDialog(
+            onDismissRequest = { pendingChmod = null; chmodText = "" },
+            title = { Text("Permissions for ${e.name}") },
+            text = {
+                Column {
+                    Text("Octal mode, e.g. 644 for a file or 755 for a folder.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedTextField(chmodText, { chmodText = it }, label = { Text("mode") })
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val text = chmodText.trim(); val target = e; pendingChmod = null; chmodText = ""
+                    val mode = text.toIntOrNull(8)
+                    if (mode != null) scope.launch {
+                        val ok = withContext(Dispatchers.IO) { client.setPermissions(childPath(target.name), mode) }
+                        if (ok) reload() else { status = "couldn't change permissions on ${target.name}"; canRetry = false }
+                    } else { status = "enter the mode in octal, e.g. 644"; canRetry = false }
+                }) { Text("Apply") }
+            },
+            dismissButton = { TextButton(onClick = { pendingChmod = null; chmodText = "" }) { Text("Cancel") } },
         )
     }
 }

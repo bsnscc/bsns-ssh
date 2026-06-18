@@ -2,9 +2,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 import BsnsSSHCore
 
-/// A minimal SFTP file browser over one host: navigate folders, download files,
-/// upload, make folders, delete. Authenticates through the agent (same as the
-/// shell) and runs the first-connection host-key prompt inline.
+/// An SFTP file browser over one host: navigate folders, download files, upload,
+/// make folders, delete, rename/move, and change permissions (chmod). Mode bits
+/// are shown in the listing. Authenticates through the agent (same as the shell)
+/// and runs the first-connection host-key prompt inline.
 struct SFTPBrowserView: View {
     let host: String
     let port: UInt16
@@ -24,6 +25,10 @@ struct SFTPBrowserView: View {
     @State private var error: String?
     @State private var pendingHostKey: HostKey?
     @State private var pendingDelete: SFTPEntry?
+    @State private var pendingRename: SFTPEntry?
+    @State private var renameText = ""
+    @State private var pendingChmod: SFTPEntry?
+    @State private var chmodText = ""
 
     @State private var showUpload = false
     @State private var newFolderName = ""
@@ -44,6 +49,10 @@ struct SFTPBrowserView: View {
                                 .foregroundStyle(entry.isDirectory ? .blue : .secondary)
                             Text(entry.name).foregroundStyle(.primary)
                             Spacer()
+                            let mode = entry.permissions & SFTPClient.MODE_MASK
+                            if mode != 0 {
+                                Text(String(mode, radix: 8)).font(.caption2).monospaced().foregroundStyle(.tertiary)
+                            }
                             if entry.isDirectory {
                                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
                             } else {
@@ -56,6 +65,14 @@ struct SFTPBrowserView: View {
                         if !entry.isDirectory {
                             Button("Download") { download(entry) }.tint(.blue)
                         }
+                    }
+                    .contextMenu {
+                        Button { startRename(entry) } label: { Label("Rename", systemImage: "pencil") }
+                        Button { startChmod(entry) } label: { Label("Permissions", systemImage: "lock.shield") }
+                        if !entry.isDirectory {
+                            Button { download(entry) } label: { Label("Download", systemImage: "square.and.arrow.down") }
+                        }
+                        Button(role: .destructive) { pendingDelete = entry } label: { Label("Delete", systemImage: "trash") }
                     }
                 }
                 if let error {
@@ -114,6 +131,23 @@ struct SFTPBrowserView: View {
             TextField("name", text: $newFolderName)
             Button("Create") { makeFolder() }
             Button("Cancel", role: .cancel) { newFolderName = "" }
+        }
+        .alert("Rename \(pendingRename?.name ?? "")", isPresented: Binding(
+            get: { pendingRename != nil }, set: { if !$0 { pendingRename = nil } }
+        )) {
+            TextField("new name", text: $renameText)
+            Button("Rename") { renameEntry() }
+            Button("Cancel", role: .cancel) { pendingRename = nil; renameText = "" }
+        }
+        .alert("Permissions for \(pendingChmod?.name ?? "")", isPresented: Binding(
+            get: { pendingChmod != nil }, set: { if !$0 { pendingChmod = nil } }
+        )) {
+            TextField("octal mode (e.g. 644)", text: $chmodText)
+                .keyboardType(.numberPad)
+            Button("Apply") { changePermissions() }
+            Button("Cancel", role: .cancel) { pendingChmod = nil; chmodText = "" }
+        } message: {
+            Text("Enter the permission bits in octal, e.g. 644 for a file or 755 for a folder.")
         }
         .fileImporter(isPresented: $showUpload, allowedContentTypes: [.data, .item]) { result in
             if case .success(let url) = result { upload(url) }
@@ -210,6 +244,42 @@ struct SFTPBrowserView: View {
     private func remove(_ entry: SFTPEntry) {
         Task {
             do { try await client.remove(childPath(entry.name), isDirectory: entry.isDirectory); await reload() }
+            catch { self.error = TerminalSession.describe(error) }
+        }
+    }
+
+    private func startRename(_ entry: SFTPEntry) {
+        renameText = entry.name
+        pendingRename = entry
+    }
+
+    private func renameEntry() {
+        guard let entry = pendingRename else { return }
+        let newName = renameText.trimmingCharacters(in: .whitespaces)
+        pendingRename = nil; renameText = ""
+        guard !newName.isEmpty, newName != entry.name,
+              !newName.contains("/") else { return }   // a rename stays in this folder
+        Task {
+            do { try await client.rename(childPath(entry.name), to: childPath(newName)); await reload() }
+            catch { self.error = TerminalSession.describe(error) }
+        }
+    }
+
+    private func startChmod(_ entry: SFTPEntry) {
+        chmodText = String(entry.permissions & SFTPClient.MODE_MASK, radix: 8)
+        pendingChmod = entry
+    }
+
+    private func changePermissions() {
+        guard let entry = pendingChmod else { return }
+        let text = chmodText.trimmingCharacters(in: .whitespaces)
+        pendingChmod = nil; chmodText = ""
+        guard let mode = UInt32(text, radix: 8) else {
+            self.error = "Enter the mode in octal, e.g. 644."
+            return
+        }
+        Task {
+            do { try await client.setPermissions(childPath(entry.name), mode: mode); await reload() }
             catch { self.error = TerminalSession.describe(error) }
         }
     }

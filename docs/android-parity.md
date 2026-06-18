@@ -44,7 +44,7 @@ ported + cross-verified) is now wired into the app across passes P3–P6 below.
 | Install key on host (ssh-copy-id) | ✅ | 🟡 password path in connect | P3 |
 | Known-hosts manager UI | ✅ | ✅ `KnownHostsScreen` (list trusted + forget) | **DONE** |
 | Per-connection key picker | ✅ | ✅ `KeyPicker` on connect screen | **DONE** |
-| SFTP file browser | ✅ | ✅ `SftpScreen` + `SftpClient` + JNI SFTP subsystem | **P4 DONE** (list/nav/download/upload/mkdir/delete) |
+| SFTP file browser | ✅ | ✅ `SftpScreen` + `SftpClient` + JNI SFTP subsystem | **P4 DONE** (list/nav/download/upload/mkdir/delete/rename/chmod; mode bits shown in the listing) |
 | Settings (theme/font/cursor/bell/keepawake) | ✅ | ✅ `SettingsScreen` (theme/font/scrollback/cursor-shape+blink/bell/keep-awake/key-bar) | **DONE** |
 | App lock (biometric/passcode) | ✅ | ✅ `LockScreen` + BiometricPrompt, re-lock on background | **DONE** |
 | Encrypted config export/import + review | ✅ | ✅ `BackupScreen` + `ConfigBundle` + `:core` `ConfigEnvelope` | **P6 DONE** |
