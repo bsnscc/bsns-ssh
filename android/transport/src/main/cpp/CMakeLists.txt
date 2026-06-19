@@ -18,5 +18,9 @@ find_library(log-lib log)
 
 add_library(sshbridge SHARED sshbridge.c mosh_bridge.cpp)
 target_include_directories(sshbridge PRIVATE ${PREBUILT}/include)
+# Align ELF segments to 16 KB so the library loads on Android's 16 KB-page
+# devices (required by Google Play for apps targeting Android 15+). The bundled
+# androidx .so is already 16 KB-aligned; this brings ours in line.
+target_link_options(sshbridge PRIVATE "-Wl,-z,max-page-size=16384")
 # Order matters for static linking: libssh2 → ssl/crypto/z; libmosh → crypto.
 target_link_libraries(sshbridge mosh ssh2 ssl crypto z ${log-lib})
