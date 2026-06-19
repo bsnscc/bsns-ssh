@@ -30,7 +30,8 @@ enum ConfigSync {
         guard sync.autoEnabled, let pass = sync.loadPassphrase() else { return }
         guard let data = try? sync.pull(), let bundle = try? ConfigService.decode(data, passphrase: pass) else { return }
         // Snippets come across too (synced ones land with run-on-connect off in apply()).
-        let selection = ConfigService.ImportSelection(hosts: true, settings: true, knownHosts: true, keys: true, snippets: true)
+        let selection = ConfigService.ImportSelection(hosts: true, settings: true, knownHosts: true,
+                                                      keys: true, securityKeys: true, snippets: true)
         await ConfigService.apply(bundle, selection: selection, hosts: hosts, knownHosts: knownHosts, agent: agent, snippets: snippets)
     }
 }

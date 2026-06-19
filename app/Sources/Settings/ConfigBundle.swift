@@ -3,21 +3,34 @@ import CryptoKit
 import CommonCrypto
 import BsnsSSHCore
 
-/// A portable snapshot of the app's configuration. Hosts, settings and trusted
-/// host keys are always included; software private keys only when the user opts
-/// in (and only inside an encrypted bundle).
+/// A portable snapshot of the app's configuration. Hosts, settings, trusted
+/// host keys, and security-key handles are always included; software private
+/// keys only when the user opts in (and only inside an encrypted bundle).
 struct ConfigBundle: Codable {
     var version = 1
     var hosts: [SavedHost]
     var knownHosts: KnownHosts
     var settings: SettingsSnapshot
     var keys: [ExportedKey]?
+    var securityKeys: [ExportedSecurityKey]?
     var snippets: [Snippet]?
 }
 
 struct ExportedKey: Codable {
     var algorithm: String   // KeyAlgorithm raw value
     var material: Data       // private key material (JSON-encoded as base64)
+    var comment: String
+}
+
+struct ExportedSecurityKey: Codable {
+    /// "webauthn" for iOS/WebAuthn-backed keys, "fido2" for native OpenSSH FIDO2.
+    var kind: String
+    /// Public authorized_keys blob. This is public material, not a private key.
+    var publicBlob: Data
+    /// FIDO credential handle needed to ask the same physical key to sign.
+    var credentialID: Data
+    /// WebAuthn rpId or OpenSSH FIDO application string baked into the key.
+    var application: String?
     var comment: String
 }
 
@@ -117,7 +130,9 @@ extension SettingsSnapshot {
 }
 
 extension ConfigBundle {
-    enum CodingKeys: String, CodingKey { case version, hosts, knownHosts, settings, keys, snippets }
+    enum CodingKeys: String, CodingKey {
+        case version, hosts, knownHosts, settings, keys, securityKeys, snippets
+    }
 
     /// A host as it may appear in *either* platform's bundle: iOS writes
     /// `id`/`label`/`keyID`; Android omits id/label and writes `keyId`.
@@ -153,6 +168,7 @@ extension ConfigBundle {
         }
         settings = (try? c.decodeIfPresent(SettingsSnapshot.self, forKey: .settings)) ?? .defaults()
         keys = try? c.decodeIfPresent([ExportedKey].self, forKey: .keys) ?? nil
+        securityKeys = try? c.decodeIfPresent([ExportedSecurityKey].self, forKey: .securityKeys) ?? nil
         snippets = try? c.decodeIfPresent([Snippet].self, forKey: .snippets) ?? nil
     }
 

@@ -39,8 +39,8 @@ struct ConfigBackupView: View {
                 Text("Export")
             } footer: {
                 Text(passphrase.isEmpty
-                     ? "Without a passphrase the file is plain JSON (hosts, settings, trusted hosts). Set one to encrypt; only then can private keys be included."
-                     : "Encrypted with your passphrase (AES-256-GCM). Keep it safe — it can't be recovered.")
+                     ? "Without a passphrase the file is plain JSON (hosts, settings, trusted hosts, and security-key metadata). Set one to encrypt; only then can private keys be included."
+                     : "Encrypted with your passphrase (AES-256-GCM). Security-key metadata is included; private keys are included only when selected. Keep the passphrase safe — it can't be recovered.")
             }
 
             Section {
@@ -48,7 +48,7 @@ struct ConfigBackupView: View {
             } header: {
                 Text("Import")
             } footer: {
-                Text("Review what a bundle contains before merging. Trusted host keys and private keys are opt-in.")
+                Text("Review what a bundle contains before merging. Trusted host keys, private keys, and snippets are opt-in.")
             }
 
             Section {
@@ -72,7 +72,7 @@ struct ConfigBackupView: View {
             } header: {
                 Text("Sync")
             } footer: {
-                Text("Keeps an encrypted copy of your hosts, settings, and trusted hosts in a folder you choose — iCloud Drive, Google Drive, Dropbox, anything in Files. The provider only ever sees ciphertext; no account, no server. The passphrase stays on this device.")
+                Text("Keeps an encrypted copy of your hosts, settings, trusted hosts, snippets, and security-key metadata in a folder you choose — iCloud Drive, Google Drive, Dropbox, anything in Files. The provider only ever sees ciphertext; no account, no server. The passphrase stays on this device.")
             }
 
             if let status {
@@ -191,9 +191,16 @@ struct ConfigBackupView: View {
         Task {
             await ConfigService.apply(bundle, selection: selection, hosts: hosts, knownHosts: knownHosts, agent: agent, snippets: snippets)
             var parts: [String] = []
-            if selection.hosts { parts.append("\(bundle.hosts.count) host(s)") }
-            if selection.knownHosts { parts.append("\(bundle.knownHosts.allEntries.count) trusted host(s)") }
-            if selection.keys { parts.append("\(bundle.keys?.count ?? 0) key(s)") }
+            if selection.hosts, bundle.hosts.isEmpty == false { parts.append("\(bundle.hosts.count) host(s)") }
+            if selection.knownHosts, bundle.knownHosts.allEntries.isEmpty == false {
+                parts.append("\(bundle.knownHosts.allEntries.count) trusted host(s)")
+            }
+            if selection.keys, let count = bundle.keys?.count, count > 0 {
+                parts.append("\(count) private key(s)")
+            }
+            if selection.securityKeys, let count = bundle.securityKeys?.count, count > 0 {
+                parts.append("\(count) security-key handle(s)")
+            }
             set("Imported \(parts.isEmpty ? "settings" : parts.joined(separator: ", ")).", error: false)
         }
     }
@@ -202,8 +209,9 @@ struct ConfigBackupView: View {
 }
 
 /// Shows what an import bundle contains and lets the user choose what to apply.
-/// Hosts + settings default on; trusted host keys and private keys are opt-in
-/// because each weakens a security guarantee (TOFU; key custody).
+/// Hosts, settings, and security-key handles default on; trusted host keys,
+/// private keys, and snippets are opt-in because each weakens a security
+/// guarantee (TOFU; key custody; executable config).
 struct ImportReviewView: View {
     let bundle: ConfigBundle
     let onImport: (ConfigService.ImportSelection) -> Void
@@ -212,6 +220,7 @@ struct ImportReviewView: View {
 
     private var trustedCount: Int { bundle.knownHosts.allEntries.count }
     private var keyCount: Int { bundle.keys?.count ?? 0 }
+    private var securityKeyCount: Int { bundle.securityKeys?.count ?? 0 }
     private var snippetCount: Int { bundle.snippets?.count ?? 0 }
     private var runOnConnectCount: Int { bundle.snippets?.filter(\.runOnConnect).count ?? 0 }
 
@@ -222,6 +231,8 @@ struct ImportReviewView: View {
                     Toggle("\(bundle.hosts.count) saved host(s)", isOn: $selection.hosts)
                         .disabled(bundle.hosts.isEmpty)
                     Toggle("App settings", isOn: $selection.settings)
+                    Toggle("\(securityKeyCount) security-key handle(s)", isOn: $selection.securityKeys)
+                        .disabled(securityKeyCount == 0)
                 }
                 Section {
                     Toggle("\(trustedCount) trusted host key(s)", isOn: $selection.knownHosts)
@@ -235,7 +246,7 @@ struct ImportReviewView: View {
                 } footer: {
                     Text("Trusted host keys pre-trust those servers, skipping the first-connection verification prompt. Private keys are added to your agent and can sign on your behalf. Snippets are commands — imported ones won't run on connect until you enable that yourself"
                          + (runOnConnectCount > 0 ? " (\(runOnConnectCount) were marked run-on-connect)." : ".")
-                         + " Only enable these for a bundle you created and trust.")
+                         + " Security-key handles contain no private key material, but need the same physical security key to sign. Only enable sensitive items for a bundle you created and trust.")
                 }
             }
             .navigationTitle("Review import")

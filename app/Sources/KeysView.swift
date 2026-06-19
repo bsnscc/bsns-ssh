@@ -126,7 +126,7 @@ struct KeysView: View {
                     ? "A Secure Enclave key never leaves this device and asks for Face ID each time it signs — but it can't be backed up, so if you lose this device you're locked out of any server that only trusts it. Enroll a second key on another device as a backup.\n\n"
                     : ""
                 Text(enclaveNote
-                    + "Software keys back up + sync across your devices (Settings → Backup) — a good everyday key. Portable FIDO2 resident keys can use one authorized_keys line across supported phones with the same physical key. Secure Enclave is strongest for this device only.\n\nAdvanced — a smart card (PIV) makes a plain ECDSA key every server accepts. Use RSA only for older gear that can't accept Ed25519 or ECDSA.")
+                    + "Software keys back up + sync across your devices (Settings → Backup) — a good everyday key. iOS security-key handles also sync, so the same YubiKey works on another iPhone or iPad with the same authorized_keys line. Portable OpenSSH FIDO2 keys can share one line with Android when native FIDO2 is available. Secure Enclave is strongest for this device only.\n\nAdvanced — a smart card (PIV) makes a plain ECDSA key every server accepts. Use RSA only for older gear that can't accept Ed25519 or ECDSA.")
             }
 
             Section {
@@ -219,7 +219,7 @@ private struct FidoSecurityKeySheet: View {
                     Button("Create with iOS prompt") { runCreateApple() }
                         .disabled(busy)
                 } footer: {
-                    Text("Uses Apple's USB-C/NFC security-key prompt and asks for the PIN itself. This creates a separate WebAuthn-backed authorized_keys line and cannot import an existing portable key.")
+                    Text("Uses Apple's USB-C/NFC security-key prompt and asks for the PIN itself. This creates an iOS-backed authorized_keys line that syncs to other iOS devices through Settings > Backup, but it cannot import an existing portable OpenSSH key.")
                 }
 
                 if busy {

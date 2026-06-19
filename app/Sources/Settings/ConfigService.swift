@@ -18,6 +18,10 @@ enum ConfigService {
                             comment: $0.publicKey.comment)
             }
         }
+        let securityKeys = agent.exportableSecurityKeyMetadata()
+        if securityKeys.isEmpty == false {
+            bundle.securityKeys = securityKeys
+        }
         let json = try JSONEncoder().encode(bundle)
         if let pass = passphrase, !pass.isEmpty {
             return try ConfigCrypto.encrypt(json, passphrase: pass)
@@ -46,15 +50,16 @@ enum ConfigService {
         return bundle
     }
 
-    /// What the user chose to import. Hosts and settings are low-risk and on by
-    /// default; the two security-sensitive categories are opt-in: importing
-    /// trusted host keys pre-trusts servers (bypassing the TOFU prompt), and
-    /// importing private keys loads extractable key material into the agent.
+    /// What the user chose to import. Hosts/settings/security-key handles default
+    /// on; trusted host keys, private keys, and executable snippets are opt-in.
+    /// Security-key handles are not private key material, but the same physical
+    /// security key is still required to sign on the importing device.
     struct ImportSelection {
         var hosts = true
         var settings = true
         var knownHosts = false
         var keys = false
+        var securityKeys = true
         var snippets = false   // executable config → opt-in; imported ones never run-on-connect
     }
 
@@ -70,6 +75,11 @@ enum ConfigService {
                    let key = try? FileKey.from(algorithm: algo, privateKeyMaterial: k.material, comment: k.comment) {
                     await agent.importKey(key)
                 }
+            }
+        }
+        if selection.securityKeys {
+            for key in bundle.securityKeys ?? [] {
+                await agent.importSecurityKeyMetadata(key)
             }
         }
         if selection.snippets {

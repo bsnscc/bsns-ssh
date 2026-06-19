@@ -57,7 +57,8 @@ enum KeyStore {
         try persist(account: key.id.rawValue, Stored(
             algorithm: key.algorithm.rawValue,
             material: key.publicKey.blob,
-            comment: key.publicKey.comment, kind: "webauthn", credentialID: key.credentialID))
+            comment: key.publicKey.comment, kind: "webauthn",
+            credentialID: key.credentialID, application: key.application))
     }
 
     static func saveFido2(_ key: Fido2SecurityKey) throws {
@@ -118,6 +119,7 @@ enum KeyStore {
             if stored.kind == "webauthn" {
                 return WebAuthnSecurityKey.make(publicBlob: stored.material,
                                                 credentialID: stored.credentialID ?? Data(),
+                                                application: stored.application ?? WebAuthnCoordinator.relyingPartyID,
                                                 comment: stored.comment)
             }
             if stored.kind == "fido2" {

@@ -36,7 +36,7 @@ enum WebAuthnError: LocalizedError {
 @MainActor
 final class WebAuthnCoordinator: NSObject {
     static let shared = WebAuthnCoordinator()
-    static let relyingPartyID = "tools.bsns.cc"
+    nonisolated static let relyingPartyID = "tools.bsns.cc"
 
     private var continuation: CheckedContinuation<ASAuthorization, Error>?
 
@@ -68,10 +68,11 @@ final class WebAuthnCoordinator: NSObject {
     /// credential identified by `credentialID`. Blocks on a user tap (+ PIN/UV if
     /// the key requires it). The returned blob is complete (its own format string +
     /// trailer) — the caller sends it verbatim via `libssh2_userauth_publickey_raw`.
-    func assert(data: Data, credentialID: Data) async throws -> Data {
+    func assert(data: Data, credentialID: Data,
+                relyingPartyID: String = WebAuthnCoordinator.relyingPartyID) async throws -> Data {
         guard #available(iOS 16.0, *) else { throw WebAuthnError.unsupportedOS }
         let provider = ASAuthorizationSecurityKeyPublicKeyCredentialProvider(
-            relyingPartyIdentifier: Self.relyingPartyID)
+            relyingPartyIdentifier: relyingPartyID)
         let request = provider.createCredentialAssertionRequest(challenge: data)
         request.allowedCredentials = [
             ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor(
@@ -89,7 +90,7 @@ final class WebAuthnCoordinator: NSObject {
         // them into the signed message and the ED flag must agree with their presence.
         let extensions = WebAuthnSignature.authenticatorExtensions(assertion.rawAuthenticatorData)
         let origin = Self.origin(fromClientDataJSON: assertion.rawClientDataJSON)
-            ?? "https://\(Self.relyingPartyID)"
+            ?? "https://\(relyingPartyID)"
         return try WebAuthnSignature.signatureBlob(
             derSignature: signature, flags: flags, counter: counter,
             origin: origin, clientDataJSON: assertion.rawClientDataJSON, extensions: extensions)

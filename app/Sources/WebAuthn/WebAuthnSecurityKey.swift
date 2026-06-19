@@ -19,16 +19,23 @@ struct WebAuthnSecurityKey: KeyBackend {
     var requiresUserPresence: Bool { true }
     /// The FIDO credential id, supplied to each assertion's allow-list.
     let credentialID: Data
+    /// The WebAuthn relying-party id baked into the SSH public key.
+    let application: String
 
-    static func make(publicBlob: Data, credentialID: Data, comment: String) -> WebAuthnSecurityKey {
+    static func make(publicBlob: Data, credentialID: Data,
+                     application: String = WebAuthnCoordinator.relyingPartyID,
+                     comment: String) -> WebAuthnSecurityKey {
         WebAuthnSecurityKey(
             id: KeyID(SSHKeyFormat.fingerprint(ofPublicKeyBlob: publicBlob)),
             publicKey: SSHPublicKey(blob: publicBlob, algorithm: .ecdsaSK, comment: comment),
-            credentialID: credentialID)
+            credentialID: credentialID,
+            application: application)
     }
 
     func sign(_ data: Data, context: SignContext) async throws -> SSHSignature {
-        let blob = try await WebAuthnCoordinator.shared.assert(data: data, credentialID: credentialID)
+        let blob = try await WebAuthnCoordinator.shared.assert(data: data,
+                                                               credentialID: credentialID,
+                                                               relyingPartyID: application)
         return SSHSignature(blob: blob)
     }
 }

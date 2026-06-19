@@ -139,6 +139,29 @@ final class AgentStore {
     /// Software keys currently held (for export).
     func exportableKeys() -> [FileKey] { KeyStore.loadFileKeys() }
 
+    /// Security-key metadata currently held. This contains no private key
+    /// material; it is the public blob plus the credential handle needed to ask
+    /// the same hardware key to sign on another iOS device.
+    func exportableSecurityKeyMetadata() -> [ExportedSecurityKey] {
+        KeyStore.loadAll().compactMap { key in
+            if let webauthn = key as? WebAuthnSecurityKey {
+                return ExportedSecurityKey(kind: "webauthn",
+                                           publicBlob: webauthn.publicKey.blob,
+                                           credentialID: webauthn.credentialID,
+                                           application: webauthn.application,
+                                           comment: webauthn.publicKey.comment)
+            }
+            if let fido = key as? Fido2SecurityKey {
+                return ExportedSecurityKey(kind: "fido2",
+                                           publicBlob: fido.publicKey.blob,
+                                           credentialID: fido.credentialID,
+                                           application: fido.application,
+                                           comment: fido.publicKey.comment)
+            }
+            return nil
+        }
+    }
+
     /// Import a software key from a config bundle, skipping duplicates.
     func importKey(_ key: FileKey) async {
         let existing = Set(identities.map { SSHKeyFormat.fingerprint(ofPublicKeyBlob: $0.blob) })
@@ -151,6 +174,44 @@ final class AgentStore {
         await refresh()
     }
 
+    /// Import hardware security-key metadata from a config bundle, skipping
+    /// duplicates. The physical key is still required for every signature.
+    @discardableResult
+    func importSecurityKeyMetadata(_ metadata: ExportedSecurityKey) async -> Bool {
+        guard metadata.credentialID.isEmpty == false,
+              Self.isPlausibleSecurityKeyBlob(metadata.publicBlob) else { return false }
+        let id = SSHKeyFormat.fingerprint(ofPublicKeyBlob: metadata.publicBlob)
+        let existing = Set(identities.map { SSHKeyFormat.fingerprint(ofPublicKeyBlob: $0.blob) })
+        guard !existing.contains(id) else { return false }
+
+        switch metadata.kind {
+        case "webauthn":
+            let key = WebAuthnSecurityKey.make(publicBlob: metadata.publicBlob,
+                                               credentialID: metadata.credentialID,
+                                               application: metadata.application ?? WebAuthnCoordinator.relyingPartyID,
+                                               comment: metadata.comment.isEmpty ? "iOS security key" : metadata.comment)
+            do { try KeyStore.saveWebAuthn(key) }
+            catch { DiagLog.log("keystore", "security-key metadata import save failed: \(error.localizedDescription)"); return false }
+            await agent.add(key)
+            hardwareKeyIDs.insert(key.id.rawValue)
+            securityKeyIDs.insert(key.id.rawValue)
+        case "fido2":
+            let key = Fido2SecurityKey.make(publicBlob: metadata.publicBlob,
+                                            credentialID: metadata.credentialID,
+                                            application: metadata.application ?? Fido2Coordinator.application,
+                                            comment: metadata.comment.isEmpty ? "FIDO2 security key" : metadata.comment)
+            do { try KeyStore.saveFido2(key) }
+            catch { DiagLog.log("keystore", "security-key metadata import save failed: \(error.localizedDescription)"); return false }
+            await agent.add(key)
+            hardwareKeyIDs.insert(key.id.rawValue)
+            securityKeyIDs.insert(key.id.rawValue)
+        default:
+            return false
+        }
+        await refresh()
+        return true
+    }
+
     func deleteKey(_ identity: SSHPublicKey) async {
         let id = KeyID(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
         KeyStore.delete(id)
@@ -159,5 +220,15 @@ final class AgentStore {
         yubiKeyIDs.remove(id.rawValue)
         securityKeyIDs.remove(id.rawValue)
         await refresh()
+    }
+
+    private static func isPlausibleSecurityKeyBlob(_ blob: Data) -> Bool {
+        guard blob.count >= 4 else { return false }
+        let bytes = [UInt8](blob)
+        let len = (UInt32(bytes[0]) << 24) | (UInt32(bytes[1]) << 16) |
+            (UInt32(bytes[2]) << 8) | UInt32(bytes[3])
+        guard len > 0, len <= 128, blob.count >= 4 + Int(len) else { return false }
+        let algorithm = String(decoding: bytes[4 ..< 4 + Int(len)], as: UTF8.self)
+        return algorithm == KeyAlgorithm.ecdsaSK.rawValue
     }
 }
