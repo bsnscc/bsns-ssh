@@ -146,21 +146,35 @@ void mosh_client_fb_dims(MoshClient* c, int* cols, int* rows) {
 
 char* mosh_client_drain_ansi(MoshClient* c) {
   if (!c || !c->transport) return nullptr;
-  const uint64_t num = c->transport->get_remote_state_num();
-  if (c->rendered && num == c->lastStateNum) return nullptr;
-  c->lastStateNum = num;
-  // Diff the new remote framebuffer against the one we last emitted so the ANSI
-  // carries only the delta (cursor moves, changed cells). The first frame uses
-  // initialized=false for a full repaint; after that we diff lastFb -> fb.
-  const Terminal::Framebuffer& fb = c->transport->get_latest_remote_state().state.get_fb();
-  const std::string ansi = c->display.new_frame(c->rendered, c->lastFb, fb);
-  c->lastFb = fb;
-  c->rendered = true;
-  char* out = static_cast<char*>(malloc(ansi.size() + 1));
-  if (!out) return nullptr;
-  memcpy(out, ansi.data(), ansi.size());
-  out[ansi.size()] = '\0';
-  return out;
+  try {
+    const uint64_t num = c->transport->get_remote_state_num();
+    if (c->rendered && num == c->lastStateNum) return nullptr;
+    c->lastStateNum = num;
+    // Diff the new remote framebuffer against the one we last emitted so the ANSI
+    // carries only the delta (cursor moves, changed cells). The first frame uses
+    // initialized=false for a full repaint; after that we diff lastFb -> fb.
+    const Terminal::Framebuffer& fb = c->transport->get_latest_remote_state().state.get_fb();
+    const std::string ansi = c->display.new_frame(c->rendered, c->lastFb, fb);
+    c->lastFb = fb;
+    c->rendered = true;
+    char* out = static_cast<char*>(malloc(ansi.size() + 1));
+    if (!out) return nullptr;
+    memcpy(out, ansi.data(), ansi.size());
+    out[ansi.size()] = '\0';
+    return out;
+  } catch (const Network::NetworkException& e) {
+    c->lastError = e.what();
+    c->rendered = false;
+    return nullptr;
+  } catch (const std::exception& e) {
+    c->lastError = e.what();
+    c->rendered = false;
+    return nullptr;
+  } catch (...) {
+    c->lastError = "mosh framebuffer render failed";
+    c->rendered = false;
+    return nullptr;
+  }
 }
 
 const char* mosh_client_last_error(MoshClient* c) {

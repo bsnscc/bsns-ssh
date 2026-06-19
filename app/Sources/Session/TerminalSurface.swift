@@ -1,5 +1,6 @@
 import UIKit
 import AudioToolbox
+import QuartzCore
 import SwiftTerm
 
 /// The persistent UIKit terminal for one session: the `TerminalView`, its
@@ -16,6 +17,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     var onZoomChange: ((CGFloat) -> Void)?
     private var foregroundObservers: [NSObjectProtocol] = []
     private var foregroundRefreshWork: DispatchWorkItem?
+    private var lastForegroundResyncAt: CFTimeInterval = 0
 
     init(session: TerminalSession, themeId: String, fontFamily: String, fontSize: CGFloat) {
         self.session = session
@@ -107,17 +109,23 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     /// (bypassing the drag debounce) and repaint locally, then repeat once after
     /// the foreground transition settles.
     func resyncAfterForeground() {
+        let now = CACurrentMediaTime()
+        guard now - lastForegroundResyncAt > 0.15 else { return }
+        lastForegroundResyncAt = now
         foregroundRefreshWork?.cancel()
-        forceCurrentSizeAndRedraw()
 
+        let early = DispatchWorkItem { [weak self] in self?.forceCurrentSizeAndRedraw() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: early)
         let work = DispatchWorkItem { [weak self] in self?.forceCurrentSizeAndRedraw() }
         foregroundRefreshWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: work)
     }
 
     private func forceCurrentSizeAndRedraw() {
+        guard view.window != nil, view.bounds.width > 1, view.bounds.height > 1 else { return }
         view.layoutIfNeeded()
         let terminal = view.getTerminal()
+        guard terminal.cols > 0, terminal.rows > 0 else { return }
         sendResize(cols: terminal.cols, rows: terminal.rows, force: true)
         terminal.updateFullScreen()
         view.setNeedsDisplay(view.bounds)

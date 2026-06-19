@@ -60,6 +60,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var pendingInput: [UInt8] = []
     private var pendingResize: (Int32, Int32)?
     private var resumeRequested = false
+    private var lastResumeRequestAt: TimeInterval = 0
     private var stopRequested = false
     private var closeNotified = false
 
@@ -90,7 +91,15 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         // backstop — since either alone has proven unreliable in a SwiftUI-scene app.
         let resume: (Notification) -> Void = { [weak self] _ in
             guard let self else { return }
-            self.lock.lock(); self.resumeRequested = true; self.lock.unlock()
+            let now = Date().timeIntervalSinceReferenceDate
+            self.lock.lock()
+            let shouldWake = now - self.lastResumeRequestAt > 0.75
+            if shouldWake {
+                self.lastResumeRequestAt = now
+                self.resumeRequested = true
+            }
+            self.lock.unlock()
+            guard shouldWake else { return }
             self.wake()
         }
         for name in [UIApplication.willEnterForegroundNotification, UIApplication.didBecomeActiveNotification] {
