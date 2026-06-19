@@ -9,6 +9,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,13 +23,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.CreateNewFolder
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.DriveFolderUpload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -256,16 +254,20 @@ fun SftpScreen(target: SftpTarget, onClose: () -> Unit) {
                     fontFamily = FontFamily.Monospace, fontSize = 15.sp,
                     color = MaterialTheme.colorScheme.primary,
                 )
-                Row {
-                    IconButton(enabled = connected, onClick = { askNewFolder = true }) {
-                        Icon(Icons.Default.CreateNewFolder, "new folder")
-                    }
-                    IconButton(enabled = connected, onClick = { pickUpload.launch("*/*") }) {
-                        Icon(Icons.Default.UploadFile, "upload a file")
-                    }
-                    IconButton(enabled = connected, onClick = { pickUploadTree.launch(null) }) {
-                        Icon(Icons.Default.DriveFolderUpload, "upload a folder")
-                    }
+                Text("SFTP", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TextButton(enabled = connected, onClick = { askNewFolder = true }) {
+                    Text("New folder", fontSize = 13.sp)
+                }
+                TextButton(enabled = connected, onClick = { pickUpload.launch("*/*") }) {
+                    Text("Upload file", fontSize = 13.sp)
+                }
+                TextButton(enabled = connected, onClick = { pickUploadTree.launch(null) }) {
+                    Text("Upload folder", fontSize = 13.sp)
                 }
             }
             status?.let {

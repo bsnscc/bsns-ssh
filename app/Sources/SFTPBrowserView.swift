@@ -43,6 +43,20 @@ struct SFTPBrowserView: View {
                 if busy && entries.isEmpty {
                     HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) }
                 }
+                if connected {
+                    Section {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                Button("New folder") { askNewFolder = true }
+                                    .buttonStyle(.bordered)
+                                Button("Upload file") { showUpload = true }
+                                    .buttonStyle(.bordered)
+                                Button("Upload folder") { showUploadFolder = true }
+                                    .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
                 ForEach(entries) { entry in
                     Button { open(entry) } label: {
                         HStack {
@@ -93,15 +107,14 @@ struct SFTPBrowserView: View {
                     }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { askNewFolder = true } label: { Image(systemName: "folder.badge.plus") }
-                        .disabled(!connected)
-                        .accessibilityLabel("New folder")
-                    Button { showUpload = true } label: { Image(systemName: "square.and.arrow.up") }
-                        .disabled(!connected)
-                        .accessibilityLabel("Upload file")
-                    Button { showUploadFolder = true } label: { Image(systemName: "folder.badge.gearshape") }
-                        .disabled(!connected)
-                        .accessibilityLabel("Upload folder")
+                    Menu {
+                        Button { askNewFolder = true } label: { Label("New folder", systemImage: "folder.badge.plus") }
+                        Button { showUpload = true } label: { Label("Upload file", systemImage: "square.and.arrow.up") }
+                        Button { showUploadFolder = true } label: { Label("Upload folder", systemImage: "folder.badge.gearshape") }
+                    } label: {
+                        Label("Actions", systemImage: "ellipsis.circle")
+                    }
+                    .disabled(!connected)
                 }
             }
         }

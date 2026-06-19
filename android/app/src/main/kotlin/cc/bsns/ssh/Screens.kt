@@ -166,10 +166,10 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
 
             Section(
                 title = "Add a FIDO2 security key",
-                footer = "Creates or imports a resident sk-ecdsa credential using application ssh:bsns. " +
-                    "The private key never leaves the token. The same resident credential can be used by " +
-                    "bsns.SSH on Android and iOS with one authorized_keys line, as long as the phone can " +
-                    "talk to the key and the server supports OpenSSH FIDO2 security-key auth.",
+                footer = "Create a portable SSH security-key credential on your YubiKey, or import one " +
+                    "already on the key. The private key never leaves the token. One authorized_keys " +
+                    "line can work on Android and iOS when the phone can talk to the key and the server " +
+                    "supports OpenSSH FIDO2.",
             ) {
                 Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(fidoPin, { fidoPin = it }, label = { Text("Security-key PIN") },
@@ -177,15 +177,15 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(enabled = fidoPin.isNotEmpty(), onClick = {
                             val pin = fidoPin
-                            fidoStatus = "enrolling…"
+                            fidoStatus = "creating…"
                             thread {
                                 val result = runCatching { keyManager.enrollFido(pin) }
                                 mainHandler.post {
-                                    result.onSuccess { fidoPin = ""; fidoStatus = "enrolled"; refresh() }
-                                        .onFailure { fidoStatus = it.message ?: "couldn't enroll the security key" }
+                                    result.onSuccess { fidoPin = ""; fidoStatus = "created"; refresh() }
+                                        .onFailure { fidoStatus = it.message ?: "couldn't create the security-key credential" }
                                 }
                             }
-                        }) { Text("Create new") }
+                        }) { Text("Create on key") }
                         OutlinedButton(enabled = fidoPin.isNotEmpty(), onClick = {
                             val pin = fidoPin
                             fidoStatus = "importing…"
@@ -194,12 +194,12 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                                 mainHandler.post {
                                     result.onSuccess { count ->
                                         fidoPin = ""
-                                        fidoStatus = if (count == 0) "already in the agent" else "imported"
+                                        fidoStatus = if (count == 0) "already added" else "imported"
                                         refresh()
                                     }.onFailure { fidoStatus = it.message ?: "couldn't import the security key" }
                                 }
                             }
-                        }) { Text("Use existing") }
+                        }) { Text("Import from key") }
                     }
                     fidoStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
                 }

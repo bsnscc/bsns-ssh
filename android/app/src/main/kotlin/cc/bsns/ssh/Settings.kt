@@ -131,7 +131,7 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
                 RowDivider()
                 SettingToggle("Keep screen awake while connected", keepAwake) { keepAwake = it; store.keepAwake = it }
                 RowDivider()
-                SettingToggle("Show key bar", showKeyBar) { showKeyBar = it; store.showKeyBar = it }
+                SettingToggle("Show terminal shortcut bar", showKeyBar) { showKeyBar = it; store.showKeyBar = it }
             }
 
             Section(

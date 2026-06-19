@@ -164,12 +164,12 @@ struct KeysView: View {
         .sheet(isPresented: $showYubiKey) { YubiKeyEnrollView() }
         .alert("Add a FIDO2 security key", isPresented: $showFidoEnroll) {
             TextField("Label", text: $fidoName)
-            SecureField("FIDO2 PIN", text: $fidoPin)
+            SecureField("Security-key PIN", text: $fidoPin)
             Button("Cancel", role: .cancel) { fidoPin = "" }
-            Button("Create New") {
+            Button("Create on key") {
                 let pin = fidoPin.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !pin.isEmpty else {
-                    genError = "Enter the security key's FIDO2 PIN first."
+                    genError = "Enter the security-key PIN first."
                     return
                 }
                 Task {
@@ -177,29 +177,29 @@ struct KeysView: View {
                         try await store.enrollSecurityKey(name: fidoName, pin: pin)
                         fidoPin = ""
                     }
-                    catch { genError = "Couldn't enroll the security key: \(error.localizedDescription)" }
+                    catch { genError = "Couldn't create the security-key credential: \(error.localizedDescription)" }
                 }
             }
-            Button("Use Existing") {
+            Button("Import from key") {
                 let pin = fidoPin.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !pin.isEmpty else {
-                    genError = "Enter the security key's FIDO2 PIN first."
+                    genError = "Enter the security-key PIN first."
                     return
                 }
                 Task {
                     do {
                         let imported = try await store.importSecurityKeys(pin: pin)
                         fidoPin = ""
-                        if imported == 0 { genError = "That FIDO2 credential is already in the agent." }
+                        if imported == 0 { genError = "That security-key credential is already added." }
                     }
                     catch { genError = "Couldn't import the security key: \(error.localizedDescription)" }
                 }
             }
         } message: {
             Text("""
-            Create or import a resident OpenSSH FIDO2 credential using application ssh:bsns. The private key never leaves the security key.
+            Create a portable SSH security-key credential on your YubiKey, or import one already on the key. The private key never leaves the token.
 
-            The same resident credential can be used by bsns.SSH on iOS and Android with one authorized_keys line, as long as the phone can talk to the key and the server supports OpenSSH FIDO2 security-key auth. Keep a backup key so a lost one doesn't lock you out.
+            One authorized_keys line can work on iOS and Android when the phone can talk to the key and the server supports OpenSSH FIDO2. Keep a backup key so a lost one doesn't lock you out.
             """)
         }
     }

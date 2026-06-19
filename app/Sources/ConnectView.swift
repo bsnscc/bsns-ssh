@@ -169,12 +169,12 @@ struct ConnectView: View {
                         // Always visible so it works on touch (not just pointer); hover just
                         // brightens it. Loads the host and connects in one tap.
                         Button { loadHost(entry); attemptConnect() } label: {
-                            Image(systemName: "bolt.horizontal.circle.fill").font(.title2).symbolRenderingMode(.hierarchical)
+                            Text("Connect").font(.callout.weight(.medium))
                         }
                         .buttonStyle(.borderless)
                         .foregroundStyle(Brand.accent)
-                        .help("Quick connect")
-                        .accessibilityLabel("Quick connect to \(entry.label.isEmpty ? "\(entry.user)@\(entry.host)" : entry.label)")
+                        .help("Connect")
+                        .accessibilityLabel("Connect to \(entry.label.isEmpty ? "\(entry.user)@\(entry.host)" : entry.label)")
                         .disabled(busy)
                         .opacity(hoveredHostID == entry.id ? 1 : 0.7)
                     }

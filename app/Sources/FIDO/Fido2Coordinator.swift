@@ -16,7 +16,7 @@ enum Fido2Error: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .locked:
-            return "Enter the security key's FIDO2 PIN in Keys, then try again."
+            return "Enter the security-key PIN in Keys, then try again."
         case .unsupportedKey:
             return "That security key did not return an ES256 P-256 FIDO2 credential."
         case .noConnection:

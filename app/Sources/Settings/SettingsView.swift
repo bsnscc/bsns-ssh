@@ -58,7 +58,7 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Show key bar", isOn: $showKeyBar)
+                Toggle("Show terminal shortcut bar", isOn: $showKeyBar)
                 Toggle("Pinch to zoom", isOn: $pinchZoom)
                 Toggle("Use Option as Meta", isOn: $optionAsMeta)
             } header: {

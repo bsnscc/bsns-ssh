@@ -47,7 +47,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.History
@@ -1253,11 +1252,13 @@ fun ConnectScreen(
                                     if (h.useMosh) Text("mosh", fontSize = 11.sp, color = Brand.accent)
                                 }
                                 // One-tap connect (load + connect), mirroring iOS quick-connect.
-                                IconButton(enabled = !busy, onClick = {
-                                    loadHost(); status = "connecting to ${h.label}…"; quickConnectTick++
-                                }) {
-                                    Icon(Icons.Default.Bolt, "quick connect", tint = MaterialTheme.colorScheme.primary)
-                                }
+                                OutlinedButton(
+                                    enabled = !busy,
+                                    contentPadding = PaddingValues(horizontal = 12.dp),
+                                    onClick = {
+                                        loadHost(); status = "connecting to ${h.label}…"; quickConnectTick++
+                                    },
+                                ) { Text("Connect", fontSize = 13.sp) }
                                 IconButton(onClick = { pendingRemove = h }) {
                                     Icon(Icons.Default.Close, "remove", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
@@ -1317,12 +1318,12 @@ fun ConnectScreen(
 
             if (hasJump) {
                 Text("Via a jump host, only an interactive shell is supported for now — " +
-                    "mosh, Files, Tunnels, and Install key go direct and are disabled.",
+                    "mosh, the file browser, tunnels, and key install go direct and are disabled.",
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (fidoKey) {
-                Text("FIDO2 security keys connect directly to a shell or mosh — Files, " +
-                    "Tunnels, and jump hosts aren't supported with these keys yet.",
+                Text("FIDO2 security keys connect directly to a shell or mosh — the file browser, " +
+                    "tunnels, and jump hosts aren't supported with these keys yet.",
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
 
@@ -1343,7 +1344,7 @@ fun ConnectScreen(
                                 onSftp(SftpTarget(host, p, user, key.publicKeyBlob, key.signer, blob))
                             }
                         }
-                    }) { Text("Files") }
+                    }) { Text("Browse files") }
 
                     OutlinedButton(enabled = !busy && !hasJump && !fidoKey, onClick = {
                         if (forwardsActive) onReopenForwards()
