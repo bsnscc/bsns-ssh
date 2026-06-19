@@ -72,7 +72,12 @@ class SyncStore(context: Context) {
  * the manual backup, so the two interoperate.
  */
 object ConfigSync {
-    private const val FILE = "bsns-config-aesgcm-v1.json"
+    // Shared cross-platform sync filename (matches iOS SyncStore.fileName), so a
+    // folder synced between an iOS and an Android device points at one file.
+    private const val FILE = "bsns-ssh-sync.json"
+    // The original Android-only name; still read so a device that synced before
+    // the rename keeps finding its bundle.
+    private const val LEGACY_FILE = "bsns-config-aesgcm-v1.json"
 
     private fun sha256(b: ByteArray): String =
         Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(b))
@@ -90,8 +95,9 @@ object ConfigSync {
         val hash = sha256(plain)
         if (hash == store.lastHash) return "already up to date"
         val sealed = ConfigEnvelope.encrypt(plain, pass)
-        val existing = dir.findFile(FILE)
-        val file = existing ?: dir.createFile("application/json", FILE) ?: return "couldn't write to the folder"
+        // Always write the canonical (cross-platform) name so iOS finds it, even
+        // if a legacy-named file is still present from before the rename.
+        val file = dir.findFile(FILE) ?: dir.createFile("application/json", FILE) ?: return "couldn't write to the folder"
         context.contentResolver.openOutputStream(file.uri, "wt")?.use { it.write(sealed) } ?: return "write failed"
         store.lastHash = hash
         return "synced up"
@@ -103,7 +109,7 @@ object ConfigSync {
         val store = SyncStore(context)
         val pass = store.passphrase ?: return null
         val dir = folder(context, store) ?: return null
-        val file = dir.findFile(FILE)?.takeIf { it.isFile } ?: return null
+        val file = (dir.findFile(FILE) ?: dir.findFile(LEGACY_FILE))?.takeIf { it.isFile } ?: return null
         val sealed = context.contentResolver.openInputStream(file.uri)?.use { it.readBytes() } ?: return null
         val plain = runCatching { ConfigEnvelope.decrypt(sealed, pass) }.getOrNull() ?: return null
         val o = ConfigBundle.parse(plain)

@@ -23,10 +23,15 @@ object ConfigBundle {
 
         val hosts = JSONArray()
         HostStore(context).load().forEach {
-            val o = JSONObject().put("host", it.host).put("port", it.port).put("user", it.user)
+            // Also emit `id` + `label`, which iOS's SavedHost requires, and the
+            // `keyID` spelling iOS reads — so even an iOS build without the
+            // cross-platform tolerant decoder can import an Android bundle. iOS
+            // dedupes hosts by host/user/port, so a fresh id per export is fine.
+            val o = JSONObject().put("id", java.util.UUID.randomUUID().toString())
+                .put("label", it.label).put("host", it.host).put("port", it.port).put("user", it.user)
             if (it.jump != null) o.put("jump", it.jump)
             if (it.group != null) o.put("group", it.group)
-            if (it.keyId != null) o.put("keyId", it.keyId)
+            if (it.keyId != null) { o.put("keyId", it.keyId); o.put("keyID", it.keyId) }
             if (it.useMosh) o.put("useMosh", true)
             hosts.put(o)
         }
@@ -124,15 +129,27 @@ object ConfigBundle {
                 val port = h.optInt("port", 22)
                 val user = h.optString("user").trim()
                 if (host.isEmpty() || user.isEmpty() || port !in 1..65535) continue
+                // iOS spells the key id `keyID`; accept either.
+                val keyId = h.optString("keyID").ifEmpty { h.optString("keyId") }.ifEmpty { null }
                 hostStore.add(SavedHost(host, port, user,
                     h.optString("jump").ifEmpty { null }, h.optString("group").ifEmpty { null },
-                    h.optString("keyId").ifEmpty { null }, h.optBoolean("useMosh", false))); hosts++
+                    keyId, h.optBoolean("useMosh", false))); hosts++
             }
         }
         if (sel.knownHosts) o.optJSONObject("knownHosts")?.let { kh ->
             val store = KnownHostsStore(context)
-            kh.keys().forEach { id ->
-                val blob = runCatching { Base64.getDecoder().decode(kh.getString(id)) }.getOrNull()
+            // Two on-the-wire shapes: Android's flat `{ id: base64 }` and iOS's
+            // nested `{ entries: { id: { keyType, blob } } }`. Descend into
+            // `entries` when present, then read each value as either a base64
+            // string (Android) or an object with a `blob` field (iOS).
+            val map = kh.optJSONObject("entries") ?: kh
+            map.keys().forEach { id ->
+                val b64 = when (val v = map.opt(id)) {
+                    is JSONObject -> v.optString("blob").ifEmpty { null }
+                    is String -> v.ifEmpty { null }
+                    else -> null
+                }
+                val blob = b64?.let { runCatching { Base64.getDecoder().decode(it) }.getOrNull() }
                 if (id.isNotBlank() && blob != null && isPlausibleHostKey(blob)) {
                     store.trustRaw(id, blob); known++
                 }
