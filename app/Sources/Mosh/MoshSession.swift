@@ -61,6 +61,8 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var pendingInput: [UInt8] = []
     private var pendingResize: (Int32, Int32)?
     private var resumeRequested = false
+    private var appInForeground = true
+    private var pendingForegroundRecovery = false
     private var lastResumeRequestAt: TimeInterval = 0
     private var stopRequested = false
     private var closeNotified = false
@@ -95,6 +97,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             let now = Date().timeIntervalSinceReferenceDate
             self.lock.lock()
             let shouldWake = now - self.lastResumeRequestAt > 0.75
+            self.appInForeground = true
             if shouldWake {
                 self.lastResumeRequestAt = now
                 self.resumeRequested = true
@@ -108,6 +111,14 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             foregroundObservers.append(
                 NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil, using: resume))
         }
+        foregroundObservers.append(
+            NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { [weak self] note in
+                guard let self else { return }
+                self.lock.lock()
+                self.appInForeground = false
+                self.lock.unlock()
+                moshLog("background note=\(note.name.rawValue)")
+            })
         queue.async { [weak self] in self?.runLoop() }
         return nil
     }
@@ -148,7 +159,12 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             // Apply staged commands before blocking.
             lock.lock()
             let stop = stopRequested
-            let resume = resumeRequested; resumeRequested = false
+            let resume = resumeRequested
+            let foregroundRecovery = resume ? pendingForegroundRecovery : false
+            if resume {
+                resumeRequested = false
+                pendingForegroundRecovery = false
+            }
             let input = pendingInput; pendingInput.removeAll(keepingCapacity: true)
             let resize = pendingResize; pendingResize = nil
             lock.unlock()
@@ -166,6 +182,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 // our suspended UDP socket — hop to a fresh one on the SAME connection
                 // (preserves the crypto sequence the server's replay-protection needs;
                 // a brand-new client would be rejected). mosh auto-hops only after 10s.
+                let needsRecoveryWiggle = foregroundRecovery || silent > Self.staleThreshold
                 if silent > Self.staleThreshold {
                     moshLog("resume hop begin")
                     mosh_client_hop(c)
@@ -174,7 +191,10 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 // Re-assert the terminal size (server redraws to match) and force a
                 // full repaint — fixes the framebuffer/viewport desync that leaves the
                 // screen wrapping at the wrong row with a gap after resume.
-                moshLog("resume resize/repaint begin")
+                moshLog("resume resize/repaint begin recovery=\(needsRecoveryWiggle)")
+                if needsRecoveryWiggle, rows > 1 {
+                    mosh_client_resize(c, cols, rows - 1)
+                }
                 mosh_client_resize(c, cols, rows)
                 mosh_client_force_repaint(c)
                 moshLog("resume resize/repaint end")
@@ -229,21 +249,15 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 mosh_client_recv(c)
                 lastContactAt = Date()
                 if recovering {
-                    // Recovered after a stale gap (background → resume). Two things,
-                    // both of which a manual resize was doing for us:
-                    // (1) force our renderer to redraw ABSOLUTELY, not as a diff
-                    //     against the stale pre-gap baseline (else stray cells);
-                    // (2) nudge the SERVER to redraw + re-home its cursor with a real
-                    //     size change. A server-side TUI like tmux only re-homes the
-                    //     cursor on SIGWINCH, so a no-op resize leaves the cursor (and
-                    //     typed echo) landing on the wrong row / the status bar. The
-                    //     brief rows-1 wiggle forces two SIGWINCHes ending at the real
-                    //     size (mosh's UserStream delivers both, it doesn't coalesce).
-                    moshLog("recovering stale datagram: resize wiggle begin ask=\(cols)x\(rows)")
-                    if rows > 1 { mosh_client_resize(c, cols, rows - 1) }
-                    mosh_client_resize(c, cols, rows)
-                    mosh_client_force_repaint(c)
-                    moshLog("recovering stale datagram: resize wiggle end")
+                    lock.lock()
+                    let foreground = appInForeground
+                    if !foreground { pendingForegroundRecovery = true }
+                    lock.unlock()
+                    guard foreground else {
+                        moshLog("recovering stale datagram deferred until foreground ask=\(cols)x\(rows)")
+                        continue
+                    }
+                    forceForegroundRecovery(c, reason: "stale datagram")
                 }
             }
             mosh_client_tick(c)
@@ -272,6 +286,21 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             if stale != staleReported { staleReported = stale; onLiveness?(stale) }
         }
         teardown()
+    }
+
+    private func forceForegroundRecovery(_ c: OpaquePointer, reason: String) {
+        // Recovered after a stale gap (background → resume). Two things, both of
+        // which a manual resize was doing for us:
+        // (1) force our renderer to redraw ABSOLUTELY, not as a diff against the
+        //     stale pre-gap baseline (else stray cells);
+        // (2) nudge the SERVER to redraw + re-home its cursor with a real size
+        //     change. tmux/screen only reliably re-home on SIGWINCH, so rows-1 →
+        //     rows forces two SIGWINCHes ending at the real size.
+        moshLog("foreground recovery begin reason=\(reason) ask=\(cols)x\(rows)")
+        if rows > 1 { mosh_client_resize(c, cols, rows - 1) }
+        mosh_client_resize(c, cols, rows)
+        mosh_client_force_repaint(c)
+        moshLog("foreground recovery end reason=\(reason)")
     }
 
     private func teardown() {

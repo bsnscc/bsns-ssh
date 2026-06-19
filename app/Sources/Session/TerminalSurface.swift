@@ -60,6 +60,10 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
             foregroundObservers.append(
                 NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main, using: refresh))
         }
+        foregroundObservers.append(
+            NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.cancelForegroundRefreshForBackground() }
+            })
     }
 
     deinit {
@@ -109,6 +113,10 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     /// (bypassing the drag debounce) and repaint locally, then repeat once after
     /// the foreground transition settles.
     func resyncAfterForeground() {
+        guard UIApplication.shared.applicationState != .background else {
+            DiagLog.log("terminal", "foreground resync skipped: app background")
+            return
+        }
         let now = CACurrentMediaTime()
         guard now - lastForegroundResyncAt > 0.15 else {
             DiagLog.log("terminal", "foreground resync skipped duplicate")
@@ -125,7 +133,17 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: work)
     }
 
+    private func cancelForegroundRefreshForBackground() {
+        foregroundRefreshWork?.cancel()
+        foregroundRefreshWork = nil
+        DiagLog.log("terminal", "foreground redraw cancelled: background")
+    }
+
     private func forceCurrentSizeAndRedraw() {
+        guard UIApplication.shared.applicationState != .background else {
+            DiagLog.log("terminal", "redraw skipped: app background")
+            return
+        }
         guard view.window != nil else {
             DiagLog.log("terminal", "redraw skipped: no window")
             return
@@ -166,6 +184,10 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     private var pendingResize: DispatchWorkItem?
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        guard UIApplication.shared.applicationState != .background else {
+            DiagLog.log("terminal", "resize skipped: app background \(newCols)x\(newRows)")
+            return
+        }
         // No-op suppression — the same size during a drag costs nothing.
         if newCols == lastSentCols && newRows == lastSentRows { return }
         pendingResize?.cancel()
@@ -181,6 +203,10 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     }
 
     private func sendResize(cols: Int, rows: Int, force: Bool) {
+        guard UIApplication.shared.applicationState != .background else {
+            DiagLog.log("terminal", "send resize skipped: app background \(cols)x\(rows)")
+            return
+        }
         guard cols > 0, rows > 0 else { return }
         pendingResize?.cancel()
         pendingResize = nil
