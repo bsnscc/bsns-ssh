@@ -20,7 +20,6 @@ import com.yubico.yubikit.fido.ctap.ClientPin
 import com.yubico.yubikit.fido.ctap.Ctap2Session
 import com.yubico.yubikit.fido.ctap.PinUvAuthProtocolV2
 import com.yubico.yubikit.fido.webauthn.AuthenticatorData
-import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -45,7 +44,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 object FidoKeyManager {
     const val APPLICATION = "ssh:bsns"
     private val main = Handler(Looper.getMainLooper())
-    private val log = LoggerFactory.getLogger("bsns.fido")
     private var activity: Activity? = null
     private var kit: YubiKitManager? = null
     private var pin: CharArray? = null
@@ -206,12 +204,9 @@ object FidoKeyManager {
         var last: java.io.IOException? = null
         for (attempt in 1..6) {
             try {
-                val s = create()
-                if (attempt > 1) log.info("ctap session opened on attempt {}", attempt)
-                return s
+                return create()
             } catch (e: java.io.IOException) {
                 last = e
-                log.warn("ctap open attempt {}/6 failed: {}", attempt, e.message)
                 try { Thread.sleep(200L * attempt) } catch (ignored: InterruptedException) {}
             }
         }

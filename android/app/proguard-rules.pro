@@ -25,12 +25,6 @@
 -keep class org.bouncycastle.** { *; }
 -dontwarn org.bouncycastle.**
 
-# --- SLF4J capture sink (loaded by ServiceLoader, so R8 can't see it) ---------
--keep class cc.bsns.ssh.diag.BsnsSlf4jProvider { *; }
--keep class cc.bsns.ssh.diag.** { *; }
--keep class org.slf4j.** { *; }
--dontwarn org.slf4j.**
-
 # --- YubiKit (smartcard reflection) ------------------------------------------
 -keep class com.yubico.** { *; }
 -dontwarn javax.smartcardio.**

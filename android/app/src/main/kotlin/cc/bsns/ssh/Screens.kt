@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -54,7 +53,6 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
     var yubiStatus by remember { mutableStateOf<String?>(null) }
     var fidoPin by remember { mutableStateOf("") }
     var fidoStatus by remember { mutableStateOf<String?>(null) }
-    var fidoError by remember { mutableStateOf<String?>(null) }   // diagnostic: full stack trace
     var protectedStatus by remember { mutableStateOf<String?>(null) }
     val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
@@ -180,21 +178,11 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                     OutlinedButton(enabled = fidoPin.isNotEmpty(), onClick = {
                         val pin = fidoPin
                         fidoStatus = "enrolling…"
-                        cc.bsns.ssh.diag.LogBuffer.clear()
                         thread {
                             val result = runCatching { keyManager.enrollFido(pin) }
                             mainHandler.post {
                                 result.onSuccess { fidoPin = ""; fidoStatus = "enrolled"; refresh() }
-                                    .onFailure {
-                                        fidoStatus = it.message ?: "couldn't enroll the security key"
-                                        fidoError = buildString {
-                                            append("device: ").append(android.os.Build.MODEL)
-                                            append("  android ").append(android.os.Build.VERSION.SDK_INT).append('\n')
-                                            append(it.stackTraceToString())
-                                            append("\n\n--- transport log ---\n")
-                                            append(cc.bsns.ssh.diag.LogBuffer.snapshot())
-                                        }
-                                    }
+                                    .onFailure { fidoStatus = it.message ?: "couldn't enroll the security key" }
                             }
                         }
                     }) { Text("Enroll FIDO2 key") }
@@ -239,25 +227,6 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
                 }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
-        )
-    }
-
-    fidoError?.let { trace ->
-        AlertDialog(
-            onDismissRequest = { fidoError = null },
-            title = { Text("FIDO enroll error (diagnostic)") },
-            text = {
-                SelectionContainer {
-                    Text(
-                        trace, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
-                        modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { copyToClipboard(context, "fido-error", trace) }) { Text("Copy") }
-            },
-            dismissButton = { TextButton(onClick = { fidoError = null }) { Text("Close") } },
         )
     }
 }
