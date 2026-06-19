@@ -36,7 +36,9 @@ struct RootView: View {
         // Auto-sync: pull + merge the user's folder on launch; push when backgrounded.
         .task { await ConfigSync.autoPull(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets) }
         .onChange(of: scenePhase) { _, phase in
+            DiagLog.log("app", "scenePhase=\(String(describing: phase)) activeSessions=\(sessions.sessions.count)")
             if phase == .background {
+                DiagLog.log("sync", "autoPush requested on background")
                 ConfigSync.autoPush(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets)
             }
         }

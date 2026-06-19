@@ -45,6 +45,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var staleReported = false
     private var lastFbCols: Int32 = 0
     private var lastFbRows: Int32 = 0
+    private var lastReportedClientError = ""
 
     // Connection params, kept so we can re-create the client socket after iOS
     // suspends us in the background (the mosh-server keeps running, so a fresh
@@ -89,7 +90,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         // row), and (c) hop to a fresh socket if we'd gone stale. Observe both
         // notifications — willEnterForeground fires earliest; didBecomeActive is the
         // backstop — since either alone has proven unreliable in a SwiftUI-scene app.
-        let resume: (Notification) -> Void = { [weak self] _ in
+        let resume: (Notification) -> Void = { [weak self] note in
             guard let self else { return }
             let now = Date().timeIntervalSinceReferenceDate
             self.lock.lock()
@@ -99,6 +100,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 self.resumeRequested = true
             }
             self.lock.unlock()
+            moshLog("foreground note=\(note.name.rawValue) shouldWake=\(shouldWake)")
             guard shouldWake else { return }
             self.wake()
         }
@@ -164,12 +166,18 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 // our suspended UDP socket — hop to a fresh one on the SAME connection
                 // (preserves the crypto sequence the server's replay-protection needs;
                 // a brand-new client would be rejected). mosh auto-hops only after 10s.
-                if silent > Self.staleThreshold { mosh_client_hop(c) }
+                if silent > Self.staleThreshold {
+                    moshLog("resume hop begin")
+                    mosh_client_hop(c)
+                    moshLog("resume hop end")
+                }
                 // Re-assert the terminal size (server redraws to match) and force a
                 // full repaint — fixes the framebuffer/viewport desync that leaves the
                 // screen wrapping at the wrong row with a gap after resume.
+                moshLog("resume resize/repaint begin")
                 mosh_client_resize(c, cols, rows)
                 mosh_client_force_repaint(c)
+                moshLog("resume resize/repaint end")
             }
             if !input.isEmpty {
                 input.withUnsafeBytes { raw in
@@ -231,9 +239,11 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                     //     typed echo) landing on the wrong row / the status bar. The
                     //     brief rows-1 wiggle forces two SIGWINCHes ending at the real
                     //     size (mosh's UserStream delivers both, it doesn't coalesce).
+                    moshLog("recovering stale datagram: resize wiggle begin ask=\(cols)x\(rows)")
                     if rows > 1 { mosh_client_resize(c, cols, rows - 1) }
                     mosh_client_resize(c, cols, rows)
                     mosh_client_force_repaint(c)
+                    moshLog("recovering stale datagram: resize wiggle end")
                 }
             }
             mosh_client_tick(c)
@@ -249,6 +259,12 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                     lastFbCols = fbCols; lastFbRows = fbRows
                     moshLog("frame fb=\(fbCols)x\(fbRows) ask=\(cols)x\(rows)")
                 }
+            } else if let err = mosh_client_last_error(c) {
+                let message = String(cString: err)
+                if message.isEmpty == false && message != lastReportedClientError {
+                    lastReportedClientError = message
+                    moshLog("client error: \(message)")
+                }
             }
             // Flag staleness on transition (the loop wakes at least ~1/s, so this
             // is checked promptly without a separate timer).
@@ -259,6 +275,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     }
 
     private func teardown() {
+        moshLog("teardown")
         foregroundObservers.forEach { NotificationCenter.default.removeObserver($0) }
         foregroundObservers.removeAll()
         if let c = client { mosh_client_free(c); client = nil }

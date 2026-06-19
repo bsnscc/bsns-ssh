@@ -110,9 +110,13 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     /// the foreground transition settles.
     func resyncAfterForeground() {
         let now = CACurrentMediaTime()
-        guard now - lastForegroundResyncAt > 0.15 else { return }
+        guard now - lastForegroundResyncAt > 0.15 else {
+            DiagLog.log("terminal", "foreground resync skipped duplicate")
+            return
+        }
         lastForegroundResyncAt = now
         foregroundRefreshWork?.cancel()
+        DiagLog.log("terminal", "foreground resync scheduled bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height)) window=\(view.window != nil)")
 
         let early = DispatchWorkItem { [weak self] in self?.forceCurrentSizeAndRedraw() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: early)
@@ -122,10 +126,21 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     }
 
     private func forceCurrentSizeAndRedraw() {
-        guard view.window != nil, view.bounds.width > 1, view.bounds.height > 1 else { return }
+        guard view.window != nil else {
+            DiagLog.log("terminal", "redraw skipped: no window")
+            return
+        }
+        guard view.bounds.width > 1, view.bounds.height > 1 else {
+            DiagLog.log("terminal", "redraw skipped: bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height))")
+            return
+        }
         view.layoutIfNeeded()
         let terminal = view.getTerminal()
-        guard terminal.cols > 0, terminal.rows > 0 else { return }
+        guard terminal.cols > 0, terminal.rows > 0 else {
+            DiagLog.log("terminal", "redraw skipped: terminal=\(terminal.cols)x\(terminal.rows)")
+            return
+        }
+        DiagLog.log("terminal", "redraw force resize=\(terminal.cols)x\(terminal.rows) bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height))")
         sendResize(cols: terminal.cols, rows: terminal.rows, force: true)
         terminal.updateFullScreen()
         view.setNeedsDisplay(view.bounds)

@@ -10,7 +10,10 @@ struct BsnsSSHApp: App {
     @State private var sync = SyncStore()
     @State private var snippets = SnippetStore()
 
-    init() { SettingsKey.registerDefaults() }
+    init() {
+        SettingsKey.registerDefaults()
+        DiagLog.markLaunch()
+    }
 
     var body: some Scene {
         WindowGroup {
