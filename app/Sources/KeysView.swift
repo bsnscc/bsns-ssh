@@ -169,6 +169,9 @@ struct KeysView: View {
                 create: { label, pin in
                     try await store.enrollSecurityKey(name: label, pin: pin)
                 },
+                createApple: { label in
+                    try await store.enrollAppleSecurityKey(name: label)
+                },
                 importExisting: { pin in
                     try await store.importSecurityKeys(pin: pin)
                 }
@@ -182,12 +185,12 @@ private struct FidoSecurityKeySheet: View {
     @Binding var name: String
     @Binding var pin: String
     let create: (String, String) async throws -> Void
+    let createApple: (String) async throws -> Void
     let importExisting: (String) async throws -> Int
 
     @State private var busy = false
     @State private var message: String?
     @State private var messageIsError = false
-    @FocusState private var pinFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -197,19 +200,26 @@ private struct FidoSecurityKeySheet: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                     SecureField("Security-key PIN", text: $pin)
-                        .textContentType(.password)
-                        .focused($pinFocused)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
                 } footer: {
-                    Text("Create a portable SSH security-key credential on your YubiKey, or import one already on the key. The private key never leaves the token.")
+                    Text("Use the PIN for portable OpenSSH resident keys. The private key never leaves the security key.")
                 }
 
                 Section {
-                    Button("Create on key") { runCreate() }
+                    Button("Create portable key") { runCreate() }
                         .disabled(busy || cleanedPIN.isEmpty)
-                    Button("Import from key") { runImport() }
+                    Button("Import portable key") { runImport() }
                         .disabled(busy || cleanedPIN.isEmpty)
                 } footer: {
-                    Text("One authorized_keys line can work on iOS and Android when the phone can talk to the key and the server supports OpenSSH FIDO2. Keep a backup key so a lost one doesn't lock you out.")
+                    Text("Portable keys use the OpenSSH application string shared with Android. On iPhone, remove USB-C security keys and tap with NFC if native FIDO2 is not exposed over USB-C.")
+                }
+
+                Section {
+                    Button("Create with iOS prompt") { runCreateApple() }
+                        .disabled(busy)
+                } footer: {
+                    Text("Uses Apple's USB-C/NFC security-key prompt and asks for the PIN itself. This creates a separate WebAuthn-backed authorized_keys line and cannot import an existing portable key.")
                 }
 
                 if busy {
@@ -235,8 +245,7 @@ private struct FidoSecurityKeySheet: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
-        .onAppear { pinFocused = true }
+        .presentationDetents([.large])
     }
 
     private var cleanedPIN: String {
@@ -283,6 +292,22 @@ private struct FidoSecurityKeySheet: View {
                 }
             } catch {
                 show("Couldn't import the security key: \(error.localizedDescription)", error: true)
+            }
+            busy = false
+        }
+    }
+
+    private func runCreateApple() {
+        let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        busy = true
+        message = nil
+        Task {
+            do {
+                try await createApple(label)
+                self.pin = ""
+                dismiss()
+            } catch {
+                show("Couldn't create the iOS security-key credential: \(error.localizedDescription)", error: true)
             }
             busy = false
         }

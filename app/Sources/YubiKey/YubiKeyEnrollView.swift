@@ -17,7 +17,9 @@ struct YubiKeyEnrollView: View {
             Form {
                 Section {
                     SecureField("PIV user PIN", text: $pin)
-                        .keyboardType(.numberPad).textContentType(.password)
+                        .keyboardType(.numberPad)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
                 } footer: {
                     Text("The PIV user PIN (default 123456) authorizes signing. It's kept only in memory for this session. (Not the PUK or the management key.)")
                 }
@@ -62,6 +64,7 @@ struct YubiKeyEnrollView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }
+        .presentationDetents([.large])
     }
 
     private func enroll() {

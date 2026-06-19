@@ -65,6 +65,22 @@ final class AgentStore {
         await refresh()
     }
 
+    /// Enroll a security-key credential through Apple's WebAuthn prompt. This
+    /// works with iOS-managed USB-C/NFC security-key transports, but the
+    /// resulting authorized_keys line is tied to the WebAuthn relying-party
+    /// domain rather than the portable OpenSSH `ssh:bsns` application string.
+    func enrollAppleSecurityKey(name: String) async throws {
+        let result = try await WebAuthnCoordinator.shared.enroll(name: name)
+        let key = WebAuthnSecurityKey.make(publicBlob: result.publicBlob,
+                                           credentialID: result.credentialID,
+                                           comment: name.isEmpty ? "iOS security key" : name)
+        try KeyStore.saveWebAuthn(key)
+        await agent.add(key)
+        hardwareKeyIDs.insert(key.id.rawValue)
+        securityKeyIDs.insert(key.id.rawValue)
+        await refresh()
+    }
+
     /// Import existing portable bsns.SSH resident credentials from a token. This
     /// is the cross-phone path: Android can create the credential, iOS can import
     /// it, and both advertise the same authorized_keys line.

@@ -11,6 +11,7 @@ enum Fido2Error: LocalizedError {
     case unsupportedKey
     case noConnection
     case noCredential
+    case unsupportedNativeTransport
     case stageFailed(stage: String, detail: String)
 
     var errorDescription: String? {
@@ -23,6 +24,8 @@ enum Fido2Error: LocalizedError {
             return "Couldn't reach a FIDO2 security key. On iPad, plug it into USB-C; on iPhone, plug it in or hold it to the top to tap over NFC."
         case .noCredential:
             return "No portable bsns.SSH FIDO2 credential was found on that security key."
+        case .unsupportedNativeTransport:
+            return "This security-key connection doesn't expose native OpenSSH FIDO2 resident keys to bsns.SSH. On iPhone, remove the USB key and tap it over NFC to create or import portable keys. On iPad, iOS exposes USB-C security keys only through Apple's WebAuthn prompt, which can't import existing OpenSSH resident keys."
         case let .stageFailed(stage, detail):
             return "Security key \(stage) failed - \(detail)"
         }
@@ -35,6 +38,8 @@ private func fidoDetail(_ error: Error) -> String {
     }
     if let ctap = error as? CTAP2.SessionError {
         switch ctap {
+        case .featureNotSupported:
+            return "FIDO2 is not available over this security-key connection"
         case let .ctapError(code, _):
             return "CTAP \(code)"
         case let .failedResponse(response, _):
@@ -63,6 +68,12 @@ private func fidoDetail(_ error: Error) -> String {
         parts.append("<- \(underlying.domain) \(underlying.code)")
     }
     return parts.joined(separator: " · ")
+}
+
+private func isFeatureNotSupported(_ error: Error) -> Bool {
+    guard let ctap = error as? CTAP2.SessionError else { return false }
+    if case .featureNotSupported = ctap { return true }
+    return false
 }
 
 private func needsPinRetry(_ error: Error) -> Bool {
@@ -104,7 +115,7 @@ final class Fido2Coordinator {
 
     func lock() { pin = nil }
 
-    private func open() async throws -> SmartCardConnection {
+    private func openUSBSmartCard() async throws -> SmartCardConnection? {
         do {
             if let device = try await USBSmartCardConnection.availableDevices().first {
                 do { return try await USBSmartCardConnection(slot: device) }
@@ -115,19 +126,38 @@ final class Fido2Coordinator {
         } catch {
             throw Fido2Error.stageFailed(stage: "USB-C enumeration", detail: fidoDetail(error))
         }
+        return nil
+    }
+
+    private func openNFCSmartCard() async throws -> SmartCardConnection {
         guard NFCReaderSession.readingAvailable else { throw Fido2Error.noConnection }
         do { return try await NFCSmartCardConnection(alertMessage: "Hold your security key to the top of your phone") }
         catch { throw Fido2Error.stageFailed(stage: "NFC connection", detail: fidoDetail(error)) }
     }
 
     private func openSession() async throws -> (SmartCardConnection, CTAP2.Session) {
-        let conn = try await open()
+        if let conn = try await openUSBSmartCard() {
+            do {
+                let session = try await CTAP2.Session.makeSession(connection: conn, application: .fido2)
+                return (conn, session)
+            } catch {
+                await conn.close(error: nil)
+                if !isFeatureNotSupported(error) {
+                    throw Fido2Error.stageFailed(stage: "USB-C FIDO2 applet select", detail: fidoDetail(error))
+                }
+                if !NFCReaderSession.readingAvailable {
+                    throw Fido2Error.unsupportedNativeTransport
+                }
+            }
+        }
+
+        let conn = try await openNFCSmartCard()
         do {
             let session = try await CTAP2.Session.makeSession(connection: conn, application: .fido2)
             return (conn, session)
         } catch {
             await conn.close(error: nil)
-            throw Fido2Error.stageFailed(stage: "FIDO2 applet select", detail: fidoDetail(error))
+            throw Fido2Error.stageFailed(stage: "NFC FIDO2 applet select", detail: fidoDetail(error))
         }
     }
 
