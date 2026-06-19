@@ -68,14 +68,13 @@ struct ImportParsersTests {
         #expect(throws: KeyImportError.self) { try OpenSSHPrivateKey.parse("hello, not a key") }
     }
 
-    @Test("ssh config parses concrete hosts and applies wildcard defaults")
+    // Rewritten for OpenSSH first-match-wins semantics. The literal blocks come
+    // BEFORE the `Host *` block so their values win (a later wildcard only fills
+    // gaps), matching `ssh -G`.
+    @Test("ssh config parses concrete hosts, first-match-wins fills gaps")
     func configParses() {
         let cfg = """
         # my hosts
-        Host *
-          User deploy
-          Port 2222
-
         Host web1 web2
           HostName 10.0.0.10
           IdentityFile ~/.ssh/id_ed25519
@@ -85,6 +84,10 @@ struct ImportParsersTests {
           User root
           ProxyJump jump.example.com
 
+        Host *
+          User deploy
+          Port 2222
+
         Host *.wildcard.only
           HostName nope
         """
@@ -93,13 +96,75 @@ struct ImportParsersTests {
 
         let web1 = hosts.first { $0.alias == "web1" }!
         #expect(web1.hostName == "10.0.0.10")
-        #expect(web1.port == 2222)            // Host * default
-        #expect(web1.user == "deploy")        // Host * default
+        #expect(web1.port == 2222)            // Host * fills the gap
+        #expect(web1.user == "deploy")        // Host * fills the gap
         #expect(web1.proxyJump == nil)
 
         let b = hosts.first { $0.alias == "bastioned" }!
-        #expect(b.user == "root")             // block overrides default
+        #expect(b.user == "root")             // literal block matched first
         #expect(b.proxyJump == "jump.example.com")
+    }
+
+    @Test("wildcard block does NOT apply to a non-matching alias")
+    func configWildcardNonApplication() {
+        // `*.corp` must not match `github.com`, so it gets no ProxyJump.
+        let cfg = """
+        Host *.corp
+          ProxyJump bastion
+
+        Host github.com
+          User git
+        """
+        let hosts = SSHConfigParser.parse(cfg)
+        let gh = hosts.first { $0.alias == "github.com" }!
+        #expect(gh.proxyJump == nil)
+        #expect(gh.user == "git")
+    }
+
+    @Test("first-match wins across blocks")
+    func configFirstMatchWins() {
+        // `Host *` (User alice) precedes `Host prod` (User root) → alice wins.
+        let cfg = """
+        Host *
+          User alice
+
+        Host prod
+          User root
+        """
+        let hosts = SSHConfigParser.parse(cfg)
+        let prod = hosts.first { $0.alias == "prod" }!
+        #expect(prod.user == "alice")
+    }
+
+    @Test("negated pattern excludes a block")
+    func configNegation() {
+        // `Host * !prod` must NOT apply to prod; it does apply to web.
+        let cfg = """
+        Host * !prod
+          User x
+
+        Host prod
+        Host web
+        """
+        let hosts = SSHConfigParser.parse(cfg)
+        let prod = hosts.first { $0.alias == "prod" }!
+        let web = hosts.first { $0.alias == "web" }!
+        #expect(prod.user == nil)
+        #expect(web.user == "x")
+    }
+
+    @Test("ProxyJump none resolves to nil")
+    func configProxyJumpNone() {
+        let cfg = """
+        Host direct
+          ProxyJump none
+
+        Host *
+          ProxyJump bastion
+        """
+        let hosts = SSHConfigParser.parse(cfg)
+        let direct = hosts.first { $0.alias == "direct" }!
+        #expect(direct.proxyJump == nil)   // explicit none wins (first match) → resolves to nil
     }
 
     @Test("ssh config handles = and quotes")
@@ -119,5 +184,63 @@ struct ImportParsersTests {
         """
         let entries = KnownHostsParser.parse(kh)
         #expect(entries.map { $0.identifier } == ["github.com", "example.org", "10.0.0.5"])
+    }
+
+    @Test("known_hosts skips @revoked and @cert-authority lines entirely")
+    func knownHostsSkipsMarkers() {
+        let key = "AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+        // @revoked / @cert-authority must NOT be imported as trusted host keys.
+        #expect(KnownHostsParser.parse("@revoked example.com ssh-ed25519 \(key)").isEmpty)
+        #expect(KnownHostsParser.parse("@cert-authority *.example.com ssh-ed25519 \(key)").isEmpty)
+        // A normal line in the same input still imports.
+        let mixed = """
+        @revoked bad.example.com ssh-ed25519 \(key)
+        good.example.com ssh-ed25519 \(key)
+        @cert-authority *.example.com ssh-ed25519 \(key)
+        """
+        #expect(KnownHostsParser.parse(mixed).map { $0.identifier } == ["good.example.com"])
+    }
+
+    // Build an unencrypted openssh-key-v1 envelope wrapping a single ecdsa-p256
+    // private key whose private-scalar string is exactly `scalar`. Used to feed a
+    // deliberately over-long scalar to the importer.
+    private func ecdsaKeyEnvelope(scalar: Data) -> String {
+        // A syntactically valid (if not on-curve) 65-byte uncompressed point.
+        let q = Data([0x04] + [UInt8](repeating: 0x01, count: 64))
+        let priv = SSHEncoder.build { e in
+            e.writeUInt32(0x01020304)             // checkint
+            e.writeUInt32(0x01020304)             // checkint (must match)
+            e.writeString("ecdsa-sha2-nistp256")
+            e.writeString("nistp256")             // curve
+            e.writeString(q)                      // Q
+            e.writeString(scalar)                 // mpint d (raw, as provided)
+            e.writeString("imported")             // comment
+            e.writeBytes(Data([1, 2, 3, 4]))      // block padding
+        }
+        let blob = SSHEncoder.build { e in
+            e.writeBytes(Data("openssh-key-v1\u{0}".utf8))
+            e.writeString("none")                 // cipher
+            e.writeString("none")                 // kdfname
+            e.writeString(Data())                 // kdfoptions
+            e.writeUInt32(1)                       // count
+            e.writeString(q)                      // public key blob (unused)
+            e.writeString(priv)                   // private section
+        }
+        let b64 = blob.base64EncodedString()
+        return "-----BEGIN OPENSSH PRIVATE KEY-----\n\(b64)\n-----END OPENSSH PRIVATE KEY-----"
+    }
+
+    @Test("ecdsa key with an over-long scalar is rejected, not truncated")
+    func ecdsaOverLongScalarRejected() {
+        // 34 raw bytes — longer than a P-256 scalar's 32 (+optional sign byte).
+        let over = Data([UInt8](repeating: 0x11, count: 34))
+        #expect(throws: KeyImportError.self) {
+            try OpenSSHPrivateKey.parse(ecdsaKeyEnvelope(scalar: over))
+        }
+        // 33 bytes with a non-zero first byte is also invalid (not a sign byte).
+        let bad33 = Data([0x11] + [UInt8](repeating: 0x22, count: 32))
+        #expect(throws: KeyImportError.self) {
+            try OpenSSHPrivateKey.parse(ecdsaKeyEnvelope(scalar: bad33))
+        }
     }
 }

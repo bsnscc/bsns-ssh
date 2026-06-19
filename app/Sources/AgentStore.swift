@@ -34,7 +34,7 @@ final class AgentStore {
     func enrollYubiKey(pin: String, managementKeyHex: String? = nil) async throws {
         let blob = try await YubiKeyCoordinator.shared.enroll(pin: pin, managementKeyHex: managementKeyHex)
         let key = YubiKeyPIVKey.make(publicBlob: blob, slot: YubiKeyCoordinator.slot, comment: "YubiKey")
-        KeyStore.saveYubiKey(key)
+        try KeyStore.saveYubiKey(key)
         await agent.add(key)
         hardwareKeyIDs.insert(key.id.rawValue)
         yubiKeyIDs.insert(key.id.rawValue)
@@ -56,7 +56,7 @@ final class AgentStore {
         let key = WebAuthnSecurityKey.make(publicBlob: result.publicBlob,
                                            credentialID: result.credentialID,
                                            comment: name.isEmpty ? "FIDO2 security key" : name)
-        KeyStore.saveWebAuthn(key)
+        try KeyStore.saveWebAuthn(key)
         await agent.add(key)
         hardwareKeyIDs.insert(key.id.rawValue)
         securityKeyIDs.insert(key.id.rawValue)
@@ -71,7 +71,10 @@ final class AgentStore {
         guard let key = try? FileKey.generate(algorithm: algorithm, comment: "generated on device") else {
             return
         }
-        KeyStore.save(key)
+        // Persist before adopting it in-memory: if the Keychain write fails, don't
+        // hand the agent a key that won't survive relaunch (it would silently vanish).
+        do { try KeyStore.save(key) }
+        catch { DiagLog.log("keystore", "generate save failed: \(error.localizedDescription)"); return }
         await agent.add(key)
         await refresh()
     }
@@ -79,7 +82,7 @@ final class AgentStore {
     /// Create a non-extractable P-256 key in the Secure Enclave (Face ID per use).
     func generateEnclaveKey() async throws {
         let key = try SecureEnclaveKey.generate(comment: "Secure Enclave key")
-        KeyStore.saveEnclave(key)
+        try KeyStore.saveEnclave(key)
         await agent.add(key)
         hardwareKeyIDs.insert(key.id.rawValue)
         await refresh()
@@ -96,7 +99,10 @@ final class AgentStore {
     func importKey(_ key: FileKey) async {
         let existing = Set(identities.map { SSHKeyFormat.fingerprint(ofPublicKeyBlob: $0.blob) })
         guard !existing.contains(SSHKeyFormat.fingerprint(ofPublicKeyBlob: key.publicKey.blob)) else { return }
-        KeyStore.save(key)
+        // Persist before adopting it in-memory (see generateKey): a failed write
+        // must not leave a phantom key the agent uses but the Keychain doesn't hold.
+        do { try KeyStore.save(key) }
+        catch { DiagLog.log("keystore", "import save failed: \(error.localizedDescription)"); return }
         await agent.add(key)
         await refresh()
     }

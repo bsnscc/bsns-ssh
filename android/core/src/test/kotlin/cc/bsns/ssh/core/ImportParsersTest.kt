@@ -72,13 +72,12 @@ class ImportParsersTest {
         assertFailsWith<KeyImportException> { OpenSshPrivateKey.parse("hello, not a key") }
     }
 
-    @Test fun sshConfigParsesConcreteHostsAndAppliesWildcardDefaults() {
+    // Rewritten for OpenSSH first-match-wins semantics. The literal blocks come
+    // BEFORE the `Host *` block so their values win (a later wildcard only fills
+    // gaps), matching `ssh -G`.
+    @Test fun sshConfigParsesConcreteHostsFirstMatchWins() {
         val cfg = """
             # my hosts
-            Host *
-              User deploy
-              Port 2222
-
             Host web1 web2
               HostName 10.0.0.10
               IdentityFile ~/.ssh/id_ed25519
@@ -87,6 +86,10 @@ class ImportParsersTest {
               HostName private.internal
               User root
               ProxyJump jump.example.com
+
+            Host *
+              User deploy
+              Port 2222
 
             Host *.wildcard.only
               HostName nope
@@ -97,14 +100,67 @@ class ImportParsersTest {
 
         val web1 = hosts.first { it.alias == "web1" }
         assertEquals("10.0.0.10", web1.hostName)
-        assertEquals(2222, web1.port)            // from Host * default
-        assertEquals("deploy", web1.user)        // from Host * default
+        assertEquals(2222, web1.port)            // Host * fills the gap
+        assertEquals("deploy", web1.user)        // Host * fills the gap
         assertEquals("~/.ssh/id_ed25519", web1.identityFile)
         assertNull(web1.proxyJump)
 
         val b = hosts.first { it.alias == "bastioned" }
-        assertEquals("root", b.user)             // block overrides the default
+        assertEquals("root", b.user)             // literal block matched first
         assertEquals("jump.example.com", b.proxyJump)
+    }
+
+    @Test fun sshConfigWildcardDoesNotApplyToNonMatchingAlias() {
+        // `*.corp` must not match `github.com`, so it gets no ProxyJump.
+        val cfg = """
+            Host *.corp
+              ProxyJump bastion
+
+            Host github.com
+              User git
+        """.trimIndent()
+        val gh = SshConfigParser.parse(cfg).first { it.alias == "github.com" }
+        assertNull(gh.proxyJump)
+        assertEquals("git", gh.user)
+    }
+
+    @Test fun sshConfigFirstMatchWins() {
+        // `Host *` (User alice) precedes `Host prod` (User root) → alice wins.
+        val cfg = """
+            Host *
+              User alice
+
+            Host prod
+              User root
+        """.trimIndent()
+        val prod = SshConfigParser.parse(cfg).first { it.alias == "prod" }
+        assertEquals("alice", prod.user)
+    }
+
+    @Test fun sshConfigNegatedPatternExcludesBlock() {
+        // `Host * !prod` must NOT apply to prod; it does apply to web.
+        val cfg = """
+            Host * !prod
+              User x
+
+            Host prod
+            Host web
+        """.trimIndent()
+        val hosts = SshConfigParser.parse(cfg)
+        assertNull(hosts.first { it.alias == "prod" }.user)
+        assertEquals("x", hosts.first { it.alias == "web" }.user)
+    }
+
+    @Test fun sshConfigProxyJumpNoneResolvesToNull() {
+        val cfg = """
+            Host direct
+              ProxyJump none
+
+            Host *
+              ProxyJump bastion
+        """.trimIndent()
+        val direct = SshConfigParser.parse(cfg).first { it.alias == "direct" }
+        assertNull(direct.proxyJump)   // explicit none wins (first match) → resolves to null
     }
 
     @Test fun sshConfigHandlesEqualsAndQuotes() {
@@ -125,10 +181,55 @@ class ImportParsersTest {
         assertEquals(listOf("github.com", "example.org", "10.0.0.5"), entries.map { it.id })
     }
 
-    @Test fun knownHostsStripsCertAuthorityMarker() {
-        val kh = "@cert-authority *.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
-        val entries = KnownHostsParser.parse(kh)
-        assertEquals(1, entries.size)
-        assertEquals("*.example.com", entries[0].id)
+    @Test fun knownHostsSkipsRevokedAndCertAuthorityLines() {
+        val key = "AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+        // @revoked / @cert-authority must NOT be imported as trusted host keys.
+        assertTrue(KnownHostsParser.parse("@revoked example.com ssh-ed25519 $key").isEmpty())
+        assertTrue(KnownHostsParser.parse("@cert-authority *.example.com ssh-ed25519 $key").isEmpty())
+        // A normal line in the same input still imports.
+        val mixed = """
+            @revoked bad.example.com ssh-ed25519 $key
+            good.example.com ssh-ed25519 $key
+            @cert-authority *.example.com ssh-ed25519 $key
+        """.trimIndent()
+        assertEquals(listOf("good.example.com"), KnownHostsParser.parse(mixed).map { it.id })
+    }
+
+    // Build an unencrypted openssh-key-v1 envelope wrapping a single ecdsa-p256
+    // private key whose private-scalar string is exactly [scalar]. Used to feed a
+    // deliberately over-long scalar to the importer.
+    private fun ecdsaKeyEnvelope(scalar: ByteArray): String {
+        // A syntactically valid (if not on-curve) 65-byte uncompressed point.
+        val q = byteArrayOf(0x04) + ByteArray(64) { 0x01 }
+        val priv = SshEncoder.build { e ->
+            e.writeUInt32(0x01020304L)            // checkint
+            e.writeUInt32(0x01020304L)            // checkint (must match)
+            e.writeString("ecdsa-sha2-nistp256")
+            e.writeString("nistp256")             // curve
+            e.writeString(q)                      // Q
+            e.writeString(scalar)                 // mpint d (raw, as provided)
+            e.writeString("imported")             // comment
+            e.writeBytes(byteArrayOf(1, 2, 3, 4)) // block padding
+        }
+        val blob = SshEncoder.build { e ->
+            e.writeBytes("openssh-key-v1 ".toByteArray(Charsets.UTF_8))
+            e.writeString("none")                 // cipher
+            e.writeString("none")                 // kdfname
+            e.writeString(ByteArray(0))           // kdfoptions
+            e.writeUInt32(1L)                      // count
+            e.writeString(q)                      // public key blob (unused)
+            e.writeString(priv)                   // private section
+        }
+        val b64 = Base64.getEncoder().encodeToString(blob)
+        return "-----BEGIN OPENSSH PRIVATE KEY-----\n$b64\n-----END OPENSSH PRIVATE KEY-----"
+    }
+
+    @Test fun ecdsaKeyWithOverLongScalarIsRejectedNotTruncated() {
+        // 34 raw bytes — longer than a P-256 scalar's 32 (+optional sign byte).
+        val over = ByteArray(34) { 0x11 }
+        assertFailsWith<KeyImportException> { OpenSshPrivateKey.parse(ecdsaKeyEnvelope(over)) }
+        // 33 bytes with a non-zero first byte is also invalid (not a sign byte).
+        val bad33 = byteArrayOf(0x11) + ByteArray(32) { 0x22 }
+        assertFailsWith<KeyImportException> { OpenSshPrivateKey.parse(ecdsaKeyEnvelope(bad33)) }
     }
 }

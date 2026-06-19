@@ -36,6 +36,13 @@ enum {
 };
 static __thread int g_open_reason = OPEN_OK;
 
+// Connect with a deadline so a black-holed (silently dropped) host is bounded to
+// seconds instead of the OS default (often ~2 minutes). Non-blocking connect +
+// poll(POLLOUT) per address; on timeout/failure we fall through to the next
+// address, then restore blocking mode for the handshake (open_session expects a
+// blocking fd).
+#define TCP_CONNECT_TIMEOUT_MS 10000
+
 static int tcp_connect(const char* host, int port) {
     struct addrinfo hints, *res;
     memset(&hints, 0, sizeof(hints));
@@ -48,8 +55,24 @@ static int tcp_connect(const char* host, int port) {
     for (struct addrinfo* p = res; p; p = p->ai_next) {
         fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (fd < 0) continue;
-        if (connect(fd, p->ai_addr, p->ai_addrlen) == 0) break;
-        close(fd);
+        int fl = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, fl | O_NONBLOCK);   // non-blocking so connect() returns immediately
+        int rc = connect(fd, p->ai_addr, p->ai_addrlen);
+        if (rc != 0 && errno == EINPROGRESS) {
+            struct pollfd pfd = { fd, POLLOUT, 0 };
+            int pr = poll(&pfd, 1, TCP_CONNECT_TIMEOUT_MS);
+            if (pr <= 0) { close(fd); fd = -1; continue; }   // timeout (0) or poll error (<0)
+            int soerr = 0; socklen_t slen = sizeof(soerr);
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) != 0 || soerr != 0) {
+                close(fd); fd = -1; continue;                // connect failed underneath poll
+            }
+            rc = 0;
+        }
+        if (rc == 0) {
+            fcntl(fd, F_SETFL, fl);   // restore blocking mode for the handshake
+            break;
+        }
+        close(fd);                    // immediate connect() error
         fd = -1;
     }
     freeaddrinfo(res);
@@ -265,6 +288,73 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeInstallKey(
     return ok;
 }
 
+// Run `cmd` on an already-authenticated, BLOCKING session and capture its full
+// stdout (the mosh bootstrap: `mosh-server new …` → the caller parses
+// MOSH CONNECT out of the returned string). Correctness over the old fixed 4 KiB
+// stdout-only loop:
+//   - check libssh2_channel_exec rc (request failure → OPEN_NO_SHELL, no string)
+//   - drain BOTH stdout (stream 0) and stderr (stream 1) until channel EOF — a
+//     single 0-read is NOT EOF, and a chatty stderr left unread can fill the
+//     window and stall the exec, so we read both each pass
+//   - stdout grows up to a generous cap (256 KiB) so a preamble before
+//     MOSH CONNECT isn't truncated; stderr is drained but discarded
+//   - then wait_closed + read the remote exit status
+// Returns a malloc'd NUL-terminated stdout buffer the caller must free (NULL on
+// channel_exec failure). g_open_reason is set to OPEN_OK when the SSH side
+// genuinely ran the command; OPEN_NO_SHELL if the exec request itself failed.
+#define EXEC_STDOUT_CAP (256 * 1024)
+
+static char* exec_capture(LIBSSH2_CHANNEL* c, const char* cmd) {
+    if (libssh2_channel_exec(c, cmd) != 0) {
+        g_open_reason = OPEN_NO_SHELL;
+        return NULL;
+    }
+    size_t cap = 8192, len = 0;
+    char* out = (char*)malloc(cap);
+    if (!out) { g_open_reason = OPEN_NO_SHELL; return NULL; }
+    char buf[8192];
+    // Blocking session: read both streams until the channel reports EOF, draining
+    // fairly so neither stream's window can wedge the other.
+    while (!libssh2_channel_eof(c)) {
+        int progress = 0;
+        // stdout (stream 0) → captured, capped
+        ssize_t n = libssh2_channel_read_ex(c, 0, buf, sizeof(buf));
+        if (n > 0) {
+            progress = 1;
+            if (len < EXEC_STDOUT_CAP) {
+                size_t room = EXEC_STDOUT_CAP - len;
+                size_t take = (size_t)n < room ? (size_t)n : room;
+                if (len + take + 1 > cap) {
+                    while (len + take + 1 > cap) cap *= 2;
+                    if (cap > EXEC_STDOUT_CAP + 1) cap = EXEC_STDOUT_CAP + 1;
+                    char* nb = (char*)realloc(out, cap);
+                    if (!nb) { free(out); g_open_reason = OPEN_NO_SHELL; return NULL; }
+                    out = nb;
+                }
+                memcpy(out + len, buf, take); len += take;
+            }
+            // beyond the cap we keep draining stdout but discard, so the window
+            // can't stall and stderr stays serviceable
+        } else if (n < 0 && n != LIBSSH2_ERROR_EAGAIN) {
+            break;   // hard read error
+        }
+        // stderr (stream 1) → drained (discarded) so it can't fill the window and stall
+        ssize_t e = libssh2_channel_read_ex(c, SSH_EXTENDED_DATA_STDERR, buf, sizeof(buf));
+        if (e > 0) progress = 1;
+        else if (e < 0 && e != LIBSSH2_ERROR_EAGAIN) break;
+        if (!progress) {
+            // Both streams returned EAGAIN/0 without EOF on a blocking session —
+            // nothing to do but yield briefly rather than busy-spin.
+            usleep(2000);
+        }
+    }
+    out[len] = 0;
+    libssh2_channel_wait_closed(c);
+    (void)libssh2_channel_get_exit_status(c);   // surfaced via the returned string today
+    g_open_reason = OPEN_OK;
+    return out;
+}
+
 JNIEXPORT jstring JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExec(
     JNIEnv* env, jobject thiz, jstring jhost, jint port, jstring juser,
@@ -309,19 +399,15 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExec(
             if (rc == 0) {
                 LIBSSH2_CHANNEL* c = libssh2_channel_open_session(s);
                 if (c) {
-                    libssh2_channel_exec(c, cmd);
-                    char out[4096];
-                    int total = 0, n;
-                    while (total < (int)sizeof(out) - 1 &&
-                           (n = libssh2_channel_read(c, out + total, sizeof(out) - 1 - total)) > 0) {
-                        total += n;
+                    // Capture full stdout (both streams drained); exec_capture sets
+                    // g_open_reason. A missing MOSH CONNECT in the output is a
+                    // mosh-server problem, not an auth/connect one — exec_capture
+                    // keeps OK in that case so the caller shows "is mosh on the host?".
+                    char* out = exec_capture(c, cmd);
+                    if (out) {
+                        result = (*env)->NewStringUTF(env, out);
+                        free(out);
                     }
-                    out[total > 0 ? total : 0] = 0;
-                    // SSH side succeeded; a missing MOSH CONNECT in the output is a
-                    // mosh-server problem, not an auth/connect one — keep OK so the
-                    // caller shows "is mosh on the host?" only in that case.
-                    g_open_reason = OPEN_OK;
-                    result = (*env)->NewStringUTF(env, out);
                     libssh2_channel_close(c);
                     libssh2_channel_free(c);
                 } else {
@@ -393,6 +479,41 @@ static LIBSSH2_SESSION* connect_and_auth(JNIEnv* env, const char* host, int port
 // impersonate the target). The bastion's own key is also verified: the caller
 // passes its expected host-key blob (jexpectedBastionHostKey) and the handshake
 // to the bastion is refused on mismatch, same as the target.
+// A grow-on-demand FIFO byte buffer (head/tail indices; compacts on consume) so
+// a relayed connection can buffer a bounded amount in each direction and stop
+// reading its source when full — instead of spinning on EAGAIN to drain a slow
+// peer. Mirrors the iOS forwarder's ByteQueue. Used by both the ProxyJump pump
+// and the local-forward service below.
+typedef struct { unsigned char* data; size_t cap, head, tail; } ByteQueue;
+
+static size_t bq_count(const ByteQueue* q) { return q->tail - q->head; }
+
+static int bq_append(ByteQueue* q, const unsigned char* src, size_t n) {
+    if (q->head == q->tail) { q->head = q->tail = 0; }
+    if (q->tail + n > q->cap) {
+        if (q->head > 0) {   // compact before growing
+            memmove(q->data, q->data + q->head, q->tail - q->head);
+            q->tail -= q->head; q->head = 0;
+        }
+        if (q->tail + n > q->cap) {
+            size_t ncap = q->cap ? q->cap : 8192;
+            while (ncap < q->tail + n) ncap *= 2;
+            unsigned char* nd = (unsigned char*)realloc(q->data, ncap);
+            if (!nd) return -1;
+            q->data = nd; q->cap = ncap;
+        }
+    }
+    memcpy(q->data + q->tail, src, n); q->tail += n;
+    return 0;
+}
+
+static void bq_consume(ByteQueue* q, size_t n) {
+    q->head += n;
+    if (q->head == q->tail) { q->head = q->tail = 0; }
+}
+
+static void bq_free(ByteQueue* q) { free(q->data); q->data = NULL; q->cap = q->head = q->tail = 0; }
+
 typedef struct {
     LIBSSH2_SESSION* session;   // session to the bastion
     LIBSSH2_CHANNEL* channel;   // direct-tcpip bastion -> target
@@ -401,6 +522,8 @@ typedef struct {
     pthread_t pump;
     volatile int stop;
 } JumpChain;
+
+#define JUMP_CAP (1 << 20)   // 1 MiB per-direction buffer cap → backpressure
 
 typedef struct {
     int fd; LIBSSH2_SESSION* session; LIBSSH2_CHANNEL* channel; JumpChain* jump;
@@ -427,43 +550,93 @@ static void ssh_client_wake(SshClient* c) {
 
 
 // Relay bytes between the local socketpair end and the bastion's tunnel channel
-// until either side closes. Owns the bastion session exclusively (libssh2 isn't
-// thread-safe per session, so nothing else touches it once the pump runs).
+// until both directions close. Owns the bastion session exclusively (libssh2
+// isn't thread-safe per session, so nothing else touches it once the pump runs).
+//
+// Bounded bidirectional relay modeled on nativeForwardService below: a per-
+// direction ByteQueue holds bytes that couldn't be written yet, so a read chunk
+// is never lost when its write would block; we stop reading a source while its
+// destination buffer is at cap (backpressure); and we poll() the socketpair fd
+// plus consult libssh2_session_block_directions() for the channel, retrying only
+// on the relevant readiness instead of spinning on EAGAIN. Half-close propagates
+// (one side's EOF doesn't tear the other down until its buffer drains).
 static void* jump_pump(void* arg) {
     JumpChain* j = (JumpChain*)arg;
     libssh2_session_set_blocking(j->session, 0);
     char buf[16384];
+    ByteQueue to_chan = {0};    // local socket → bastion channel
+    ByteQueue to_sock = {0};    // bastion channel → local socket
+    int sock_eof = 0;           // local end sent EOF (read returned 0)
+    int chan_eof = 0;           // channel reported EOF
+    int sent_chan_eof = 0;      // forwarded local half-close to the channel
+
     while (!j->stop) {
-        int idle = 1;
-        ssize_t n = libssh2_channel_read(j->channel, buf, sizeof(buf));   // bastion -> local
-        if (n > 0) {
-            idle = 0;
-            ssize_t off = 0;
-            while (off < n) {
-                ssize_t w = write(j->pump_fd, buf + off, (size_t)(n - off));
-                if (w < 0) { if (errno == EINTR) continue; j->stop = 1; break; }
-                off += w;
-            }
-        } else if (n != LIBSSH2_ERROR_EAGAIN && (n < 0 || libssh2_channel_eof(j->channel))) {
-            j->stop = 1; break;
+        // channel → to_sock (stop while the local side is backed up)
+        while (!chan_eof && bq_count(&to_sock) < JUMP_CAP) {
+            ssize_t r = libssh2_channel_read(j->channel, buf, sizeof(buf));
+            if (r > 0) bq_append(&to_sock, (unsigned char*)buf, (size_t)r);
+            else if (r == LIBSSH2_ERROR_EAGAIN) break;
+            else { chan_eof = 1; break; }   // 0 = EOF, <0 = error
         }
-        ssize_t m = read(j->pump_fd, buf, sizeof(buf));                   // local -> bastion
-        if (m > 0) {
-            idle = 0;
-            ssize_t off = 0;
-            while (off < m) {
-                ssize_t w = libssh2_channel_write(j->channel, buf + off, (size_t)(m - off));
-                if (w == LIBSSH2_ERROR_EAGAIN) continue;
-                if (w < 0) { j->stop = 1; break; }
-                off += w;
-            }
-        } else if (m == 0) {
-            j->stop = 1; break;   // local end closed
-        } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-            j->stop = 1; break;
+        if (libssh2_channel_eof(j->channel)) chan_eof = 1;
+
+        // to_sock → local socket (one non-blocking pass)
+        while (bq_count(&to_sock) > 0) {
+            ssize_t w = write(j->pump_fd, to_sock.data + to_sock.head, bq_count(&to_sock));
+            if (w > 0) bq_consume(&to_sock, (size_t)w);
+            else if (w < 0 && errno == EINTR) continue;
+            else { if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) sock_eof = 1; break; }
         }
-        if (idle) usleep(2000);   // nothing moved — yield rather than spin
+
+        // local socket → to_chan (stop while the remote side is backed up)
+        while (!sock_eof && bq_count(&to_chan) < JUMP_CAP) {
+            ssize_t r = read(j->pump_fd, buf, sizeof(buf));
+            if (r > 0) bq_append(&to_chan, (unsigned char*)buf, (size_t)r);
+            else if (r == 0) { sock_eof = 1; break; }
+            else { if (errno == EINTR) continue;
+                   if (errno != EAGAIN && errno != EWOULDBLOCK) sock_eof = 1; break; }
+        }
+
+        // to_chan → channel (one non-blocking pass)
+        while (bq_count(&to_chan) > 0) {
+            ssize_t w = libssh2_channel_write(j->channel, (char*)(to_chan.data + to_chan.head),
+                                              bq_count(&to_chan));
+            if (w > 0) bq_consume(&to_chan, (size_t)w);
+            else break;   // EAGAIN/error: retry after the next poll
+        }
+
+        // Propagate the local half-close once our outbound buffer is flushed.
+        if (sock_eof && bq_count(&to_chan) == 0 && !sent_chan_eof) {
+            libssh2_channel_send_eof(j->channel); sent_chan_eof = 1;
+        }
+
+        int remote_done = chan_eof && bq_count(&to_sock) == 0;
+        int local_done = sock_eof && bq_count(&to_chan) == 0;
+        if (remote_done && local_done) break;   // both directions drained
+
+        // Wait for readiness on whichever fd/direction we still need, so we never
+        // busy-spin on EAGAIN. Poll the socketpair fd for the side that has work,
+        // and the session fd for the channel's current block direction.
+        struct pollfd pfds[2];
+        int n = 0;
+        short sev = 0;
+        if (!sock_eof && bq_count(&to_chan) < JUMP_CAP) sev |= POLLIN;   // room to read more local
+        if (bq_count(&to_sock) > 0) sev |= POLLOUT;                      // bytes waiting for the socket
+        if (sev) { pfds[n].fd = j->pump_fd; pfds[n].events = sev; pfds[n].revents = 0; n++; }
+        // The channel rides the bastion session fd; ask libssh2 which direction it
+        // currently needs and poll for exactly that.
+        short cev = 0;
+        int dir = libssh2_session_block_directions(j->session);
+        if ((!chan_eof && bq_count(&to_sock) < JUMP_CAP) || bq_count(&to_chan) > 0) {
+            if (dir & LIBSSH2_SESSION_BLOCK_INBOUND) cev |= POLLIN;
+            if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) cev |= POLLOUT;
+            if (cev == 0) cev = POLLIN;   // nothing pending — wait for more channel data
+        }
+        if (cev) { pfds[n].fd = j->jump_fd; pfds[n].events = cev; pfds[n].revents = 0; n++; }
+        if (n == 0) { usleep(2000); continue; }   // nothing to wait on — brief yield
+        poll(pfds, n, 200);   // bounded wait; loop re-checks j->stop on wake/timeout
     }
+    bq_free(&to_chan); bq_free(&to_sock);
     return NULL;
 }
 
@@ -859,16 +1032,13 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeAuthAndExecSk(
             if (rc == 0) {
                 LIBSSH2_CHANNEL* c = libssh2_channel_open_session(s);
                 if (c) {
-                    libssh2_channel_exec(c, cmd);
-                    char out[4096];
-                    int total = 0, n;
-                    while (total < (int)sizeof(out) - 1 &&
-                           (n = libssh2_channel_read(c, out + total, sizeof(out) - 1 - total)) > 0) {
-                        total += n;
+                    // Full stdout capture (both streams drained); exec_capture sets
+                    // g_open_reason. SSH OK; a missing MOSH CONNECT = mosh-server problem.
+                    char* out = exec_capture(c, cmd);
+                    if (out) {
+                        result = (*env)->NewStringUTF(env, out);
+                        free(out);
                     }
-                    out[total > 0 ? total : 0] = 0;
-                    g_open_reason = OPEN_OK;   // SSH OK; a missing MOSH CONNECT = mosh-server problem
-                    result = (*env)->NewStringUTF(env, out);
                     libssh2_channel_close(c);
                     libssh2_channel_free(c);
                 } else {
@@ -1265,40 +1435,6 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeSftpClose(JNIEnv* env, jobject thiz, 
 #define FWD_CONN_MAX 64
 #define FWD_BUF 16384
 #define FWD_CAP (1 << 20)   // 1 MiB per-direction buffer cap → backpressure
-
-// A grow-on-demand FIFO byte buffer (head/tail indices; compacts on consume) so
-// a forwarded connection can buffer a bounded amount in each direction and stop
-// reading its source when full — instead of spinning on EAGAIN to drain a slow
-// peer. Mirrors the iOS forwarder's ByteQueue.
-typedef struct { unsigned char* data; size_t cap, head, tail; } ByteQueue;
-
-static size_t bq_count(const ByteQueue* q) { return q->tail - q->head; }
-
-static int bq_append(ByteQueue* q, const unsigned char* src, size_t n) {
-    if (q->head == q->tail) { q->head = q->tail = 0; }
-    if (q->tail + n > q->cap) {
-        if (q->head > 0) {   // compact before growing
-            memmove(q->data, q->data + q->head, q->tail - q->head);
-            q->tail -= q->head; q->head = 0;
-        }
-        if (q->tail + n > q->cap) {
-            size_t ncap = q->cap ? q->cap : 8192;
-            while (ncap < q->tail + n) ncap *= 2;
-            unsigned char* nd = (unsigned char*)realloc(q->data, ncap);
-            if (!nd) return -1;
-            q->data = nd; q->cap = ncap;
-        }
-    }
-    memcpy(q->data + q->tail, src, n); q->tail += n;
-    return 0;
-}
-
-static void bq_consume(ByteQueue* q, size_t n) {
-    q->head += n;
-    if (q->head == q->tail) { q->head = q->tail = 0; }
-}
-
-static void bq_free(ByteQueue* q) { free(q->data); q->data = NULL; q->cap = q->head = q->tail = 0; }
 
 typedef struct {
     int sock;                 // accepted loopback socket (-1 = free slot)

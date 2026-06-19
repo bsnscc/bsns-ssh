@@ -8,6 +8,20 @@ import BsnsSSHCore
 enum KeyStore {
     private static let service = "cc.bsns.ssh.keys"
 
+    enum StoreError: Error, LocalizedError {
+        case encodeFailed
+        case keychain(OSStatus)
+
+        var errorDescription: String? {
+            switch self {
+            case .encodeFailed: return "Couldn't encode the key for storage."
+            case .keychain(let status):
+                let detail = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+                return "Couldn't save the key to the Keychain: \(detail)."
+            }
+        }
+    }
+
     private struct Stored: Codable {
         let algorithm: String
         let material: Data        // software: raw private key; enclave: wrapped key data; yubikey: public blob
@@ -17,48 +31,57 @@ enum KeyStore {
         var credentialID: Data?    // webauthn: FIDO credential id (material holds the public blob)
     }
 
-    static func save(_ key: FileKey) {
-        persist(account: key.id.rawValue, Stored(
+    static func save(_ key: FileKey) throws {
+        try persist(account: key.id.rawValue, Stored(
             algorithm: key.algorithm.rawValue,
             material: key.exportPrivateKeyMaterial(),
             comment: key.publicKey.comment, kind: "file"))
     }
 
-    static func saveEnclave(_ key: SecureEnclaveKey) {
-        persist(account: key.id.rawValue, Stored(
+    static func saveEnclave(_ key: SecureEnclaveKey) throws {
+        try persist(account: key.id.rawValue, Stored(
             algorithm: key.algorithm.rawValue,
             material: key.keyData,
             comment: key.publicKey.comment, kind: "enclave"))
     }
 
-    static func saveYubiKey(_ key: YubiKeyPIVKey) {
-        persist(account: key.id.rawValue, Stored(
+    static func saveYubiKey(_ key: YubiKeyPIVKey) throws {
+        try persist(account: key.id.rawValue, Stored(
             algorithm: key.algorithm.rawValue,
             material: key.publicKey.blob,
             comment: key.publicKey.comment, kind: "yubikey", slot: key.slot))
     }
 
-    static func saveWebAuthn(_ key: WebAuthnSecurityKey) {
-        persist(account: key.id.rawValue, Stored(
+    static func saveWebAuthn(_ key: WebAuthnSecurityKey) throws {
+        try persist(account: key.id.rawValue, Stored(
             algorithm: key.algorithm.rawValue,
             material: key.publicKey.blob,
             comment: key.publicKey.comment, kind: "webauthn", credentialID: key.credentialID))
     }
 
-    private static func persist(account: String, _ stored: Stored) {
-        guard let payload = try? JSONEncoder().encode(stored) else { return }
-        let base: [String: Any] = [
+    /// Persist a record without ever destroying the existing one before the new
+    /// write lands: UPDATE in place, and only ADD if there's nothing there yet.
+    /// A failed encode or any non-success OSStatus throws, so a caller can never
+    /// believe a save succeeded when the Keychain still holds the old (or no) value.
+    private static func persist(account: String, _ stored: Stored) throws {
+        guard let payload = try? JSONEncoder().encode(stored) else { throw StoreError.encodeFailed }
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(base as CFDictionary)
-        var add = base
-        add[kSecValueData as String] = payload
         // WhenUnlocked (not AfterFirstUnlock): key material is only readable while
         // the device is unlocked, never device-locked or from a background launch.
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        SecItemAdd(add as CFDictionary, nil)
+        let attrs: [String: Any] = [
+            kSecValueData as String: payload,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        ]
+        let updateStatus = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+        if updateStatus != errSecItemNotFound { throw StoreError.keychain(updateStatus) }
+        // Nothing to update — add it. No delete-then-add: a record is never lost.
+        let addStatus = SecItemAdd(query.merging(attrs) { _, new in new } as CFDictionary, nil)
+        if addStatus != errSecSuccess { throw StoreError.keychain(addStatus) }
     }
 
     /// All persisted keys as their backends (software + enclave).

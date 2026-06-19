@@ -399,45 +399,105 @@ public final class SSHShell: @unchecked Sendable {
     }
 
     /// Relay bytes between the local socketpair end and the bastion tunnel channel
-    /// until either side closes. Owns the bastion session exclusively while it runs.
+    /// until both directions close. Owns the bastion session exclusively while it
+    /// runs. Modeled on the local-forward pump (`pumpForward`): a bounded buffer
+    /// per direction, backpressure (stop reading a source while its destination
+    /// buffer is occupied), and a poll on both the socket fd and the libssh2
+    /// block-directions so an EAGAIN waits for readiness instead of spinning. An
+    /// EAGAIN is would-block, never fatal — only a real error or EOF half-closes.
     private func jumpPump() {
-        guard let channel = jumpChannel else { return }
+        guard let channel = jumpChannel, let session = jumpSession else { return }
+        let sockFd = jumpPumpFd
+        let cap = Self.forwardBufferCap
+        var toChannel = ByteQueue()   // local socket → tunnel channel
+        var toSocket = ByteQueue()    // tunnel channel → local socket
+        var localClosed = false       // socket hit EOF/error
+        var channelEOF = false        // channel sent EOF
+        var sentChannelEOF = false    // forwarded local EOF onto the channel
         var buf = [UInt8](repeating: 0, count: 16384)
+
         while !(lock.withLock { jumpStop }) {
-            var idle = true
-            let n = buf.withUnsafeMutableBytes {
-                libssh2_channel_read_ex(channel, 0, $0.baseAddress!.assumingMemoryBound(to: CChar.self), $0.count)
-            }
-            if n > 0 {
-                idle = false
-                var off = 0
-                while off < n {
-                    let w = buf.withUnsafeBytes { Darwin.write(jumpPumpFd, $0.baseAddress!.advanced(by: off), n - off) }
-                    if w < 0 { if errno == EINTR { continue }; lock.withLock { jumpStop = true }; break }
-                    off += w
-                }
-            } else if n != LIBSSH2_ERROR_EAGAIN && (n < 0 || libssh2_channel_eof(channel) != 0) {
-                lock.withLock { jumpStop = true }; break
-            }
-            let m = buf.withUnsafeMutableBytes { Darwin.read(jumpPumpFd, $0.baseAddress, $0.count) }
-            if m > 0 {
-                idle = false
-                var off = 0
-                while off < m {
-                    let w = buf.withUnsafeBytes {
-                        libssh2_channel_write_ex(channel, 0, $0.baseAddress!.advanced(by: off).assumingMemoryBound(to: CChar.self), m - off)
+            var progressed = false
+
+            // channel → buffer (stop reading while the socket side is backed up)
+            if !channelEOF {
+                while toSocket.count < cap {
+                    let n = buf.withUnsafeMutableBytes {
+                        libssh2_channel_read_ex(channel, 0, $0.baseAddress!.assumingMemoryBound(to: CChar.self), $0.count)
                     }
-                    if w == LIBSSH2_ERROR_EAGAIN { continue }
-                    if w < 0 { lock.withLock { jumpStop = true }; break }
-                    off += w
+                    if n > 0 { toSocket.append(buf[0 ..< Int(n)]); progressed = true }
+                    else if n == LIBSSH2_ERROR_EAGAIN { break }       // would-block, not failure
+                    else { channelEOF = true; break }                 // 0 = EOF, <0 = error
                 }
-            } else if m == 0 {
-                lock.withLock { jumpStop = true }; break
-            } else if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR {
-                lock.withLock { jumpStop = true }; break
             }
-            if idle { usleep(2000) }
+            if libssh2_channel_eof(channel) != 0 { channelEOF = true }
+
+            // buffer → local socket
+            while !toSocket.isEmpty {
+                let w = toSocket.withUnsafeBytes { Darwin.write(sockFd, $0.baseAddress, $0.count) }
+                if w > 0 { toSocket.consume(w); progressed = true }
+                else { if w < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR { localClosed = true }; break }
+            }
+
+            // local socket → buffer (stop reading while the channel side is backed up)
+            if !localClosed {
+                while toChannel.count < cap {
+                    let n = buf.withUnsafeMutableBytes { Darwin.read(sockFd, $0.baseAddress, $0.count) }
+                    if n > 0 { toChannel.append(buf[0 ..< n]); progressed = true }
+                    else if n == 0 { localClosed = true; break }      // socket EOF
+                    else { if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR { localClosed = true }; break }
+                }
+            }
+
+            // buffer → channel
+            while !toChannel.isEmpty {
+                let w = toChannel.withUnsafeBytes {
+                    libssh2_channel_write_ex(channel, 0, $0.baseAddress!.assumingMemoryBound(to: CChar.self), $0.count)
+                }
+                if w > 0 { toChannel.consume(w); progressed = true }
+                else { break }   // EAGAIN/error: retry after the readiness wait
+            }
+
+            // Propagate half-close: once the socket is done and its bytes are
+            // flushed, send EOF on the channel rather than tearing both ways down.
+            if localClosed && toChannel.isEmpty && !sentChannelEOF {
+                libssh2_channel_send_eof(channel); sentChannelEOF = true
+            }
+
+            let socketDone = localClosed && toChannel.isEmpty
+            let channelDone = channelEOF && toSocket.isEmpty
+            if socketDone && channelDone { break }
+
+            if !progressed { jumpWait(session: session, sockFd: sockFd, toChannel: toChannel, toSocket: toSocket,
+                                      localClosed: localClosed, channelEOF: channelEOF) }
         }
+        lock.withLock { jumpStop = true }
+    }
+
+    /// Block until the jump relay can make progress: poll the socketpair fd for
+    /// the directions we actually need (readable when we have room to read,
+    /// writable when we have bytes to flush) plus whatever libssh2 says it's
+    /// blocked on. Avoids the busy-spin/usleep of the old pump.
+    private func jumpWait(session: OpaquePointer, sockFd: Int32,
+                          toChannel: ByteQueue, toSocket: ByteQueue,
+                          localClosed: Bool, channelEOF: Bool) {
+        var sockEvents: Int16 = 0
+        if !localClosed && toChannel.count < Self.forwardBufferCap { sockEvents |= Int16(POLLIN) }
+        if !toSocket.isEmpty { sockEvents |= Int16(POLLOUT) }
+
+        let dir = libssh2_session_block_directions(session)
+        var sshEvents: Int16 = 0
+        if dir & BLOCK_INBOUND != 0 { sshEvents |= Int16(POLLIN) }
+        if dir & BLOCK_OUTBOUND != 0 { sshEvents |= Int16(POLLOUT) }
+        // If we want to read the channel but it isn't blocked, still wake on the
+        // session socket becoming readable so buffered channel data is serviced.
+        if !channelEOF && toSocket.count < Self.forwardBufferCap && sshEvents == 0 { sshEvents = Int16(POLLIN) }
+
+        var pfds: [pollfd] = []
+        if sockEvents != 0 { pfds.append(pollfd(fd: sockFd, events: sockEvents, revents: 0)) }
+        if sshEvents != 0 { pfds.append(pollfd(fd: jumpFd, events: sshEvents, revents: 0)) }
+        if pfds.isEmpty { return }
+        poll(&pfds, nfds_t(pfds.count), 1000)   // bounded wait; loop re-checks jumpStop
     }
 
     static func passwordAuth(_ session: OpaquePointer, user: String, password: String) throws {
@@ -590,9 +650,37 @@ public final class SSHShell: @unchecked Sendable {
         throw SSHShellError.authFailed(lastError)
     }
 
+    /// The full result of a one-shot remote command.
+    struct ExecResult {
+        var stdout: [UInt8] = []
+        var stderr: [UInt8] = []
+        var stdoutTruncated = false
+        var stderrTruncated = false
+        var exitStatus: Int32 = -1
+        var exitSignal: String?
+        var stdoutString: String { String(decoding: stdout, as: UTF8.self) }
+    }
+
+    /// Generous per-stream cap. mosh's `MOSH CONNECT` line is tiny, but a server
+    /// MOTD/banner echoed before it can be sizeable — don't truncate it away.
+    private static let execStreamCap = 256 * 1024
+
     private static func execBlocking(host: String, port: UInt16, user: String,
                                      agent: Agent?, identities: [SSHPublicKey], password: String?,
                                      command: String, knownHosts: KnownHosts) throws -> String {
+        try runExec(host: host, port: port, user: user, agent: agent, identities: identities,
+                    password: password, command: command, knownHosts: knownHosts).stdoutString
+    }
+
+    /// Run `command` to completion and return stdout, stderr, and exit status.
+    /// Both streams are drained to channel EOF — reading only stdout (the old
+    /// behavior) could deadlock if stderr filled its window, and stopping at the
+    /// first zero-read could truncate output that simply hadn't arrived yet. Each
+    /// stream is bounded by `execStreamCap` with a truncation flag, then we wait
+    /// for the channel to close and read the real exit status/signal.
+    static func runExec(host: String, port: UInt16, user: String,
+                        agent: Agent?, identities: [SSHPublicKey], password: String?,
+                        command: String, knownHosts: KnownHosts) throws -> ExecResult {
         guard libssh2Ready else { throw SSHShellError.libssh2Init }
         guard let fd = tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
         defer { close(fd) }
@@ -626,51 +714,84 @@ public final class SSHShell: @unchecked Sendable {
         }
         guard startup == 0 else { throw SSHShellError.execFailed("process_startup rc=\(startup)") }
 
-        var out = [UInt8]()
-        var buffer = [CChar](repeating: 0, count: 4096)
-        while true {
-            let n = libssh2_channel_read_ex(channel, 0, &buffer, buffer.count)
-            if n > 0 { out.append(contentsOf: buffer[0 ..< Int(n)].map { UInt8(bitPattern: $0) }) }
-            else { break }
+        // Non-blocking + poll so draining stdout AND stderr can't deadlock on a
+        // full window, and the loop terminates on channel EOF rather than the
+        // first zero read (which on a non-blocking channel just means "no data yet").
+        libssh2_session_set_blocking(session, 0)
+        var result = ExecResult()
+        var buffer = [CChar](repeating: 0, count: 32768)
+        let cap = execStreamCap
+        var hardError = false   // a non-EAGAIN read error: stop, don't poll forever
+
+        func drain(_ streamID: Int32, into sink: inout [UInt8], truncated: inout Bool) -> Bool {
+            var progressed = false
+            while true {
+                let n = libssh2_channel_read_ex(channel, streamID, &buffer, buffer.count)
+                if n > 0 {
+                    progressed = true
+                    if sink.count < cap {
+                        let take = min(Int(n), cap - sink.count)
+                        sink.append(contentsOf: buffer[0 ..< take].map { UInt8(bitPattern: $0) })
+                        if Int(n) > take { truncated = true }
+                    } else {
+                        truncated = true
+                    }
+                } else {
+                    // 0 = EOF on this stream; EAGAIN = nothing right now; any other
+                    // negative is a real read error — flag it so the loop terminates.
+                    if n < 0 && n != Int(LIBSSH2_ERROR_EAGAIN) { hardError = true }
+                    return progressed
+                }
+            }
         }
+
+        while true {
+            let outProgress = drain(0, into: &result.stdout, truncated: &result.stdoutTruncated)
+            let errProgress = drain(1, into: &result.stderr, truncated: &result.stderrTruncated)
+            if hardError || libssh2_channel_eof(channel) != 0 { break }
+            if !outProgress && !errProgress { waitSocket(session: session, fd: fd, timeoutMs: 1000) }
+        }
+
         libssh2_channel_close(channel)
-        return String(decoding: out, as: UTF8.self)
+        // Block briefly to let the close handshake complete so the exit status is
+        // available; back in blocking mode this returns once the peer closes.
+        libssh2_session_set_blocking(session, 1)
+        libssh2_channel_wait_closed(channel)
+        result.exitStatus = libssh2_channel_get_exit_status(channel)
+        var signalPtr: UnsafeMutablePointer<CChar>?
+        var signalLen = 0
+        libssh2_channel_get_exit_signal(channel, &signalPtr, &signalLen, nil, nil, nil, nil)
+        if let signalPtr, signalLen > 0 {
+            result.exitSignal = String(decoding: UnsafeBufferPointer(start: signalPtr, count: signalLen).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            free(signalPtr)
+        }
+        return result
     }
 
+    /// poll() the session socket for whichever direction libssh2 is blocked on,
+    /// up to `timeoutMs`. Used by the non-blocking exec drain so it sleeps until
+    /// there's progress instead of busy-spinning.
+    private static func waitSocket(session: OpaquePointer, fd: Int32, timeoutMs: Int32) {
+        let dir = libssh2_session_block_directions(session)
+        var events: Int16 = 0
+        if dir & BLOCK_INBOUND != 0 { events |= Int16(POLLIN) }
+        if dir & BLOCK_OUTBOUND != 0 { events |= Int16(POLLOUT) }
+        if events == 0 { events = Int16(POLLIN) }
+        var pfd = pollfd(fd: fd, events: events, revents: 0)
+        poll(&pfd, 1, timeoutMs)
+    }
+
+    /// Password-auth one-shot exec used by `installPublicKeys`. Drains both
+    /// streams to EOF via the shared primitive and fails on a non-zero exit (so a
+    /// failed authorized_keys append surfaces instead of looking like success).
     private static func runExec(host: String, port: UInt16, user: String, password: String,
                                 command: String, knownHosts: KnownHosts) throws {
-        guard libssh2Ready else { throw SSHShellError.libssh2Init }
-        guard let fd = tcpConnect(host: host, port: port) else { throw SSHShellError.connectFailed }
-        defer { close(fd) }
-        guard let session = libssh2_session_init_ex(nil, nil, nil, nil) else { throw SSHShellError.sessionInit }
-        defer { libssh2_session_free(session) }
-        libssh2_session_set_blocking(session, 1)
-        try applyAlgorithmPolicy(session)
-        guard libssh2_session_handshake(session, fd) == 0 else { throw SSHShellError.handshakeFailed }
-
-        let hostKey = try presentedHostKey(session)
-        switch knownHosts.verify(host: host, port: port, key: hostKey) {
-        case .trusted: break
-        case .unknown: throw SSHShellError.unknownHostKey(hostKey)
-        case let .mismatch(stored, presented): throw SSHShellError.hostKeyMismatch(stored, presented)
+        let result = try runExec(host: host, port: port, user: user, agent: nil, identities: [],
+                                 password: password, command: command, knownHosts: knownHosts)
+        if result.exitStatus != 0 {
+            let detail = result.exitSignal.map { "signal \($0)" } ?? "remote exit \(result.exitStatus)"
+            throw SSHShellError.execFailed(detail)
         }
-
-        try passwordAuth(session, user: user, password: password)
-
-        guard let channel = libssh2_channel_open_ex(session, "session", 7, 2 * 1024 * 1024, 32768, nil, 0) else {
-            throw SSHShellError.channelOpenFailed
-        }
-        defer { libssh2_channel_free(channel) }
-        let startup = command.withCString {
-            libssh2_channel_process_startup(channel, "exec", 4, $0, UInt32(strlen($0)))
-        }
-        guard startup == 0 else { throw SSHShellError.execFailed("process_startup rc=\(startup)") }
-
-        var buffer = [CChar](repeating: 0, count: 4096)
-        while libssh2_channel_read_ex(channel, 0, &buffer, buffer.count) > 0 {}
-        libssh2_channel_close(channel)
-        let exitStatus = libssh2_channel_get_exit_status(channel)
-        if exitStatus != 0 { throw SSHShellError.execFailed("remote exit \(exitStatus)") }
     }
 
     // MARK: I/O loop (non-blocking)
@@ -945,8 +1066,15 @@ public final class SSHShell: @unchecked Sendable {
         return HostKey(keyType: name, blob: blob)
     }
 
+    /// Per-address TCP connect deadline. A black-holed host (SYN dropped) would
+    /// otherwise hang on the OS default (~75s per address) and tie up the worker;
+    /// this fails it in seconds so the caller surfaces `connectFailed` promptly.
+    private static let connectTimeoutMs: Int32 = 10_000
+
     /// Resolve `host` (DNS name, IPv4, or IPv6) and connect, trying each returned
-    /// address in turn.
+    /// address in turn with a bounded, non-blocking connect so an unreachable
+    /// address can't black-hole the worker. The returned socket is left in
+    /// blocking mode (libssh2 toggles it as needed).
     private static func tcpConnect(host: String, port: UInt16) -> Int32? {
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC          // IPv4 or IPv6
@@ -957,13 +1085,47 @@ public final class SSHShell: @unchecked Sendable {
         defer { freeaddrinfo(res) }
         var ai = res
         while let info = ai {
-            let fd = socket(info.pointee.ai_family, info.pointee.ai_socktype, info.pointee.ai_protocol)
-            if fd >= 0 {
-                if Darwin.connect(fd, info.pointee.ai_addr, info.pointee.ai_addrlen) == 0 { return fd }
-                close(fd)
-            }
+            if let fd = connectWithTimeout(info.pointee, timeoutMs: connectTimeoutMs) { return fd }
             ai = info.pointee.ai_next
         }
         return nil
+    }
+
+    /// Connect to one resolved address with a deadline: open the socket
+    /// non-blocking, start the connect, `poll()` for writability up to
+    /// `timeoutMs`, then confirm via `SO_ERROR`. Restores blocking mode on the
+    /// returned fd; closes and returns nil on timeout or error.
+    private static func connectWithTimeout(_ info: addrinfo, timeoutMs: Int32) -> Int32? {
+        let fd = socket(info.ai_family, info.ai_socktype, info.ai_protocol)
+        guard fd >= 0 else { return nil }
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        let rc = Darwin.connect(fd, info.ai_addr, info.ai_addrlen)
+        if rc == 0 {
+            _ = fcntl(fd, F_SETFL, flags)   // restore blocking
+            return fd
+        }
+        guard errno == EINPROGRESS else { close(fd); return nil }
+        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        // poll() can return early on EINTR — retry until the deadline elapses.
+        var remaining = timeoutMs
+        while true {
+            let started = DispatchTime.now()
+            let pr = poll(&pfd, 1, remaining)
+            if pr > 0 { break }
+            if pr == 0 { close(fd); return nil }   // timed out
+            if errno != EINTR { close(fd); return nil }
+            let elapsed = Int32((DispatchTime.now().uptimeNanoseconds &- started.uptimeNanoseconds) / 1_000_000)
+            remaining -= max(elapsed, 0)
+            if remaining <= 0 { close(fd); return nil }
+        }
+        // Connect finished — check whether it actually succeeded.
+        var soError: Int32 = 0
+        var len = socklen_t(MemoryLayout<Int32>.size)
+        guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &len) == 0, soError == 0 else {
+            close(fd); return nil
+        }
+        _ = fcntl(fd, F_SETFL, flags)   // restore blocking
+        return fd
     }
 }

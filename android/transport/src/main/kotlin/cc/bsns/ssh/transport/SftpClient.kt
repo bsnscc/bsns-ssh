@@ -64,10 +64,18 @@ class SftpClient(
         } finally { bridge.nativeSftpCloseFile(fh) }
     }
 
-    /** Stream `input` to a remote file in fixed-size chunks (bounded memory). */
+    /** Stream `input` to a remote file in fixed-size chunks (bounded memory).
+     *  Transactional: the bytes go to a temp sibling path and are renamed onto
+     *  `path` only after the whole stream lands, so a mid-transfer failure never
+     *  leaves a partial file under the intended name. The temp is removed on any
+     *  failure. Still streaming — no whole-file buffering. */
     fun uploadFrom(path: String, input: java.io.InputStream): Boolean = on {
-        val fh = bridge.nativeSftpOpenWrite(handle, path)
+        // <dest>.<rand>.tmp sits in the same directory, so the final rename is a
+        // cheap same-filesystem move (and inherits the dest's permissions context).
+        val tmp = "$path.${java.util.UUID.randomUUID().toString().take(8)}.tmp"
+        val fh = bridge.nativeSftpOpenWrite(handle, tmp)
         if (fh == 0L) return@on false
+        var wrote = false
         try {
             val buf = ByteArray(32768)
             while (true) {
@@ -75,8 +83,19 @@ class SftpClient(
                 if (n < 0) break
                 if (n > 0 && !bridge.nativeSftpWriteChunk(fh, buf, n)) return@on false
             }
-            true
-        } finally { bridge.nativeSftpCloseFile(fh) }
+            wrote = true
+        } finally {
+            bridge.nativeSftpCloseFile(fh)
+            // Drop the temp if we never reached a clean end-of-stream (or the rename
+            // below fails) so a failed upload doesn't leave a stray .tmp behind.
+            if (!wrote) bridge.nativeSftpRemove(handle, tmp, false)
+        }
+        // Atomically swap the completed temp onto the final path; clean up on failure.
+        if (!bridge.nativeSftpRename(handle, tmp, path)) {
+            bridge.nativeSftpRemove(handle, tmp, false)
+            return@on false
+        }
+        true
     }
 
     fun mkdir(path: String): Boolean = on { bridge.nativeSftpMkdir(handle, path) }

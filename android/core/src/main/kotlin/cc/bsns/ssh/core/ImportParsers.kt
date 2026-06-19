@@ -24,12 +24,15 @@ data class SshConfigHost(
 )
 
 object SshConfigParser {
-    /** Parse `ssh_config` text into concrete hosts. Wildcard blocks (`Host *`)
-     *  supply defaults; only blocks whose patterns are all literal become hosts. */
-    fun parse(text: String): List<SshConfigHost> {
-        // A block = its patterns + the directives gathered until the next Host/Match.
-        data class Block(val patterns: List<String>, val opts: MutableMap<String, String> = mutableMapOf())
+    // A block = its pattern list (source order) + its directives (source order;
+    // for a repeated single-valued key within a block, the FIRST wins per OpenSSH).
+    private data class Block(val patterns: List<String>, val directives: MutableList<Pair<String, String>> = mutableListOf())
 
+    /** Parse `ssh_config` text into concrete hosts. One host per literal `Host`
+     *  pattern; effective options are resolved with OpenSSH first-match-wins
+     *  semantics — every block whose pattern list matches the alias contributes,
+     *  in source order, and the first value seen for a key wins. */
+    fun parse(text: String): List<SshConfigHost> {
         val blocks = mutableListOf<Block>()
         var current: Block? = null
 
@@ -48,34 +51,71 @@ object SshConfigParser {
                     current = Block(value.split(Regex("\\s+")))
                     blocks.add(current)
                 }
-                "match" -> current = null  // Match blocks are too dynamic to import; skip.
-                else -> current?.opts?.put(key, value)
+                "match" -> current = null  // too dynamic to import; stops the current block
+                else -> current?.directives?.add(key to value)
             }
         }
 
-        // Apply wildcard-block directives as defaults (first value wins, per ssh).
-        val defaults = mutableMapOf<String, String>()
-        blocks.filter { b -> b.patterns.any { it.contains('*') || it.contains('?') } }
-            .forEach { b -> b.opts.forEach { (k, v) -> defaults.putIfAbsent(k, v) } }
+        // The importable aliases: every literal (non-wildcard, non-negated) pattern.
+        val aliases = blocks.flatMap { b ->
+            b.patterns.filter { !it.contains('*') && !it.contains('?') && !it.startsWith('!') }
+        }
 
         val out = mutableListOf<SshConfigHost>()
-        for (b in blocks) {
-            for (alias in b.patterns) {
-                if (alias.contains('*') || alias.contains('?') || alias.startsWith('!')) continue
-                fun opt(k: String) = b.opts[k] ?: defaults[k]
-                out.add(
-                    SshConfigHost(
-                        alias = alias,
-                        hostName = opt("hostname") ?: alias,
-                        port = opt("port")?.toIntOrNull() ?: 22,
-                        user = opt("user"),
-                        identityFile = opt("identityfile"),
-                        proxyJump = opt("proxyjump")?.takeUnless { it.equals("none", true) },
-                    ),
-                )
+        for (alias in aliases) {
+            // First-value-wins across every applying block, in source order.
+            val opts = mutableMapOf<String, String>()
+            for (b in blocks) {
+                if (!patternsApply(b.patterns, alias)) continue
+                for ((k, v) in b.directives) opts.putIfAbsent(k, v)
             }
+            out.add(
+                SshConfigHost(
+                    alias = alias,
+                    hostName = opts["hostname"] ?: alias,
+                    port = opts["port"]?.toIntOrNull() ?: 22,
+                    user = opts["user"],
+                    identityFile = opts["identityfile"],
+                    proxyJump = opts["proxyjump"]?.takeUnless { it.equals("none", true) },
+                ),
+            )
         }
         return out
+    }
+
+    /** Does a block's pattern list apply to [alias], per OpenSSH precedence:
+     *  a matching negated pattern (`!glob`) excludes the block; otherwise any
+     *  matching positive pattern includes it. */
+    private fun patternsApply(patterns: List<String>, alias: String): Boolean {
+        var positive = false
+        for (pat in patterns) {
+            if (pat.startsWith('!')) {
+                if (globMatches(pat.substring(1), alias)) return false
+            } else if (globMatches(pat, alias)) {
+                positive = true
+            }
+        }
+        return positive
+    }
+
+    /** Anchored full-string glob: `*` = zero-or-more of any char, `?` = exactly
+     *  one char. A small fnmatch, matching OpenSSH `match_pattern`. Classic
+     *  linear-time backtracking wildcard match. */
+    internal fun globMatches(pattern: String, name: String): Boolean {
+        var pi = 0
+        var si = 0
+        var star = -1
+        var mark = 0
+        while (si < name.length) {
+            when {
+                pi < pattern.length && (pattern[pi] == '?' || pattern[pi] == name[si]) -> { pi++; si++ }
+                pi < pattern.length && pattern[pi] == '*' -> { star = pi; mark = si; pi++ }
+                star != -1 -> { pi = star + 1; mark++; si = mark }
+                else -> return false
+            }
+        }
+        while (pi < pattern.length && pattern[pi] == '*') pi++
+        return pi == pattern.length
     }
 }
 
@@ -84,16 +124,16 @@ data class KnownHostImport(val id: String, val blob: ByteArray)
 
 object KnownHostsParser {
     /** Parse `known_hosts`. Hashed entries (`|1|…`) can't be reversed to a host,
-     *  so they're skipped; `@cert-authority`/`@revoked` markers are ignored. */
+     *  so they're skipped. Lines starting with a marker (`@cert-authority` /
+     *  `@revoked`) are skipped entirely: `@revoked` keys are revoked (never to be
+     *  trusted) and `@cert-authority` designates a CA, not a host key — importing
+     *  either as a plain trusted host key would invert OpenSSH's semantics. */
     fun parse(text: String): List<KnownHostImport> {
         val out = mutableListOf<KnownHostImport>()
         for (raw in text.lines()) {
-            var line = raw.trim()
+            val line = raw.trim()
             if (line.isEmpty() || line.startsWith('#')) continue
-            if (line.startsWith('@')) {
-                // marker hostlist algo key  → drop the marker, keep the rest
-                line = line.substringAfter(' ').trim()
-            }
+            if (line.startsWith('@')) continue   // @revoked / @cert-authority — never a trusted host key
             val parts = line.split(Regex("\\s+"))
             if (parts.size < 3) continue
             val (hostList, _, b64) = parts
@@ -165,7 +205,7 @@ object OpenSshPrivateKey {
                 priv.readString()                   // Q (point)
                 val scalar = priv.readString()      // mpint d
                 val comment = priv.readStringUtf8()
-                ImportedKey(KeyAlgorithm.ECDSA_P256, fixed32(BigInteger(1, scalar)), comment.ifEmpty { "imported" })
+                ImportedKey(KeyAlgorithm.ECDSA_P256, p256Scalar(scalar), comment.ifEmpty { "imported" })
             }
             "ssh-rsa" -> {
                 // OpenSSH RSA private: mpint n, e, d, iqmp, p, q. Recompute the CRT
@@ -186,11 +226,17 @@ object OpenSshPrivateKey {
         }
     }
 
-    /** A BigInteger as fixed 32-byte big-endian (drop sign byte / left-pad). */
-    private fun fixed32(n: BigInteger): ByteArray {
-        var b = n.toByteArray()
-        if (b.size > 32) b = b.copyOfRange(b.size - 32, b.size)
+    /** Normalize a P-256 private scalar mpint to exactly 32 big-endian bytes.
+     *  A valid P-256 scalar is ≤32 bytes (left-pad), or exactly 33 with a leading
+     *  0x00 sign byte (drop it). Anything longer would lose significant bytes if
+     *  truncated, so it's rejected rather than silently mangled. An all-zero
+     *  scalar is invalid and rejected too. */
+    private fun p256Scalar(scalar: ByteArray): ByteArray {
+        var b = scalar
+        if (b.size == 33 && b[0].toInt() == 0x00) b = b.copyOfRange(1, b.size)  // strip sign byte
+        if (b.size > 32) throw KeyImportException("the key file is corrupt")
         if (b.size < 32) b = ByteArray(32 - b.size) + b
+        if (b.all { it.toInt() == 0 }) throw KeyImportException("the key file is corrupt")
         return b
     }
 }

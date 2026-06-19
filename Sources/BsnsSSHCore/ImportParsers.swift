@@ -16,10 +16,56 @@ public struct SSHConfigHost: Equatable, Sendable {
 }
 
 public enum SSHConfigParser {
-    /// Parse `ssh_config` text into concrete hosts. Wildcard blocks (`Host *`)
-    /// supply defaults; only blocks whose patterns are all literal become hosts.
+    /// One `Host` block: its pattern list (source order) and its directives
+    /// (source order; for a repeated single-valued key within a block, the
+    /// FIRST value wins, per OpenSSH).
+    private struct Block {
+        let patterns: [String]
+        var directives: [(key: String, value: String)] = []
+    }
+
+    /// Anchored full-string glob: `*` = zero-or-more of any char, `?` = exactly
+    /// one char. A small fnmatch, matching OpenSSH `match_pattern`. Classic
+    /// linear-time backtracking wildcard match.
+    static func globMatches(_ pattern: String, _ name: String) -> Bool {
+        let p = Array(pattern), s = Array(name)
+        var pi = 0, si = 0
+        var star = -1, mark = 0
+        while si < s.count {
+            if pi < p.count && (p[pi] == "?" || p[pi] == s[si]) {
+                pi += 1; si += 1
+            } else if pi < p.count && p[pi] == "*" {
+                star = pi; mark = si; pi += 1
+            } else if star != -1 {
+                pi = star + 1; mark += 1; si = mark
+            } else {
+                return false
+            }
+        }
+        while pi < p.count && p[pi] == "*" { pi += 1 }
+        return pi == p.count
+    }
+
+    /// Does a block's pattern list apply to `alias`, per OpenSSH precedence:
+    /// a matching negated pattern (`!glob`) excludes the block; otherwise any
+    /// matching positive pattern includes it.
+    private static func patternsApply(_ patterns: [String], to alias: String) -> Bool {
+        var positive = false
+        for pat in patterns {
+            if pat.hasPrefix("!") {
+                if globMatches(String(pat.dropFirst()), alias) { return false }
+            } else if globMatches(pat, alias) {
+                positive = true
+            }
+        }
+        return positive
+    }
+
+    /// Parse `ssh_config` text into concrete hosts. One host per literal `Host`
+    /// pattern; effective options are resolved with OpenSSH first-match-wins
+    /// semantics — every block whose pattern list matches the alias contributes,
+    /// in source order, and the first value seen for a key wins.
     public static func parse(_ text: String) -> [SSHConfigHost] {
-        struct Block { let patterns: [String]; var opts: [String: String] = [:] }
         var blocks: [Block] = []
         var currentIndex: Int? = nil
 
@@ -37,32 +83,35 @@ public enum SSHConfigParser {
                 blocks.append(Block(patterns: value.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)))
                 currentIndex = blocks.count - 1
             case "match":
-                currentIndex = nil    // too dynamic to import
+                currentIndex = nil    // too dynamic to import; stops the current block
             default:
-                if let i = currentIndex { blocks[i].opts[key] = value }
+                if let i = currentIndex { blocks[i].directives.append((key, value)) }
             }
         }
 
-        // Wildcard-block directives become defaults (first value wins, per ssh).
-        var defaults: [String: String] = [:]
-        for b in blocks where b.patterns.contains(where: { $0.contains("*") || $0.contains("?") }) {
-            for (k, v) in b.opts where defaults[k] == nil { defaults[k] = v }
+        // The importable aliases: every literal (non-wildcard, non-negated) pattern.
+        var aliases: [String] = []
+        for b in blocks {
+            for pat in b.patterns where !pat.contains("*") && !pat.contains("?") && !pat.hasPrefix("!") {
+                aliases.append(pat)
+            }
         }
 
         var out: [SSHConfigHost] = []
-        for b in blocks {
-            for alias in b.patterns {
-                if alias.contains("*") || alias.contains("?") || alias.hasPrefix("!") { continue }
-                func opt(_ k: String) -> String? { b.opts[k] ?? defaults[k] }
-                let jump = opt("proxyjump").flatMap { $0.caseInsensitiveCompare("none") == .orderedSame ? nil : $0 }
-                out.append(SSHConfigHost(
-                    alias: alias,
-                    hostName: opt("hostname") ?? alias,
-                    port: opt("port").flatMap(Int.init) ?? 22,
-                    user: opt("user"),
-                    identityFile: opt("identityfile"),
-                    proxyJump: jump))
+        for alias in aliases {
+            // First-value-wins across every applying block, in source order.
+            var opts: [String: String] = [:]
+            for b in blocks where patternsApply(b.patterns, to: alias) {
+                for (k, v) in b.directives where opts[k] == nil { opts[k] = v }
             }
+            let jump = opts["proxyjump"].flatMap { $0.caseInsensitiveCompare("none") == .orderedSame ? nil : $0 }
+            out.append(SSHConfigHost(
+                alias: alias,
+                hostName: opts["hostname"] ?? alias,
+                port: opts["port"].flatMap(Int.init) ?? 22,
+                user: opts["user"],
+                identityFile: opts["identityfile"],
+                proxyJump: jump))
         }
         return out
     }
@@ -76,15 +125,16 @@ public struct KnownHostImport: Equatable, Sendable {
 
 public enum KnownHostsParser {
     /// Parse `known_hosts`. Hashed entries (`|1|…`) can't be reversed to a host,
-    /// so they're skipped; `@cert-authority`/`@revoked` markers are ignored.
+    /// so they're skipped. Lines starting with a marker (`@cert-authority` /
+    /// `@revoked`) are skipped entirely: `@revoked` keys are revoked (never to be
+    /// trusted) and `@cert-authority` designates a CA, not a host key — importing
+    /// either as a plain trusted host key would invert OpenSSH's semantics.
     public static func parse(_ text: String) -> [KnownHostImport] {
         var out: [KnownHostImport] = []
         for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            var line = String(raw).trimmingCharacters(in: .whitespaces)
+            let line = String(raw).trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") { continue }
-            if line.hasPrefix("@"), let sp = line.firstIndex(of: " ") {
-                line = String(line[line.index(after: sp)...]).trimmingCharacters(in: .whitespaces)
-            }
+            if line.hasPrefix("@") { continue }     // @revoked / @cert-authority — never a trusted host key
             let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
             if parts.count < 3 { continue }
             let hostList = parts[0]
@@ -161,7 +211,7 @@ public enum OpenSSHPrivateKey {
                 _ = try priv.readString()                  // Q
                 let scalar = try priv.readString()         // mpint d
                 let comment = (try? priv.readStringUTF8()) ?? ""
-                return ImportedKey(algorithm: .ecdsaP256, material: fixed32(scalar),
+                return ImportedKey(algorithm: .ecdsaP256, material: try p256Scalar(scalar),
                                    comment: comment.isEmpty ? "imported" : comment)
             case "ssh-rsa":
                 // OpenSSH RSA private: mpint n, e, d, iqmp, p, q. dP/dQ are
@@ -186,11 +236,17 @@ public enum OpenSSHPrivateKey {
         }
     }
 
-    /// An mpint as fixed 32-byte big-endian (drop sign byte / left-pad).
-    private static func fixed32(_ data: Data) -> Data {
+    /// Normalize a P-256 private scalar mpint to exactly 32 big-endian bytes.
+    /// A valid P-256 scalar is ≤32 bytes (left-pad), or exactly 33 with a leading
+    /// 0x00 sign byte (drop it). Anything longer would lose significant bytes if
+    /// truncated, so it's rejected rather than silently mangled. An all-zero
+    /// scalar is invalid and rejected too.
+    private static func p256Scalar(_ data: Data) throws -> Data {
         var b = [UInt8](data)
-        if b.count > 32 { b = Array(b.suffix(32)) }
+        if b.count == 33 && b[0] == 0x00 { b = Array(b.dropFirst()) }   // strip sign byte
+        guard b.count <= 32 else { throw KeyImportError.corrupt }
         if b.count < 32 { b = [UInt8](repeating: 0, count: 32 - b.count) + b }
+        guard b.contains(where: { $0 != 0 }) else { throw KeyImportError.corrupt }
         return Data(b)
     }
 }

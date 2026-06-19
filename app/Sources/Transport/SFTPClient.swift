@@ -130,23 +130,58 @@ final class SFTPClient: @unchecked Sendable {
         }
     }
 
+    /// A random sibling temp path in the same remote directory as `dest`. Writing
+    /// here first then renaming onto `dest` makes an upload atomic: a failure
+    /// never leaves a truncated/half file under the real name.
+    private static func tempSibling(of dest: String) -> String {
+        let rand = String(UInt64.random(in: .min ... .max), radix: 36)
+        if let slash = dest.lastIndex(of: "/") {
+            let dir = dest[..<slash]            // includes everything up to (not incl.) the slash
+            let name = dest[dest.index(after: slash)...]
+            return "\(dir)/.\(name).\(rand).tmp"
+        }
+        return ".\(dest).\(rand).tmp"
+    }
+
+    /// Best-effort remote delete used to clean up a temp file on an upload error.
+    /// Runs on the SFTP queue (called from within `run`); ignores its own failure.
+    private func removeQuietly(_ sftp: OpaquePointer, _ path: String) {
+        _ = path.withCString { libssh2_sftp_unlink_ex(sftp, $0, UInt32(strlen($0))) }
+    }
+
     func upload(_ data: Data, to path: String) async throws {
         try await run {
             guard let sftp = self.sftp else { throw SFTPError.initFailed }
+            // Write to a temp sibling, then rename onto the destination — a failed
+            // (or partial) image-drop upload never leaves a half file under `path`.
+            let temp = Self.tempSibling(of: path)
             let flags = Self.FXF_WRITE | Self.FXF_CREAT | Self.FXF_TRUNC
-            guard let handle = path.withCString({ libssh2_sftp_open_ex(sftp, $0, UInt32(strlen($0)), flags, 0o644, Int32(Self.OPENFILE)) }) else {
+            guard let handle = temp.withCString({ libssh2_sftp_open_ex(sftp, $0, UInt32(strlen($0)), flags, 0o644, Int32(Self.OPENFILE)) }) else {
                 throw SFTPError.op("Couldn't create \(path).")
             }
-            defer { libssh2_sftp_close_handle(handle) }
-            try data.withUnsafeBytes { raw in
-                var off = 0
-                let base = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
-                while off < raw.count {
-                    let n = libssh2_sftp_write(handle, base + off, raw.count - off)
-                    if n <= 0 { throw SFTPError.op("Write failed (code \(n)).") }   // 0 = no progress
-                    off += n
+            do {
+                try data.withUnsafeBytes { raw in
+                    var off = 0
+                    let base = raw.baseAddress?.assumingMemoryBound(to: CChar.self)
+                    while off < raw.count {
+                        let n = libssh2_sftp_write(handle, base! + off, raw.count - off)
+                        if n < 0 { throw SFTPError.op("Write failed (code \(n)).") }
+                        off += n   // n == 0 = no progress; loop retries on the blocking handle
+                    }
+                }
+                libssh2_sftp_close_handle(handle)
+            } catch {
+                libssh2_sftp_close_handle(handle)
+                self.removeQuietly(sftp, temp)
+                throw error
+            }
+            // Atomically move temp → dest; drop the temp if the rename fails.
+            let rc = temp.withCString { f in
+                path.withCString { t in
+                    libssh2_sftp_rename_ex(sftp, f, UInt32(strlen(f)), t, UInt32(strlen(t)), Self.RENAME_FLAGS)
                 }
             }
+            if rc != 0 { self.removeQuietly(sftp, temp); throw SFTPError.op("Couldn't finalize \(path).") }
         }
     }
 
@@ -160,52 +195,100 @@ final class SFTPClient: @unchecked Sendable {
                 throw SFTPError.op("Couldn't open \(path).")
             }
             defer { libssh2_sftp_close_handle(handle) }
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-            guard let fh = try? FileHandle(forWritingTo: url) else { throw SFTPError.op("Couldn't write the local file.") }
-            defer { try? fh.close() }
-            var buf = [UInt8](repeating: 0, count: 32768)
-            while true {
-                let n = buf.withUnsafeMutableBytes {
-                    libssh2_sftp_read(handle, $0.baseAddress!.assumingMemoryBound(to: CChar.self), $0.count)
+            // Stream into a temp file in the same directory, then move it onto the
+            // destination only after a clean close — a mid-stream read error never
+            // leaves a truncated file at `url`.
+            let tempURL = url.deletingLastPathComponent()
+                .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).part")
+            FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+            guard let fh = try? FileHandle(forWritingTo: tempURL) else { throw SFTPError.op("Couldn't write the local file.") }
+            do {
+                var buf = [UInt8](repeating: 0, count: 32768)
+                while true {
+                    let n = buf.withUnsafeMutableBytes {
+                        libssh2_sftp_read(handle, $0.baseAddress!.assumingMemoryBound(to: CChar.self), $0.count)
+                    }
+                    if n > 0 { try fh.write(contentsOf: Data(buf[0 ..< n])) }
+                    else if n == 0 { break }
+                    else { throw SFTPError.op("Read failed.") }
                 }
-                if n > 0 { try fh.write(contentsOf: Data(buf[0 ..< n])) }
-                else if n == 0 { break }
-                else { throw SFTPError.op("Read failed.") }
+                try fh.close()
+            } catch {
+                try? fh.close()
+                try? FileManager.default.removeItem(at: tempURL)
+                throw error
+            }
+            // Move temp → destination, replacing any existing file.
+            do {
+                if FileManager.default.fileExists(atPath: url.path) {
+                    _ = try FileManager.default.replaceItemAt(url, withItemAt: tempURL)
+                } else {
+                    try FileManager.default.moveItem(at: tempURL, to: url)
+                }
+            } catch {
+                try? FileManager.default.removeItem(at: tempURL)
+                throw SFTPError.op("Couldn't save the downloaded file.")
             }
         }
     }
 
     /// Stream a local file to a remote path in fixed-size chunks (bounded memory).
+    /// Writes to a temp sibling then renames onto `path`, so a local read failure
+    /// or a partial write throws and never leaves a truncated remote file under
+    /// the final name (the old code swallowed a `read` error as EOF — a silent
+    /// truncation reported as success).
     func upload(fromFile url: URL, to path: String) async throws {
         try await run {
             guard let sftp = self.sftp else { throw SFTPError.initFailed }
+            let temp = Self.tempSibling(of: path)
             let flags = Self.FXF_WRITE | Self.FXF_CREAT | Self.FXF_TRUNC
-            guard let handle = path.withCString({ libssh2_sftp_open_ex(sftp, $0, UInt32(strlen($0)), flags, 0o644, Int32(Self.OPENFILE)) }) else {
+            guard let handle = temp.withCString({ libssh2_sftp_open_ex(sftp, $0, UInt32(strlen($0)), flags, 0o644, Int32(Self.OPENFILE)) }) else {
                 throw SFTPError.op("Couldn't create \(path).")
             }
-            defer { libssh2_sftp_close_handle(handle) }
-            guard let fh = try? FileHandle(forReadingFrom: url) else { throw SFTPError.op("Couldn't read the file.") }
-            defer { try? fh.close() }
-            while true {
-                let chunk = (try? fh.read(upToCount: 32768)) ?? nil
-                guard let chunk, !chunk.isEmpty else { break }
-                try chunk.withUnsafeBytes { raw in
-                    var off = 0
-                    var stalls = 0
-                    let base = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
-                    while off < raw.count {
-                        let n = libssh2_sftp_write(handle, base + off, raw.count - off)
-                        if n < 0 { throw SFTPError.op("Write failed (code \(n)).") }
-                        if n == 0 {   // no progress on a blocking handle — bail rather than spin
-                            stalls += 1
-                            if stalls > 1000 { throw SFTPError.op("Write stalled.") }
-                            continue
+            guard let fh = try? FileHandle(forReadingFrom: url) else {
+                libssh2_sftp_close_handle(handle); self.removeQuietly(sftp, temp)
+                throw SFTPError.op("Couldn't read the file.")
+            }
+            do {
+                while true {
+                    // Propagate a local read error instead of treating it as EOF —
+                    // otherwise a failed read would truncate the upload silently.
+                    let chunk: Data?
+                    do { chunk = try fh.read(upToCount: 32768) }
+                    catch { throw SFTPError.op("Couldn't read the local file.") }
+                    guard let chunk, !chunk.isEmpty else { break }
+                    try chunk.withUnsafeBytes { raw in
+                        var off = 0
+                        var stalls = 0
+                        let base = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
+                        while off < raw.count {
+                            let n = libssh2_sftp_write(handle, base + off, raw.count - off)
+                            if n < 0 { throw SFTPError.op("Write failed (code \(n)).") }
+                            if n == 0 {   // no progress on a blocking handle — bail rather than spin
+                                stalls += 1
+                                if stalls > 1000 { throw SFTPError.op("Write stalled.") }
+                                continue
+                            }
+                            stalls = 0
+                            off += n
                         }
-                        stalls = 0
-                        off += n
                     }
                 }
+                try? fh.close()
+                libssh2_sftp_close_handle(handle)
+            } catch {
+                try? fh.close()
+                libssh2_sftp_close_handle(handle)
+                self.removeQuietly(sftp, temp)
+                throw error
             }
+            // Atomically move temp → dest; drop the temp if the rename fails.
+            let rc = temp.withCString { f in
+                path.withCString { t in
+                    libssh2_sftp_rename_ex(sftp, f, UInt32(strlen(f)), t, UInt32(strlen(t)), Self.RENAME_FLAGS)
+                }
+            }
+            if rc != 0 { self.removeQuietly(sftp, temp); throw SFTPError.op("Couldn't finalize \(path).") }
         }
     }
 
