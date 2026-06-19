@@ -13,9 +13,20 @@ struct TerminalKeyBar: View {
     /// When a physical keyboard is attached, collapse to just Esc — the one key
     /// most iPad keyboards lack. The rest (Ctrl, Tab, arrows, …) are on the keyboard.
     var minimal: Bool = false
+    @Binding var muxScrollActive: Bool
+
+    init(session: TerminalSession, handle: TerminalHandle, theme: TerminalTheme,
+         minimal: Bool = false, muxScrollActive: Binding<Bool> = .constant(false)) {
+        self.session = session
+        self.handle = handle
+        self.theme = theme
+        self.minimal = minimal
+        self._muxScrollActive = muxScrollActive
+    }
 
     private enum Key: Hashable {
         case esc, tab
+        case tmuxCopy
         case ctrl(Character)      // a Ctrl-<letter> chord
         case arrow(Arrow)
         case page(Bool)           // true = up
@@ -36,6 +47,7 @@ struct TerminalKeyBar: View {
             switch key {
             case .esc: return "Escape"
             case .tab: return "Tab"
+            case .tmuxCopy: return "tmux copy mode"
             case .ctrl(let c): return "Control \(c.uppercased())"
             case .arrow(let a):
                 switch a {
@@ -52,25 +64,28 @@ struct TerminalKeyBar: View {
 
     private var items: [Item] { minimal ? [Item(label: "esc", key: .esc, wide: true)] : fullItems }
 
-    private let fullItems: [Item] = [
-        Item(label: "esc", key: .esc, wide: true),
-        Item(label: "tab", key: .tab, wide: true),
-        Item(label: "⌃C", key: .ctrl("c"), wide: false),
-        Item(label: "⌃D", key: .ctrl("d"), wide: false),
-        Item(label: "⌃Z", key: .ctrl("z"), wide: false),
-        Item(label: "⌃L", key: .ctrl("l"), wide: false),
-        Item(label: "⌃R", key: .ctrl("r"), wide: false),
-        Item(label: "←", key: .arrow(.left), wide: false),
-        Item(label: "↓", key: .arrow(.down), wide: false),
-        Item(label: "↑", key: .arrow(.up), wide: false),
-        Item(label: "→", key: .arrow(.right), wide: false),
-        Item(label: "⇞", key: .page(true), wide: false),
-        Item(label: "⇟", key: .page(false), wide: false),
-        Item(label: "|", key: .text("|"), wide: false),
-        Item(label: "~", key: .text("~"), wide: false),
-        Item(label: "/", key: .text("/"), wide: false),
-        Item(label: "-", key: .text("-"), wide: false),
-    ]
+    private var fullItems: [Item] {
+        [
+            Item(label: "esc", key: .esc, wide: true),
+            Item(label: "tab", key: .tab, wide: true),
+            Item(label: muxScrollActive ? "done" : "tmux", key: .tmuxCopy, wide: true),
+            Item(label: "⌃C", key: .ctrl("c"), wide: false),
+            Item(label: "⌃D", key: .ctrl("d"), wide: false),
+            Item(label: "⌃Z", key: .ctrl("z"), wide: false),
+            Item(label: "⌃L", key: .ctrl("l"), wide: false),
+            Item(label: "⌃R", key: .ctrl("r"), wide: false),
+            Item(label: "←", key: .arrow(.left), wide: false),
+            Item(label: "↓", key: .arrow(.down), wide: false),
+            Item(label: "↑", key: .arrow(.up), wide: false),
+            Item(label: "→", key: .arrow(.right), wide: false),
+            Item(label: "⇞", key: .page(true), wide: false),
+            Item(label: "⇟", key: .page(false), wide: false),
+            Item(label: "|", key: .text("|"), wide: false),
+            Item(label: "~", key: .text("~"), wide: false),
+            Item(label: "/", key: .text("/"), wide: false),
+            Item(label: "-", key: .text("-"), wide: false),
+        ]
+    }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -97,8 +112,21 @@ struct TerminalKeyBar: View {
     private func send(_ key: Key) {
         let bytes: [UInt8]
         switch key {
-        case .esc: bytes = [0x1b]
+        case .esc:
+            muxScrollActive = false
+            handle.setRemoteScrollMode(false)
+            bytes = [0x1b]
         case .tab: bytes = [0x09]
+        case .tmuxCopy:
+            if muxScrollActive {
+                muxScrollActive = false
+                handle.setRemoteScrollMode(false)
+                bytes = [0x1b]
+            } else {
+                muxScrollActive = true
+                handle.setRemoteScrollMode(true)
+                bytes = [0x02, 0x5b]
+            }
         case .ctrl(let c):
             // Ctrl-<letter> masks to the low 5 bits of the uppercase letter.
             let upper = Character(c.uppercased())

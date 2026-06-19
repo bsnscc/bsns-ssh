@@ -30,6 +30,7 @@ struct LiveTerminalScreen: View {
     @State private var showForwards = false
     @State private var showSnippets = false
     @State private var showHistory = false
+    @State private var muxScrollActive = false
     @FocusState private var findFocused: Bool
 
     private var theme: TerminalTheme { TerminalTheme.named(themeId) }
@@ -55,7 +56,9 @@ struct LiveTerminalScreen: View {
             // keyboard it collapses to just Esc (see TerminalKeyBar.minimal).
             if !keyboardUp && showKeyBar {
                 Divider().overlay(Color(theme.ansi[8].uiColor).opacity(0.5))
-                TerminalKeyBar(session: session, handle: handle, theme: theme, minimal: hwKeyboard.isConnected)
+                TerminalKeyBar(session: session, handle: handle, theme: theme,
+                               minimal: hwKeyboard.isConnected,
+                               muxScrollActive: $muxScrollActive)
             }
         }
             .ignoresSafeArea(.container, edges: .bottom)
@@ -63,8 +66,14 @@ struct LiveTerminalScreen: View {
             .onAppear { hwKeyboard.start(); devFindTest(); UIApplication.shared.isIdleTimerDisabled = keepAwake }
             // Leaving the terminal (e.g. switching tabs) must NOT disconnect —
             // the session lives in the store until explicitly closed.
-            .onDisappear { hwKeyboard.stop(); UIApplication.shared.isIdleTimerDisabled = false }
+            .onDisappear {
+                hwKeyboard.stop()
+                UIApplication.shared.isIdleTimerDisabled = false
+                muxScrollActive = false
+                handle.setRemoteScrollMode(false)
+            }
             .onChange(of: keepAwake) { _, v in UIApplication.shared.isIdleTimerDisabled = v }
+            .onChange(of: muxScrollActive) { _, active in handle.setRemoteScrollMode(active) }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                 keyboardUp = true
             }
@@ -256,6 +265,7 @@ final class TerminalHandle {
 
     func paste() { terminal?.paste(nil) }
     func selectAll() { terminal?.selectAll(nil) }
+    func setRemoteScrollMode(_ active: Bool) { (terminal as? ZoomableTerminalView)?.setRemoteScrollMode(active) }
 
     // MARK: Find in scrollback
 
@@ -372,9 +382,8 @@ final class TerminalHandle {
 ///
 /// We use the default CoreGraphics renderer (its native caret sits in the right
 /// cell — the Metal renderer's own cursor was permanently offset). CoreGraphics
-/// relies on dirty-region tracking and otherwise leaves stale glyphs when the
-/// screen clears; the Coordinator calls `updateFullScreen()` after each feed to
-/// force a full repaint, which fixes the "new text on old text" garbling.
+/// relies on dirty-region tracking; foreground and re-embed recovery force a
+/// repaint, while normal remote output stays on SwiftTerm's incremental path.
 final class ZoomableTerminalView: TerminalView {
     var onZoomChange: ((CGFloat) -> Void)?
     /// Send raw bytes to the remote (set by the surface → session.write).
@@ -383,6 +392,10 @@ final class ZoomableTerminalView: TerminalView {
     /// Set by the surface → session.uploadImage.
     var onImageDropped: ((Data, String) -> Void)?
     private var dropInteractionInstalled = false
+    private var remoteScrollPanGesture: UIPanGestureRecognizer?
+    private var remoteScrollMode = false
+    private var remoteScrollAccumulator: CGFloat = 0
+    private var scrollEnabledBeforeRemoteScroll = true
     private var editMenu: UIEditMenuInteraction?
     private var currentSize: CGFloat = defaultFontSize
     private var pinchStart: CGFloat = defaultFontSize
@@ -429,6 +442,68 @@ final class ZoomableTerminalView: TerminalView {
         installImageDrop()
     }
 
+    func setRemoteScrollMode(_ active: Bool) {
+        guard remoteScrollMode != active else { return }
+        remoteScrollMode = active
+        remoteScrollAccumulator = 0
+
+        if active {
+            installRemoteScrollGesture()
+            scrollEnabledBeforeRemoteScroll = isScrollEnabled
+            isScrollEnabled = false
+            remoteScrollPanGesture?.isEnabled = true
+            _ = becomeFirstResponder()
+        } else {
+            remoteScrollPanGesture?.isEnabled = false
+            isScrollEnabled = scrollEnabledBeforeRemoteScroll
+        }
+    }
+
+    private func installRemoteScrollGesture() {
+        guard remoteScrollPanGesture == nil else { return }
+        let gesture = UIPanGestureRecognizer(target: self, action: #selector(handleRemoteScrollPan(_:)))
+        gesture.cancelsTouchesInView = true
+        gesture.isEnabled = remoteScrollMode
+        addGestureRecognizer(gesture)
+        remoteScrollPanGesture = gesture
+    }
+
+    @objc private func handleRemoteScrollPan(_ gesture: UIPanGestureRecognizer) {
+        guard remoteScrollMode else { return }
+        switch gesture.state {
+        case .began:
+            remoteScrollAccumulator = 0
+            gesture.setTranslation(.zero, in: self)
+        case .changed:
+            let deltaY = gesture.translation(in: self).y
+            gesture.setTranslation(.zero, in: self)
+            remoteScrollAccumulator += deltaY
+            sendRemoteScrollSteps()
+        case .ended, .cancelled, .failed:
+            remoteScrollAccumulator = 0
+        default:
+            break
+        }
+    }
+
+    private func sendRemoteScrollSteps() {
+        let rows = max(1, getTerminal().rows)
+        let lineHeight = max(12, bounds.height / CGFloat(rows))
+        let maxStepsPerEvent = 30
+        var steps = Int(remoteScrollAccumulator / lineHeight)
+        guard steps != 0 else { return }
+        steps = min(maxStepsPerEvent, max(-maxStepsPerEvent, steps))
+        remoteScrollAccumulator -= CGFloat(steps) * lineHeight
+
+        let terminal = getTerminal()
+        let up = terminal.applicationCursor ? EscapeSequences.moveUpApp : EscapeSequences.moveUpNormal
+        let down = terminal.applicationCursor ? EscapeSequences.moveDownApp : EscapeSequences.moveDownNormal
+        let sequence = steps > 0 ? up : down
+        for _ in 0..<abs(steps) {
+            onSendBytes?(sequence)
+        }
+    }
+
     /// Accept image drag-drops onto the terminal. Idempotent — only adds the
     /// interaction once even if setup runs again.
     private func installImageDrop() {
@@ -467,6 +542,8 @@ final class ZoomableTerminalView: TerminalView {
             // scrollback, where local view-scroll can't reach the remote's history.
             UIKeyCommand(title: "Page Up", action: #selector(remotePageUp), input: UIKeyCommand.inputUpArrow, modifierFlags: .alternate),
             UIKeyCommand(title: "Page Down", action: #selector(remotePageDown), input: UIKeyCommand.inputDownArrow, modifierFlags: .alternate),
+            UIKeyCommand(title: "Page Up", action: #selector(remotePageUp), input: UIKeyCommand.inputPageUp, modifierFlags: []),
+            UIKeyCommand(title: "Page Down", action: #selector(remotePageDown), input: UIKeyCommand.inputPageDown, modifierFlags: []),
         ]
         scroll.forEach { $0.wantsPriorityOverSystemBehavior = true }
         return (super.keyCommands ?? []) + [

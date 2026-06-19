@@ -14,6 +14,8 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
 
     private var appliedThemeId: String?
     var onZoomChange: ((CGFloat) -> Void)?
+    private var foregroundObservers: [NSObjectProtocol] = []
+    private var foregroundRefreshWork: DispatchWorkItem?
 
     init(session: TerminalSession, themeId: String, fontFamily: String, fontSize: CGFloat) {
         self.session = session
@@ -37,9 +39,10 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
 
         // The session forwards output from whichever transport is current, so a
         // reconnect swaps the underlying transport without re-wiring here.
-        // Output is coalesced: chunks accumulate and we feed + repaint once per
-        // runloop turn, so a flood (cat of a big file) costs one redraw per frame
-        // instead of one per network packet.
+        // Output is coalesced: chunks accumulate and we feed once per runloop
+        // turn. SwiftTerm schedules its own display update from `feedFinish()`;
+        // explicit full-screen refreshes are reserved for foreground/re-embed
+        // recovery paths.
         session.onOutput = { [weak self] bytes in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -47,13 +50,26 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
                 self.scheduleFlush()
             }
         }
+
+        let refresh: @Sendable (Notification) -> Void = { [weak self] _ in
+            Task { @MainActor in self?.resyncAfterForeground() }
+        }
+        for name in [UIApplication.willEnterForegroundNotification, UIApplication.didBecomeActiveNotification] {
+            foregroundObservers.append(
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main, using: refresh))
+        }
+    }
+
+    deinit {
+        foregroundObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        foregroundRefreshWork?.cancel()
     }
 
     private var pendingFeed: [UInt8] = []
     private var flushScheduled = false
 
     /// Drain accumulated output on the next runloop turn — coalescing every chunk
-    /// that arrived in between into a single feed + full repaint.
+    /// that arrived in between into a single terminal feed.
     private func scheduleFlush() {
         guard !flushScheduled else { return }
         flushScheduled = true
@@ -64,8 +80,6 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
             let chunk = self.pendingFeed
             self.pendingFeed.removeAll(keepingCapacity: true)
             self.view.feed(byteArray: chunk[...])
-            self.view.getTerminal().updateFullScreen()
-            self.view.setNeedsDisplay(self.view.bounds)
         }
     }
 
@@ -86,6 +100,27 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
             view.getTerminal().updateFullScreen()
             view.setNeedsDisplay(view.bounds)
         }
+    }
+
+    /// Foregrounding can deliver the mosh resume repaint before UIKit has finished
+    /// laying out the terminal. Push SwiftTerm's current geometry immediately
+    /// (bypassing the drag debounce) and repaint locally, then repeat once after
+    /// the foreground transition settles.
+    func resyncAfterForeground() {
+        foregroundRefreshWork?.cancel()
+        forceCurrentSizeAndRedraw()
+
+        let work = DispatchWorkItem { [weak self] in self?.forceCurrentSizeAndRedraw() }
+        foregroundRefreshWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: work)
+    }
+
+    private func forceCurrentSizeAndRedraw() {
+        view.layoutIfNeeded()
+        let terminal = view.getTerminal()
+        sendResize(cols: terminal.cols, rows: terminal.rows, force: true)
+        terminal.updateFullScreen()
+        view.setNeedsDisplay(view.bounds)
     }
 
     /// Apply the live-changeable preferences (cursor, Option-as-Meta).
@@ -114,14 +149,22 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pendingResize = nil
-            self.lastSentCols = newCols
-            self.lastSentRows = newRows
-            self.session.resize(cols: Int32(newCols), rows: Int32(newRows))
+            self.sendResize(cols: newCols, rows: newRows, force: false)
         }
         pendingResize = work
         // Trailing debounce: only the last size in a ~110ms quiet window is sent,
         // and the final size always wins (every change reschedules this).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.11, execute: work)
+    }
+
+    private func sendResize(cols: Int, rows: Int, force: Bool) {
+        guard cols > 0, rows > 0 else { return }
+        pendingResize?.cancel()
+        pendingResize = nil
+        if !force, cols == lastSentCols, rows == lastSentRows { return }
+        lastSentCols = cols
+        lastSentRows = rows
+        session.resize(cols: Int32(cols), rows: Int32(rows))
     }
 
     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {

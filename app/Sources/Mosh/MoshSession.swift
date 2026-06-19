@@ -17,17 +17,29 @@ private func moshLog(_ message: String) { DiagLog.log("mosh", message) }
 /// starve behind the loop). Instead they stage work under a lock and wake the
 /// loop through a self-pipe, the same pattern as `SSHShell`.
 final class MoshSession: TerminalTransport, @unchecked Sendable {
-    var onOutput: (@Sendable (ArraySlice<UInt8>) -> Void)?
-    var onClosed: (@Sendable (String?) -> Void)?
+    var onOutput: (@Sendable (ArraySlice<UInt8>) -> Void)? {
+        get { lock.withLock { onOutputHandler } }
+        set { lock.withLock { onOutputHandler = newValue } }
+    }
+    var onClosed: (@Sendable (String?) -> Void)? {
+        get { lock.withLock { onClosedHandler } }
+        set { lock.withLock { onClosedHandler = newValue } }
+    }
     /// Reports liveness transitions: `true` when the server has gone silent past
     /// the threshold (so the UI can show the session is stale rather than a
     /// reassuring green), `false` when contact resumes. mosh deliberately never
     /// self-closes on silence (it's built to roam), so this is the only signal a
     /// dead session gives us.
-    var onLiveness: (@Sendable (Bool) -> Void)?
+    var onLiveness: (@Sendable (Bool) -> Void)? {
+        get { lock.withLock { onLivenessHandler } }
+        set { lock.withLock { onLivenessHandler = newValue } }
+    }
     private static let staleThreshold: TimeInterval = 8
 
     private let queue = DispatchQueue(label: "cc.bsns.ssh.mosh")
+    private var onOutputHandler: (@Sendable (ArraySlice<UInt8>) -> Void)?
+    private var onClosedHandler: (@Sendable (String?) -> Void)?
+    private var onLivenessHandler: (@Sendable (Bool) -> Void)?
     private var client: OpaquePointer?
     private var lastContactAt = Date()
     private var staleReported = false
@@ -62,8 +74,14 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         serverIP = ip; serverPort = port; serverKey = key; self.cols = cols; self.rows = rows
         moshLog("open \(cols)x\(rows)")
         var fds: [Int32] = [-1, -1]
-        pipe(&fds)
+        guard pipe(&fds) == 0 else {
+            mosh_client_free(c)
+            client = nil
+            return "couldn't create the mosh wake pipe"
+        }
         wakeRead = fds[0]; wakeWrite = fds[1]
+        Self.setNonBlocking(wakeRead)
+        Self.setNonBlocking(wakeWrite)
         // iOS suspends the loop + tears down our socket when backgrounded. On return
         // we (a) kick the loop, (b) re-assert the terminal size + force a full repaint
         // (the framebuffer/viewport desync that leaves content wrapping at the wrong
@@ -100,7 +118,11 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     }
 
     private func wake() {
-        if wakeWrite >= 0 { var b: UInt8 = 1; _ = Darwin.write(wakeWrite, &b, 1) }
+        lock.lock()
+        defer { lock.unlock() }
+        guard wakeWrite >= 0 else { return }
+        var b: UInt8 = 1
+        _ = Darwin.write(wakeWrite, &b, 1)
     }
 
     private func runLoop() {
@@ -231,10 +253,24 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         foregroundObservers.forEach { NotificationCenter.default.removeObserver($0) }
         foregroundObservers.removeAll()
         if let c = client { mosh_client_free(c); client = nil }
-        if wakeRead >= 0 { close(wakeRead); wakeRead = -1 }
-        if wakeWrite >= 0 { close(wakeWrite); wakeWrite = -1 }
-        lock.lock(); let notify = !closeNotified; closeNotified = true; lock.unlock()
-        if notify { onClosed?(nil) }   // user-initiated stop = clean
+        lock.lock()
+        let readFD = wakeRead
+        let writeFD = wakeWrite
+        wakeRead = -1
+        wakeWrite = -1
+        let notify = !closeNotified
+        closeNotified = true
+        let closed = onClosedHandler
+        lock.unlock()
+        if readFD >= 0 { close(readFD) }
+        if writeFD >= 0 { close(writeFD) }
+        if notify { closed?(nil) }   // user-initiated stop = clean
+    }
+
+    private static func setNonBlocking(_ fd: Int32) {
+        guard fd >= 0 else { return }
+        let flags = fcntl(fd, F_GETFL, 0)
+        if flags >= 0 { _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK) }
     }
 
     /// Resolve a host (name or IP literal) to a numeric address for the mosh

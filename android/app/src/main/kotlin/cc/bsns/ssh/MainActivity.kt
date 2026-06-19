@@ -7,6 +7,9 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.annotation.SuppressLint
+import android.view.MotionEvent
+import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
@@ -100,6 +103,7 @@ import cc.bsns.ssh.transport.SshBridge
 import cc.bsns.ssh.transport.SshSession
 import cc.bsns.ssh.transport.TerminalTransport
 import kotlin.concurrent.thread
+import kotlin.math.abs
 
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -401,6 +405,10 @@ private val SECRET_PROMPT_CUES = listOf(
     "[sudo] password", "verification code", "one-time password",
     "enter pin", "pin:", "otp",
 )
+private val ESC_BYTES = byteArrayOf(0x1B.toByte())
+private val TMUX_COPY_MODE_BYTES = byteArrayOf(0x02.toByte(), 0x5B.toByte())
+private val REMOTE_UP_BYTES = "\u001B[A".toByteArray(Charsets.UTF_8)
+private val REMOTE_DOWN_BYTES = "\u001B[B".toByteArray(Charsets.UTF_8)
 
 class TerminalHolder(
     context: android.content.Context,
@@ -423,6 +431,8 @@ class TerminalHolder(
      *  session isn't a reassuring green. */
     var isStale by mutableStateOf(false)
         private set
+    var remoteScrollActive by mutableStateOf(false)
+        private set
     /** Why the session is in [ConnStatus.Disconnected] — shown in the banner so a
      *  drop isn't just a bare "Disconnected". Null for a plain peer drop. */
     var disconnectReason by mutableStateOf<String?>(null)
@@ -443,6 +453,8 @@ class TerminalHolder(
     // (noteOutputForSecretPrompt) and the write thread (trackInput).
     @Volatile private var awaitingSecret = false
     private val outTail = StringBuilder()
+    private var remoteScrollLastY = 0f
+    private var remoteScrollRemainder = 0f
 
     /** Inspect transport output and arm secret-suppression on a password prompt.
      *  Liberal on purpose: a false positive only drops one history entry, while a
@@ -465,6 +477,62 @@ class TerminalHolder(
     fun suggestionsFor(prefix: String): List<String> = history.suggestions(prefix)
     fun history(): List<String> = history.all()
     fun clearHistory() = history.clear()
+
+    fun enterTmuxScrollMode() {
+        if (status != ConnStatus.Connected) return
+        session.write(TMUX_COPY_MODE_BYTES)
+        setRemoteScrollMode(true)
+    }
+
+    fun finishRemoteScrollMode(sendEscape: Boolean = true) {
+        setRemoteScrollMode(false)
+        if (sendEscape && status == ConnStatus.Connected) session.write(ESC_BYTES)
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    fun setRemoteScrollMode(active: Boolean) {
+        if (remoteScrollActive == active) return
+        remoteScrollActive = active
+        remoteScrollRemainder = 0f
+        if (active) {
+            terminalView.requestFocus()
+            terminalView.setOnTouchListener(View.OnTouchListener { _, event ->
+                handleRemoteScrollTouch(event)
+            })
+        } else {
+            terminalView.setOnTouchListener(null)
+        }
+    }
+
+    private fun handleRemoteScrollTouch(event: MotionEvent): Boolean {
+        if (!remoteScrollActive) return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                remoteScrollLastY = event.y
+                remoteScrollRemainder = 0f
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val deltaY = event.y - remoteScrollLastY
+                remoteScrollLastY = event.y
+                remoteScrollRemainder += deltaY
+                sendRemoteScrollSteps()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                remoteScrollRemainder = 0f
+            }
+        }
+        return true
+    }
+
+    private fun sendRemoteScrollSteps() {
+        val rows = terminalView.mEmulator?.mRows?.coerceAtLeast(1) ?: 24
+        val lineHeight = (terminalView.height / rows.toFloat()).coerceAtLeast(12f)
+        var steps = (remoteScrollRemainder / lineHeight).toInt().coerceIn(-30, 30)
+        if (steps == 0) return
+        remoteScrollRemainder -= steps * lineHeight
+        val bytes = if (steps > 0) REMOTE_UP_BYTES else REMOTE_DOWN_BYTES
+        repeat(abs(steps)) { session.write(bytes) }
+    }
 
     /** Send the completion's remaining suffix to the shell (the prefix is already typed). */
     fun applyCompletion(full: String) {
@@ -713,6 +781,9 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
     LaunchedEffect(searching) {
         if (searching) { holder.terminalView.clearFocus(); findFocus.requestFocus(); keyboard?.show() }
     }
+    DisposableEffect(holder) {
+        onDispose { holder.setRemoteScrollMode(false) }
+    }
 
     fun runSearch(q: String) {
         query = q
@@ -863,7 +934,20 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                 }
             }
         }
-        if (showKeyBar) KeyBar { holder.session.write(it) }
+        if (showKeyBar) {
+            KeyBar(
+                remoteScrollActive = holder.remoteScrollActive,
+                onKey = { holder.session.write(it) },
+                onEscape = { holder.finishRemoteScrollMode(sendEscape = true) },
+                onTmuxCopy = {
+                    if (holder.remoteScrollActive) {
+                        holder.finishRemoteScrollMode(sendEscape = true)
+                    } else {
+                        holder.enterTmuxScrollMode()
+                    }
+                },
+            )
+        }
     }
 
     if (showSnippets) SnippetPickerDialog(
@@ -1483,31 +1567,50 @@ private class MismatchInfo(
 private fun seq(vararg b: Int) = ByteArray(b.size) { b[it].toByte() }
 
 /** Keys missing from soft keyboards but essential in a terminal. */
+private data class KeyBarItem(val label: String, val action: () -> Unit)
+
 @Composable
-private fun KeyBar(onKey: (ByteArray) -> Unit) {
+private fun KeyBar(
+    remoteScrollActive: Boolean,
+    onKey: (ByteArray) -> Unit,
+    onEscape: () -> Unit,
+    onTmuxCopy: () -> Unit,
+) {
     val keys = listOf(
-        "esc" to seq(0x1B), "tab" to seq(0x09),
-        "^C" to seq(0x03), "^D" to seq(0x04), "^Z" to seq(0x1A), "^L" to seq(0x0C),
-        "←" to seq(0x1B, 0x5B, 0x44), "↑" to seq(0x1B, 0x5B, 0x41),
-        "↓" to seq(0x1B, 0x5B, 0x42), "→" to seq(0x1B, 0x5B, 0x43),
-        "|" to seq('|'.code), "~" to seq('~'.code), "/" to seq('/'.code), "-" to seq('-'.code),
+        KeyBarItem("esc", onEscape),
+        KeyBarItem("tab") { onKey(seq(0x09)) },
+        KeyBarItem(if (remoteScrollActive) "done" else "tmux", onTmuxCopy),
+        KeyBarItem("^C") { onKey(seq(0x03)) },
+        KeyBarItem("^D") { onKey(seq(0x04)) },
+        KeyBarItem("^Z") { onKey(seq(0x1A)) },
+        KeyBarItem("^L") { onKey(seq(0x0C)) },
+        KeyBarItem("←") { onKey(seq(0x1B, 0x5B, 0x44)) },
+        KeyBarItem("↑") { onKey(seq(0x1B, 0x5B, 0x41)) },
+        KeyBarItem("↓") { onKey(seq(0x1B, 0x5B, 0x42)) },
+        KeyBarItem("→") { onKey(seq(0x1B, 0x5B, 0x43)) },
+        KeyBarItem("⇞") { onKey(seq(0x1B, 0x5B, 0x35, 0x7E)) },
+        KeyBarItem("⇟") { onKey(seq(0x1B, 0x5B, 0x36, 0x7E)) },
+        KeyBarItem("|") { onKey(seq('|'.code)) },
+        KeyBarItem("~") { onKey(seq('~'.code)) },
+        KeyBarItem("/") { onKey(seq('/'.code)) },
+        KeyBarItem("-") { onKey(seq('-'.code)) },
     )
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
             .padding(horizontal = 6.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        keys.forEach { (label, bytes) ->
+        keys.forEach { item ->
             // Rounded, filled key like the iOS key bar — a tappable chip, not a flat button.
             Box(
                 Modifier.clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable { onKey(bytes) }
+                    .clickable { item.action() }
                     .heightIn(min = 38.dp).widthIn(min = 42.dp)
                     .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(label, fontFamily = FontFamily.Monospace, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                Text(item.label, fontFamily = FontFamily.Monospace, fontSize = 15.sp, fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface)
             }
         }
