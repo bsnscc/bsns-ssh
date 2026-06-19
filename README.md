@@ -5,9 +5,7 @@
 <h1 align="center">bsns.SSH</h1>
 
 <p align="center">
-  A native iOS &amp; Android SSH/mosh client — <strong>your keys and config are
-  yours, hardware-backed where the device supports it, with no vendor ever in the
-  middle.</strong>
+  A native iOS &amp; Android SSH/mosh client — <strong>no ads, no accounts, no telemetry, no charge, no catch.</strong>
 </p>
 
 <p align="center">
