@@ -162,45 +162,134 @@ struct KeysView: View {
                            keyLabel: "\(target.key.algorithm.rawValue)  ·  \(SSHKeyFormat.fingerprint(ofPublicKeyBlob: target.key.blob))")
         }
         .sheet(isPresented: $showYubiKey) { YubiKeyEnrollView() }
-        .alert("Add a FIDO2 security key", isPresented: $showFidoEnroll) {
-            TextField("Label", text: $fidoName)
-            SecureField("Security-key PIN", text: $fidoPin)
-            Button("Cancel", role: .cancel) { fidoPin = "" }
-            Button("Create on key") {
-                let pin = fidoPin.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !pin.isEmpty else {
-                    genError = "Enter the security-key PIN first."
-                    return
+        .sheet(isPresented: $showFidoEnroll, onDismiss: { fidoPin = "" }) {
+            FidoSecurityKeySheet(
+                name: $fidoName,
+                pin: $fidoPin,
+                create: { label, pin in
+                    try await store.enrollSecurityKey(name: label, pin: pin)
+                },
+                importExisting: { pin in
+                    try await store.importSecurityKeys(pin: pin)
                 }
-                Task {
-                    do {
-                        try await store.enrollSecurityKey(name: fidoName, pin: pin)
-                        fidoPin = ""
-                    }
-                    catch { genError = "Couldn't create the security-key credential: \(error.localizedDescription)" }
-                }
-            }
-            Button("Import from key") {
-                let pin = fidoPin.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !pin.isEmpty else {
-                    genError = "Enter the security-key PIN first."
-                    return
-                }
-                Task {
-                    do {
-                        let imported = try await store.importSecurityKeys(pin: pin)
-                        fidoPin = ""
-                        if imported == 0 { genError = "That security-key credential is already added." }
-                    }
-                    catch { genError = "Couldn't import the security key: \(error.localizedDescription)" }
-                }
-            }
-        } message: {
-            Text("""
-            Create a portable SSH security-key credential on your YubiKey, or import one already on the key. The private key never leaves the token.
-
-            One authorized_keys line can work on iOS and Android when the phone can talk to the key and the server supports OpenSSH FIDO2. Keep a backup key so a lost one doesn't lock you out.
-            """)
+            )
         }
+    }
+}
+
+private struct FidoSecurityKeySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var name: String
+    @Binding var pin: String
+    let create: (String, String) async throws -> Void
+    let importExisting: (String) async throws -> Int
+
+    @State private var busy = false
+    @State private var message: String?
+    @State private var messageIsError = false
+    @FocusState private var pinFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Label", text: $name)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    SecureField("Security-key PIN", text: $pin)
+                        .textContentType(.password)
+                        .focused($pinFocused)
+                } footer: {
+                    Text("Create a portable SSH security-key credential on your YubiKey, or import one already on the key. The private key never leaves the token.")
+                }
+
+                Section {
+                    Button("Create on key") { runCreate() }
+                        .disabled(busy || cleanedPIN.isEmpty)
+                    Button("Import from key") { runImport() }
+                        .disabled(busy || cleanedPIN.isEmpty)
+                } footer: {
+                    Text("One authorized_keys line can work on iOS and Android when the phone can talk to the key and the server supports OpenSSH FIDO2. Keep a backup key so a lost one doesn't lock you out.")
+                }
+
+                if busy {
+                    Section {
+                        HStack { ProgressView(); Text("Waiting for security key…") }
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let message {
+                    Section {
+                        Text(message)
+                            .font(.callout)
+                            .foregroundStyle(messageIsError ? .red : Brand.accent)
+                    }
+                }
+            }
+            .navigationTitle("Add FIDO2 key")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { pin = ""; dismiss() }
+                        .disabled(busy)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .onAppear { pinFocused = true }
+    }
+
+    private var cleanedPIN: String {
+        pin.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func runCreate() {
+        let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pin = cleanedPIN
+        guard !pin.isEmpty else {
+            show("Enter the security-key PIN first.", error: true)
+            return
+        }
+        busy = true
+        message = nil
+        Task {
+            do {
+                try await create(label, pin)
+                self.pin = ""
+                dismiss()
+            } catch {
+                show("Couldn't create the security-key credential: \(error.localizedDescription)", error: true)
+            }
+            busy = false
+        }
+    }
+
+    private func runImport() {
+        let pin = cleanedPIN
+        guard !pin.isEmpty else {
+            show("Enter the security-key PIN first.", error: true)
+            return
+        }
+        busy = true
+        message = nil
+        Task {
+            do {
+                let imported = try await importExisting(pin)
+                self.pin = ""
+                if imported == 0 {
+                    show("That security-key credential is already added.", error: false)
+                } else {
+                    dismiss()
+                }
+            } catch {
+                show("Couldn't import the security key: \(error.localizedDescription)", error: true)
+            }
+            busy = false
+        }
+    }
+
+    private func show(_ text: String, error: Bool) {
+        message = text
+        messageIsError = error
     }
 }
