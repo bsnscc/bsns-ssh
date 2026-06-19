@@ -33,9 +33,9 @@ final class AgentSignBridge: @unchecked Sendable {
     let agent: Agent
     let publicKeyBlob: Data
     let signContext: SignContext
-    /// When true the agent returns a COMPLETE signature blob (its own format +
-    /// trailer, e.g. webauthn-sk) that must be sent verbatim — don't strip it to
-    /// an inner body. Paired with `libssh2_userauth_publickey_raw`.
+    /// When true the agent returns a COMPLETE security-key signature blob
+    /// (`sk-ecdsa` or legacy `webauthn-sk`) that must be sent verbatim — don't
+    /// strip it to an inner body. Paired with `libssh2_userauth_publickey_raw`.
     let rawSignature: Bool
 
     init(agent: Agent, publicKeyBlob: Data, signContext: SignContext, rawSignature: Bool = false) {
@@ -64,8 +64,8 @@ final class AgentSignBridge: @unchecked Sendable {
         }
         semaphore.wait()
         guard let full = box.value?.blob else { return nil }
-        // A webauthn-sk signature is a complete, self-describing blob sent verbatim
-        // via libssh2_userauth_publickey_raw — don't unwrap it.
+        // Security-key signatures are complete, self-describing blobs sent
+        // verbatim via libssh2_userauth_publickey_raw — don't unwrap them.
         if rawSignature { return full }
         var decoder = SSHDecoder(full)
         _ = try? decoder.readString()    // format
@@ -621,8 +621,8 @@ public final class SSHShell: @unchecked Sendable {
         var keepAlive: [AgentSignBridge] = []   // hold bridges for the duration of the call
         var lastError = "no identity accepted"
         for identity in identities {
-            // FIDO2 keys sign with the webauthn-sk variant — a complete signature
-            // blob libssh2 must send verbatim via the raw path (matches `authenticate`).
+            // FIDO2 keys return a complete signature blob libssh2 must send
+            // verbatim via the raw path (matches `authenticate`).
             // This path backs mosh bootstrap, SFTP, and port forwarding.
             let isSecurityKey = identity.algorithm == .ecdsaSK
             let bridge = AgentSignBridge(agent: agent, publicKeyBlob: identity.blob,

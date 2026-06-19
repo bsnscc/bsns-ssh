@@ -24,11 +24,12 @@ enum KeyStore {
 
     private struct Stored: Codable {
         let algorithm: String
-        let material: Data        // software: raw private key; enclave: wrapped key data; yubikey: public blob
+        let material: Data        // software: raw private key; enclave: wrapped key data; hardware: public blob
         let comment: String
-        var kind: String?          // nil/"file" = software; "enclave" = Secure Enclave; "yubikey" = PIV token; "webauthn" = FIDO2 security key
+        var kind: String?          // nil/"file" = software; "enclave"; "yubikey"; "fido2"; legacy "webauthn"
         var slot: UInt8?           // yubikey: PIV slot
-        var credentialID: Data?    // webauthn: FIDO credential id (material holds the public blob)
+        var credentialID: Data?    // fido2/webauthn: FIDO credential id (material holds the public blob)
+        var application: String?   // fido2/webauthn: OpenSSH application / WebAuthn rpId
     }
 
     static func save(_ key: FileKey) throws {
@@ -57,6 +58,14 @@ enum KeyStore {
             algorithm: key.algorithm.rawValue,
             material: key.publicKey.blob,
             comment: key.publicKey.comment, kind: "webauthn", credentialID: key.credentialID))
+    }
+
+    static func saveFido2(_ key: Fido2SecurityKey) throws {
+        try persist(account: key.id.rawValue, Stored(
+            algorithm: key.algorithm.rawValue,
+            material: key.publicKey.blob,
+            comment: key.publicKey.comment, kind: "fido2",
+            credentialID: key.credentialID, application: key.application))
     }
 
     /// Persist a record without ever destroying the existing one before the new
@@ -110,6 +119,12 @@ enum KeyStore {
                 return WebAuthnSecurityKey.make(publicBlob: stored.material,
                                                 credentialID: stored.credentialID ?? Data(),
                                                 comment: stored.comment)
+            }
+            if stored.kind == "fido2" {
+                return Fido2SecurityKey.make(publicBlob: stored.material,
+                                             credentialID: stored.credentialID ?? Data(),
+                                             application: stored.application ?? Fido2Coordinator.application,
+                                             comment: stored.comment)
             }
             guard let algorithm = KeyAlgorithm(rawValue: stored.algorithm) else { return nil }
             return try? FileKey.from(algorithm: algorithm, privateKeyMaterial: stored.material, comment: stored.comment)

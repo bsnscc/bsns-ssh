@@ -17,6 +17,7 @@ import com.yubico.yubikit.core.YubiKeyDevice
 import com.yubico.yubikit.core.fido.FidoConnection
 import com.yubico.yubikit.core.smartcard.SmartCardConnection
 import com.yubico.yubikit.fido.ctap.ClientPin
+import com.yubico.yubikit.fido.ctap.CredentialManagement
 import com.yubico.yubikit.fido.ctap.Ctap2Session
 import com.yubico.yubikit.fido.ctap.PinUvAuthProtocolV2
 import com.yubico.yubikit.fido.webauthn.AuthenticatorData
@@ -35,8 +36,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * made verify-required). The FIDO PIN is held in memory after first use.
  *
  * rp/application is fixed to `ssh:bsns` so one resident credential works across
- * Android, desktop OpenSSH, and (later) iOS — the application is baked into the
- * public key the server stores.
+ * Android, iOS, and desktop OpenSSH — the application is baked into the public
+ * key the server stores.
  *
  * Mirrors [YubiKeyManager]'s blocking discovery: the SSH owner thread blocks in
  * [assertion] while the user taps; [awaitingTap] drives the on-screen prompt.
@@ -105,6 +106,45 @@ object FidoKeyManager {
         }
         pin = chars
         return e
+    }
+
+    /** Import existing resident credentials under rp "ssh:bsns" without creating
+     *  a second key. This is what lets a credential created on iOS be used by the
+     *  Android app with the same authorized_keys line. */
+    fun importResident(pinValue: String): List<Enrollment> {
+        val chars = pinValue.toCharArray()
+        val credentials = withCtap("Tap or insert your YubiKey to import a key") { ctap ->
+            val proto = PinUvAuthProtocolV2()
+            val clientPin = ClientPin(ctap, proto)
+            val token = clientPin.getPinToken(chars, ClientPin.PIN_PERMISSION_CM, null)
+            val cm = CredentialManagement(ctap, proto, token)
+            val out = mutableListOf<Enrollment>()
+            cm.enumerateRps()
+                .filter { (it.rp["id"] as? String) == APPLICATION }
+                .forEach { rp ->
+                    cm.enumerateCredentials(rp.rpIdHash).forEach { credential ->
+                        @Suppress("UNCHECKED_CAST")
+                        val cose = credential.publicKey as Map<Int, Any?>
+                        val alg = (cose[3] as? Number)?.toInt()
+                        val crv = (cose[-1] as? Number)?.toInt()
+                        require(alg == -7 && crv == 1) { "FIDO credential is not ES256/P-256" }
+                        val x = cose[-2] as? ByteArray ?: throw IllegalStateException("FIDO credential missing x coordinate")
+                        val y = cose[-3] as? ByteArray ?: throw IllegalStateException("FIDO credential missing y coordinate")
+                        require(x.size == 32 && y.size == 32) { "FIDO credential is not P-256" }
+                        val point = byteArrayOf(0x04) + x + y
+                        @Suppress("UNCHECKED_CAST")
+                        val descriptor = credential.credentialId as Map<String, Any?>
+                        val credentialId = descriptor["id"] as? ByteArray
+                            ?: throw IllegalStateException("FIDO credential missing credential id")
+                        out += Enrollment(SshKeyFormat.skEcdsaPublicBlob(point, APPLICATION),
+                            credentialId, APPLICATION, 0x01)
+                    }
+                }
+            out
+        }
+        if (credentials.isEmpty()) throw IllegalStateException("no portable bsns.SSH FIDO2 credential found")
+        pin = chars
+        return credentials
     }
 
     /** Produce an SSH sk assertion over `data` with the given credential. The

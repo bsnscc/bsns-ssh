@@ -24,7 +24,7 @@ final class AgentStore {
                 await agent.add(key)
                 if key.requiresUserPresence { hardwareKeyIDs.insert(key.id.rawValue) }
                 if key is YubiKeyPIVKey { yubiKeyIDs.insert(key.id.rawValue) }
-                if key is WebAuthnSecurityKey { securityKeyIDs.insert(key.id.rawValue) }
+                if key is WebAuthnSecurityKey || key is Fido2SecurityKey { securityKeyIDs.insert(key.id.rawValue) }
             }
             await refresh()
         }
@@ -49,18 +49,46 @@ final class AgentStore {
         securityKeyIDs.contains(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
     }
 
-    /// Enroll a FIDO2 security key via Apple's WebAuthn API (touch + PIN/UV); adds
-    /// it as an identity. The private key stays on the token.
-    func enrollSecurityKey(name: String) async throws {
-        let result = try await WebAuthnCoordinator.shared.enroll(name: name)
-        let key = WebAuthnSecurityKey.make(publicBlob: result.publicBlob,
-                                           credentialID: result.credentialID,
-                                           comment: name.isEmpty ? "FIDO2 security key" : name)
-        try KeyStore.saveWebAuthn(key)
+    /// Enroll a portable OpenSSH FIDO2 resident credential. The private key stays
+    /// on the token; iOS stores only the public blob + credential id needed to ask
+    /// that token for assertions later.
+    func enrollSecurityKey(name: String, pin: String) async throws {
+        let result = try await Fido2Coordinator.shared.enroll(pin: pin, name: name)
+        let key = Fido2SecurityKey.make(publicBlob: result.publicBlob,
+                                        credentialID: result.credentialID,
+                                        application: result.application,
+                                        comment: name.isEmpty ? "FIDO2 security key" : name)
+        try KeyStore.saveFido2(key)
         await agent.add(key)
         hardwareKeyIDs.insert(key.id.rawValue)
         securityKeyIDs.insert(key.id.rawValue)
         await refresh()
+    }
+
+    /// Import existing portable bsns.SSH resident credentials from a token. This
+    /// is the cross-phone path: Android can create the credential, iOS can import
+    /// it, and both advertise the same authorized_keys line.
+    @discardableResult
+    func importSecurityKeys(pin: String) async throws -> Int {
+        let results = try await Fido2Coordinator.shared.importResident(pin: pin)
+        var existing = Set(identities.map { SSHKeyFormat.fingerprint(ofPublicKeyBlob: $0.blob) })
+        var imported = 0
+        for result in results {
+            let fingerprint = SSHKeyFormat.fingerprint(ofPublicKeyBlob: result.publicBlob)
+            guard !existing.contains(fingerprint) else { continue }
+            let key = Fido2SecurityKey.make(publicBlob: result.publicBlob,
+                                            credentialID: result.credentialID,
+                                            application: result.application,
+                                            comment: "FIDO2 security key")
+            try KeyStore.saveFido2(key)
+            await agent.add(key)
+            hardwareKeyIDs.insert(key.id.rawValue)
+            securityKeyIDs.insert(key.id.rawValue)
+            existing.insert(fingerprint)
+            imported += 1
+        }
+        await refresh()
+        return imported
     }
 
     func refresh() async {

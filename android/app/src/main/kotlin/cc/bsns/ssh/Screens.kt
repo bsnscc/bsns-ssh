@@ -166,26 +166,41 @@ fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
 
             Section(
                 title = "Add a FIDO2 security key",
-                footer = "Creates a resident sk-ecdsa credential on your FIDO2 key (touch + PIN). " +
-                    "The private key never leaves the token. The same physical key works on Android " +
-                    "and iOS, but each platform needs its own enrollment — add both public keys to " +
-                    "your server. Needs OpenSSH 8.2+ on the host. For one key that works everywhere " +
-                    "with a single authorized_keys line (and on any server), use a smart card (PIV) below.",
+                footer = "Creates or imports a resident sk-ecdsa credential using application ssh:bsns. " +
+                    "The private key never leaves the token. The same resident credential can be used by " +
+                    "bsns.SSH on Android and iOS with one authorized_keys line, as long as the phone can " +
+                    "talk to the key and the server supports OpenSSH FIDO2 security-key auth.",
             ) {
                 Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(fidoPin, { fidoPin = it }, label = { Text("Security-key PIN") },
                         visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                    OutlinedButton(enabled = fidoPin.isNotEmpty(), onClick = {
-                        val pin = fidoPin
-                        fidoStatus = "enrolling…"
-                        thread {
-                            val result = runCatching { keyManager.enrollFido(pin) }
-                            mainHandler.post {
-                                result.onSuccess { fidoPin = ""; fidoStatus = "enrolled"; refresh() }
-                                    .onFailure { fidoStatus = it.message ?: "couldn't enroll the security key" }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(enabled = fidoPin.isNotEmpty(), onClick = {
+                            val pin = fidoPin
+                            fidoStatus = "enrolling…"
+                            thread {
+                                val result = runCatching { keyManager.enrollFido(pin) }
+                                mainHandler.post {
+                                    result.onSuccess { fidoPin = ""; fidoStatus = "enrolled"; refresh() }
+                                        .onFailure { fidoStatus = it.message ?: "couldn't enroll the security key" }
+                                }
                             }
-                        }
-                    }) { Text("Enroll FIDO2 key") }
+                        }) { Text("Create new") }
+                        OutlinedButton(enabled = fidoPin.isNotEmpty(), onClick = {
+                            val pin = fidoPin
+                            fidoStatus = "importing…"
+                            thread {
+                                val result = runCatching { keyManager.importFido(pin) }
+                                mainHandler.post {
+                                    result.onSuccess { count ->
+                                        fidoPin = ""
+                                        fidoStatus = if (count == 0) "already in the agent" else "imported"
+                                        refresh()
+                                    }.onFailure { fidoStatus = it.message ?: "couldn't import the security key" }
+                                }
+                            }
+                        }) { Text("Use existing") }
+                    }
                     fidoStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
                 }
             }

@@ -82,4 +82,22 @@ struct SSHWireTests {
 
         #expect(body == expected.data)
     }
+
+    @Test("native sk-ecdsa signature blob carries flags and counter")
+    func skEcdsaSignatureBlob() throws {
+        let r = Data([0x7f] + Array(repeating: 0x11, count: 31))
+        let s = Data([0x80] + Array(repeating: 0x22, count: 31))
+        let blob = SSHKeyFormat.skEcdsaSignatureBlob(rawRS: r + s, flags: 0x05, counter: 0x01020304)
+
+        var signature = SSHDecoder(blob)
+        #expect(try signature.readStringUTF8() == "sk-ecdsa-sha2-nistp256@openssh.com")
+
+        var body = SSHDecoder(try signature.readString())
+        #expect(try body.readString() == r)
+        #expect(try body.readString() == Data([0x00]) + s)
+        #expect(body.isAtEnd)
+        #expect(try signature.readByte() == 0x05)
+        #expect(try signature.readUInt32() == 0x01020304)
+        #expect(signature.isAtEnd)
+    }
 }

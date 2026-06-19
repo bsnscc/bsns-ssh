@@ -21,7 +21,7 @@ struct WebAuthnSignatureTests {
         // r = 0x44… (no high bit, 32 bytes); s = 0x80… (high bit set → DER adds a 0x00
         // sign byte, making the INTEGER content 33 bytes, which we must strip back to 32).
         let r = [UInt8](repeating: 0x44, count: 32)
-        var sCore = [UInt8](repeating: 0x80, count: 32)          // high bit set
+        let sCore = [UInt8](repeating: 0x80, count: 32)          // high bit set
         let sDER = [UInt8](repeating: 0x00, count: 1) + sCore     // DER sign-padded → 33 bytes
         var der: [UInt8] = []
         der += [0x02, UInt8(r.count)] + r

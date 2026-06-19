@@ -11,6 +11,7 @@ struct KeysView: View {
     @State private var showEnclaveBackupWarning = false
     @State private var showFidoEnroll = false
     @State private var fidoName = "bsns"
+    @State private var fidoPin = ""
     /// Keys swiped for deletion, held until the user confirms — deleting a key can
     /// lock you out of every server that only trusts it, so never delete on swipe alone.
     @State private var pendingDelete: [SSHPublicKey] = []
@@ -97,6 +98,7 @@ struct KeysView: View {
                 }
                 Button {
                     fidoName = "bsns"
+                    fidoPin = ""
                     showFidoEnroll = true
                 } label: {
                     Label("FIDO2 security key (USB-C / NFC)", systemImage: "lock.badge.clock")
@@ -124,7 +126,7 @@ struct KeysView: View {
                     ? "A Secure Enclave key never leaves this device and asks for Face ID each time it signs — but it can't be backed up, so if you lose this device you're locked out of any server that only trusts it. Enroll a second key on another device as a backup.\n\n"
                     : ""
                 Text(enclaveNote
-                    + "Software keys back up + sync across your devices (Settings → Backup) — a good everyday key. FIDO2 and Secure Enclave are stronger hardware keys.\n\nAdvanced — a smart card (PIV) makes a plain ECDSA key every server accepts, and the same physical card works on iOS and Android with one authorized_keys line. Use RSA only for older gear that can't accept Ed25519 or ECDSA.")
+                    + "Software keys back up + sync across your devices (Settings → Backup) — a good everyday key. Portable FIDO2 resident keys can use one authorized_keys line across supported phones with the same physical key. Secure Enclave is strongest for this device only.\n\nAdvanced — a smart card (PIV) makes a plain ECDSA key every server accepts. Use RSA only for older gear that can't accept Ed25519 or ECDSA.")
             }
 
             Section {
@@ -162,18 +164,42 @@ struct KeysView: View {
         .sheet(isPresented: $showYubiKey) { YubiKeyEnrollView() }
         .alert("Add a FIDO2 security key", isPresented: $showFidoEnroll) {
             TextField("Label", text: $fidoName)
-            Button("Cancel", role: .cancel) {}
-            Button("Continue") {
+            SecureField("FIDO2 PIN", text: $fidoPin)
+            Button("Cancel", role: .cancel) { fidoPin = "" }
+            Button("Create New") {
+                let pin = fidoPin.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !pin.isEmpty else {
+                    genError = "Enter the security key's FIDO2 PIN first."
+                    return
+                }
                 Task {
-                    do { try await store.enrollSecurityKey(name: fidoName) }
+                    do {
+                        try await store.enrollSecurityKey(name: fidoName, pin: pin)
+                        fidoPin = ""
+                    }
                     catch { genError = "Couldn't enroll the security key: \(error.localizedDescription)" }
+                }
+            }
+            Button("Use Existing") {
+                let pin = fidoPin.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !pin.isEmpty else {
+                    genError = "Enter the security key's FIDO2 PIN first."
+                    return
+                }
+                Task {
+                    do {
+                        let imported = try await store.importSecurityKeys(pin: pin)
+                        fidoPin = ""
+                        if imported == 0 { genError = "That FIDO2 credential is already in the agent." }
+                    }
+                    catch { genError = "Couldn't import the security key: \(error.localizedDescription)" }
                 }
             }
         } message: {
             Text("""
-            Touch your security key (and enter its PIN if asked) on the next screen. The private key never leaves it.
+            Create or import a resident OpenSSH FIDO2 credential using application ssh:bsns. The private key never leaves the security key.
 
-            The same physical key works on iOS and Android, but each platform needs its own enrollment — add both public keys to your server. As with any single hardware key, also keep a backup key so a lost one doesn't lock you out. (For one key that works on both platforms with a single line, use a smart card (PIV) under Advanced.)
+            The same resident credential can be used by bsns.SSH on iOS and Android with one authorized_keys line, as long as the phone can talk to the key and the server supports OpenSSH FIDO2 security-key auth. Keep a backup key so a lost one doesn't lock you out.
             """)
         }
     }

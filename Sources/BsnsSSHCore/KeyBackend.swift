@@ -16,9 +16,9 @@ public enum KeyAlgorithm: String, Sendable, CaseIterable {
     // appliances) that predates Ed25519/ECDSA support. "ssh-rsa" is the key-blob
     // type; the signature hash is negotiated separately (see RSASignatureAlgorithm).
     case rsa = "ssh-rsa"
-    // FIDO2 security-key types — implemented on both platforms (Android via native
-    // CTAP2; iOS via Apple's WebAuthn API, which yields the webauthn-sk signature
-    // variant carried by a libssh2 patch). Kept alongside PIV.
+    // FIDO2 security-key types. New mobile credentials use native CTAP2/OpenSSH
+    // signatures on both iOS and Android; iOS still loads legacy WebAuthn-created
+    // credentials whose assertions use the webauthn-sk signature variant.
     case ecdsaSK = "sk-ecdsa-sha2-nistp256@openssh.com"
     case ed25519SK = "sk-ssh-ed25519@openssh.com"
 

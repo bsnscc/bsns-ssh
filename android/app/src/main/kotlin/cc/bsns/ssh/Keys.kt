@@ -209,14 +209,25 @@ class KeyManager(context: Context) {
      *  Creates a resident sk-ecdsa credential under the fixed "ssh:bsns" application. */
     fun enrollFido(pin: String): String {
         val e = FidoKeyManager.enroll(pin)
+        saveFido(e)
+        return SshKeyFormat.fingerprintOfPublicKeyBlob(e.publicBlob)
+    }
+
+    /** Import existing resident FIDO2 credentials under "ssh:bsns" from the token.
+     *  Returns the number of newly-added credentials; duplicates are skipped. */
+    fun importFido(pin: String): Int =
+        FidoKeyManager.importResident(pin).count { saveFido(it) }
+
+    private fun saveFido(e: FidoKeyManager.Enrollment): Boolean {
         val id = SshKeyFormat.fingerprintOfPublicKeyBlob(e.publicBlob)
+        if (fidoPrefs.contains(id)) return false
         val v = listOf(
             Base64.getEncoder().encodeToString(e.publicBlob),
             Base64.getEncoder().encodeToString(e.credentialId),
             e.flags.toString(),
         ).joinToString("|")
         fidoPrefs.edit().putString(id, v).apply()
-        return id
+        return true
     }
 
     fun forgetFido(id: String) = fidoPrefs.edit().remove(id).apply()
