@@ -99,8 +99,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             self.appInForeground = true
             self.appIsActive = false
             self.lock.unlock()
-            moshLog("foreground note=\(note.name.rawValue) wake=true")
-            self.wake()
+            moshLog("foreground note=\(note.name.rawValue) wake=false")
         }
         let didBecomeActive: (Notification) -> Void = { [weak self] note in
             guard let self else { return }
@@ -168,8 +167,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             // process death during stale datagram recovery.
             lock.lock()
             let stop = stopRequested
-            let waitingForActiveRecovery = pendingForegroundRecovery && !appIsActive
-            let transportAllowed = appInForeground && !waitingForActiveRecovery
+            let transportAllowed = appInForeground && appIsActive
             let resume = transportAllowed && resumeRequested
             let foregroundRecovery = resume ? pendingForegroundRecovery : false
             if resume {
@@ -267,24 +265,17 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             let moshReadable = fds.prefix(wakeIndex).contains { $0.revents & Int16(POLLIN) != 0 }
 
             lock.lock()
-            let transportStillAllowed = appInForeground
-            let recoveryAllowed = appInForeground && appIsActive
+            let transportStillAllowed = appInForeground && appIsActive
+            let waitingForActive = appInForeground && !appIsActive
             if !transportStillAllowed, moshReadable {
                 pendingForegroundRecovery = true
             }
             lock.unlock()
             guard transportStillAllowed else {
                 if moshReadable {
-                    moshLog("datagram deferred after background ask=\(cols)x\(rows)")
+                    let reason = waitingForActive ? "until active" : "after background"
+                    moshLog("datagram deferred \(reason) ask=\(cols)x\(rows)")
                 }
-                continue
-            }
-            if moshReadable, !recoveryAllowed {
-                lock.lock()
-                pendingForegroundRecovery = true
-                lock.unlock()
-                moshLog("datagram deferred until active ask=\(cols)x\(rows)")
-                waitForWakeOnly()
                 continue
             }
 
