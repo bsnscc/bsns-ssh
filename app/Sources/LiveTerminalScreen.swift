@@ -31,6 +31,7 @@ struct LiveTerminalScreen: View {
     @State private var showForwards = false
     @State private var showSnippets = false
     @State private var showHistory = false
+    @State private var showHelp = false
     @State private var muxScrollActive = false
     @FocusState private var findFocused: Bool
 
@@ -88,6 +89,9 @@ struct LiveTerminalScreen: View {
             }
             .sheet(isPresented: $showHistory) {
                 CommandHistoryPicker { cmd in session.runCommand(cmd) }
+            }
+            .sheet(isPresented: $showHelp) {
+                NavigationStack { TerminalHelpView() }
             }
     }
 
@@ -211,6 +215,7 @@ struct LiveTerminalScreen: View {
             }
             Button { showSnippets = true } label: { Label("Run a snippet…", systemImage: "text.badge.plus") }
             Button { showHistory = true } label: { Label("Command history…", systemImage: "clock.arrow.circlepath") }
+            Button { showHelp = true } label: { Label("Terminal Help…", systemImage: "questionmark.circle") }
 
             Picker("Theme", selection: $themeId) {
                 ForEach(TerminalTheme.all) { Text($0.id).tag($0.id) }

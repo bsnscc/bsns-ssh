@@ -102,6 +102,12 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Help") {
+                NavigationLink { TerminalHelpView() } label: {
+                    Label("Terminal Help", systemImage: "questionmark.circle")
+                }
+            }
+
             Section("Backup") {
                 NavigationLink { ConfigBackupView() } label: {
                     Label("Import / Export", systemImage: "square.and.arrow.up.on.square")
