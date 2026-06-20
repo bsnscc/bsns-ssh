@@ -51,6 +51,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var awaitingOutputForInputSeq: Int?
     private var awaitingOutputSince: Date?
     private var lastAwaitingOutputLogAt: Date?
+    private var lastInputRecoveryHopAt: Date?
 
     // Connection params, kept so we can re-create the client socket after iOS
     // suspends us in the background (the mosh-server keeps running, so a fresh
@@ -219,6 +220,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 if needsRecoveryWiggle {
                     moshLog("resume hop begin recovery=\(foregroundRecovery) silent=\(Int(silent))s")
                     mosh_client_hop(c)
+                    mosh_client_prime_active_retry(c)
                     moshLog("resume hop end")
                 }
                 // Re-assert the terminal size (server redraws to match) and force a
@@ -235,12 +237,17 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             if !input.isEmpty {
                 inputPushSeq += 1
                 let inputSeq = inputPushSeq
+                let inputSilent = Date().timeIntervalSince(lastContactAt)
                 awaitingOutputForInputSeq = inputSeq
                 awaitingOutputSince = Date()
                 lastAwaitingOutputLogAt = nil
                 moshLog("input push seq=\(inputSeq) bytes=\(input.count) state=\(mosh_client_state_num(c))")
                 input.withUnsafeBytes { raw in
                     mosh_client_push(c, raw.bindMemory(to: CChar.self).baseAddress, Int32(raw.count))
+                }
+                if inputSilent > Self.staleThreshold {
+                    mosh_client_prime_active_retry(c)
+                    moshLog("input retry prime seq=\(inputSeq) silent=\(Int(inputSilent))s state=\(mosh_client_state_num(c))")
                 }
             }
             if let (cols, rows) = resize {
@@ -347,10 +354,19 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 }
             } else if let inputSeq = awaitingOutputForInputSeq, let started = awaitingOutputSince {
                 let now = Date()
-                if now.timeIntervalSince(started) > 0.75,
+                let pendingAge = now.timeIntervalSince(started)
+                if pendingAge > 0.75,
                    lastAwaitingOutputLogAt.map({ now.timeIntervalSince($0) > 1.0 }) ?? true {
                     lastAwaitingOutputLogAt = now
-                    moshLog("drain pending no ansi inputSeq=\(inputSeq) ageMs=\(Int(now.timeIntervalSince(started) * 1000)) state=\(mosh_client_state_num(c))")
+                    moshLog("drain pending no ansi inputSeq=\(inputSeq) ageMs=\(Int(pendingAge * 1000)) state=\(mosh_client_state_num(c))")
+                }
+                if pendingAge > 1.5,
+                   Date().timeIntervalSince(lastContactAt) > Self.staleThreshold,
+                   lastInputRecoveryHopAt.map({ now.timeIntervalSince($0) > 3.0 }) ?? true {
+                    lastInputRecoveryHopAt = now
+                    moshLog("input recovery hop inputSeq=\(inputSeq) ageMs=\(Int(pendingAge * 1000)) state=\(mosh_client_state_num(c))")
+                    mosh_client_hop(c)
+                    mosh_client_prime_active_retry(c)
                 }
             }
             // Flag staleness on transition (the loop wakes at least ~1/s, so this

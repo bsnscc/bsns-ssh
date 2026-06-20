@@ -140,6 +140,13 @@ void mosh_client_hop(MoshClient* c) {
   catch (...) { c->lastError = "mosh hop failed"; }
 }
 
+void mosh_client_prime_active_retry(MoshClient* c) {
+  if (!c || !c->transport) return;
+  try { c->transport->prime_active_retry(); }
+  catch (const std::exception& e) { c->lastError = e.what(); }
+  catch (...) { c->lastError = "mosh active retry prime failed"; }
+}
+
 void mosh_client_force_repaint(MoshClient* c) {
   // Drop the diff baseline so the next drain_ansi emits a FULL repaint (clear +
   // redraw of the entire framebuffer) instead of a delta — recovers a desynced

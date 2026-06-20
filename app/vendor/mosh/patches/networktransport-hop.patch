@@ -12,7 +12,7 @@
  
 --- a/src/network/networktransport.h	2026-06-17 10:13:46
 +++ b/src/network/networktransport.h	2026-06-17 10:15:56
-@@ -120,6 +120,12 @@
+@@ -120,6 +120,18 @@
      socklen_t get_remote_addr_len( void ) const { return connection.get_remote_addr_len(); }
  
      std::string &get_send_error( void ) { return connection.get_send_error(); }
@@ -22,6 +22,12 @@
 +       the OS tears down our socket on app suspend, instead of waiting for the
 +       ~10s auto-hop. [bsns.ssh] */
 +    void hop( void ) { connection.hop_port_now(); }
++
++    /* Treat the connection as recently active for sender retry purposes. This
++       keeps user input/resizes retransmitting after an iOS app suspend, where
++       no remote packet may have arrived for longer than ACTIVE_RETRY_TIMEOUT.
++       It does not update round-trip success or accepted remote state. [bsns.ssh] */
++    void prime_active_retry( void ) { sender.remote_heard( timestamp() ); }
    };
  }
  

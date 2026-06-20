@@ -42,6 +42,12 @@ void mosh_client_tick(MoshClient* c);
 /// for mosh's ~10s auto-hop.
 void mosh_client_hop(MoshClient* c);
 
+/// Re-enable mosh's active resend window after an app suspend. Upstream mosh
+/// intentionally stops retrying unchanged local state after ~10s without remote
+/// contact; on iOS resume that can leave typed input sent once but never
+/// retransmitted. This only affects sender retry timing, not remote liveness.
+void mosh_client_prime_active_retry(MoshClient* c);
+
 /// Drop the diff baseline so the next mosh_client_drain_ansi emits a FULL repaint
 /// (clear + full framebuffer redraw) rather than a delta. Call on resume to fix a
 /// desynced display (wrong row count / gap) after the app was backgrounded.
