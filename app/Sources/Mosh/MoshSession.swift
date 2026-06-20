@@ -130,6 +130,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 self.appIsActive = false
                 self.lock.unlock()
                 moshLog("background note=\(note.name.rawValue)")
+                self.wake()
             })
         queue.async { [weak self] in self?.runLoop() }
         return nil
@@ -162,26 +163,42 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private func runLoop() {
         while true {
             guard let c = client else { break }
-            // Refresh mosh's frozen clock once per iteration. Without this every
-            // send/ack timer stalls after the first packet and local input is
-            // never transmitted (the server connects + paints once, then input
-            // does nothing). See mosh_client_freeze_time / stmclient.cc.
-            mosh_client_freeze_time()
-
-            // Apply staged commands before blocking.
+            // Apply staged commands before touching mosh. When the app is
+            // backgrounded, leave input/resize queued and park on the wake pipe
+            // only; touching the UDP transport in the background has caused
+            // process death during stale datagram recovery.
             lock.lock()
             let stop = stopRequested
-            let resume = resumeRequested
+            let transportAllowed = appInForeground && appIsActive
+            let resume = transportAllowed && resumeRequested
             let foregroundRecovery = resume ? pendingForegroundRecovery : false
             if resume {
                 resumeRequested = false
                 pendingForegroundRecovery = false
             }
-            let input = pendingInput; pendingInput.removeAll(keepingCapacity: true)
-            let resize = pendingResize; pendingResize = nil
+            let input: [UInt8]
+            let resize: (Int32, Int32)?
+            if transportAllowed {
+                input = pendingInput
+                pendingInput.removeAll(keepingCapacity: true)
+                resize = pendingResize
+                pendingResize = nil
+            } else {
+                input = []
+                resize = nil
+            }
             lock.unlock()
 
             if stop { break }
+            guard transportAllowed else {
+                waitForWakeOnly()
+                continue
+            }
+
+            // Refresh mosh's frozen clock once per active iteration. Without this
+            // every send/ack timer stalls after the first packet and local input
+            // is never transmitted. See mosh_client_freeze_time / stmclient.cc.
+            mosh_client_freeze_time()
 
             // Returning from the background.
             if resume {
@@ -246,10 +263,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 poll(buf.baseAddress, nfds_t(buf.count), Int32(timeout))
             }
 
-            if fds[wakeIndex].revents & Int16(POLLIN) != 0 {    // drain the wake pipe
-                var trash = [UInt8](repeating: 0, count: 64)
-                _ = Darwin.read(wakeRead, &trash, trash.count)
-            }
+            if fds[wakeIndex].revents & Int16(POLLIN) != 0 { drainWakePipe() }
             let moshReadable = fds.prefix(wakeIndex).contains { $0.revents & Int16(POLLIN) != 0 }
             if moshReadable {                                   // a datagram arrived
                 // Recovery is keyed off ELAPSED SILENCE, computed before we update
@@ -298,6 +312,19 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             if stale != staleReported { staleReported = stale; onLiveness?(stale) }
         }
         teardown()
+    }
+
+    private func waitForWakeOnly() {
+        guard wakeRead >= 0 else { return }
+        var fd = pollfd(fd: wakeRead, events: Int16(POLLIN), revents: 0)
+        _ = withUnsafeMutablePointer(to: &fd) { poll($0, 1, 1000) }
+        if fd.revents & Int16(POLLIN) != 0 { drainWakePipe() }
+    }
+
+    private func drainWakePipe() {
+        guard wakeRead >= 0 else { return }
+        var trash = [UInt8](repeating: 0, count: 64)
+        while Darwin.read(wakeRead, &trash, trash.count) > 0 {}
     }
 
     private func forceForegroundRecovery(_ c: OpaquePointer, reason: String) {
