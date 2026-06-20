@@ -126,6 +126,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 self.lock.lock()
                 self.appInForeground = false
                 self.appIsActive = false
+                self.pendingForegroundRecovery = true
                 self.lock.unlock()
                 moshLog("background note=\(note.name.rawValue)")
                 self.wake()
@@ -210,8 +211,8 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 // (preserves the crypto sequence the server's replay-protection needs;
                 // a brand-new client would be rejected). mosh auto-hops only after 10s.
                 let needsRecoveryWiggle = foregroundRecovery || silent > Self.staleThreshold
-                if silent > Self.staleThreshold {
-                    moshLog("resume hop begin")
+                if needsRecoveryWiggle {
+                    moshLog("resume hop begin recovery=\(foregroundRecovery) silent=\(Int(silent))s")
                     mosh_client_hop(c)
                     moshLog("resume hop end")
                 }
