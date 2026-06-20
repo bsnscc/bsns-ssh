@@ -115,7 +115,6 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             }
             self.lock.unlock()
             moshLog("foreground note=\(note.name.rawValue) shouldResume=\(shouldResume)")
-            guard shouldResume else { return }
             self.wake()
         }
         foregroundObservers.append(
@@ -169,7 +168,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             // process death during stale datagram recovery.
             lock.lock()
             let stop = stopRequested
-            let transportAllowed = appInForeground && appIsActive
+            let transportAllowed = appInForeground
             let resume = transportAllowed && resumeRequested
             let foregroundRecovery = resume ? pendingForegroundRecovery : false
             if resume {
@@ -265,6 +264,20 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
 
             if fds[wakeIndex].revents & Int16(POLLIN) != 0 { drainWakePipe() }
             let moshReadable = fds.prefix(wakeIndex).contains { $0.revents & Int16(POLLIN) != 0 }
+
+            lock.lock()
+            let transportStillAllowed = appInForeground
+            if !transportStillAllowed, moshReadable {
+                pendingForegroundRecovery = true
+            }
+            lock.unlock()
+            guard transportStillAllowed else {
+                if moshReadable {
+                    moshLog("datagram deferred after background ask=\(cols)x\(rows)")
+                }
+                continue
+            }
+
             if moshReadable {                                   // a datagram arrived
                 // Recovery is keyed off ELAPSED SILENCE, computed before we update
                 // lastContactAt — NOT off staleReported. When iOS fully suspends the
@@ -276,7 +289,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 lastContactAt = Date()
                 if recovering {
                     lock.lock()
-                    let active = appInForeground && appIsActive
+                    let active = appInForeground
                     if !active { pendingForegroundRecovery = true }
                     lock.unlock()
                     guard active else {
