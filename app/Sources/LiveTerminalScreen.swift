@@ -413,9 +413,20 @@ final class ZoomableTerminalView: TerminalView {
         guard window != nil else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self, self.window != nil else { return }
+            self.snapToLiveTail(reason: "window")
             self.getTerminal().updateFullScreen()
             self.setNeedsDisplay(self.bounds)
         }
+    }
+
+    func snapToLiveTail(reason: String) {
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        let targetY = max(0, contentSize.height - bounds.height)
+        let oldY = contentOffset.y
+        if abs(oldY - targetY) > 0.5 {
+            setContentOffset(CGPoint(x: 0, y: targetY), animated: false)
+        }
+        DiagLog.log("terminal", "tail snap reason=\(reason) offset=\(Int(oldY))->\(Int(contentOffset.y)) target=\(Int(targetY)) content=\(Int(contentSize.width))x\(Int(contentSize.height)) bounds=\(Int(bounds.width))x\(Int(bounds.height))")
     }
 
     func setFont(family: String, size: CGFloat) {

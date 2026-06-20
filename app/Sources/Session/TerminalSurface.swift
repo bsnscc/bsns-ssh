@@ -167,6 +167,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         }
         DiagLog.log("terminal", "redraw force resize=\(terminal.cols)x\(terminal.rows) bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height))")
         sendResize(cols: terminal.cols, rows: terminal.rows, force: true)
+        view.snapToLiveTail(reason: "foreground")
         terminal.updateFullScreen()
         view.setNeedsDisplay(view.bounds)
     }
