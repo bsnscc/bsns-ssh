@@ -16,7 +16,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     private var appliedThemeId: String?
     var onZoomChange: ((CGFloat) -> Void)?
     private var foregroundObservers: [NSObjectProtocol] = []
-    private var foregroundRefreshWork: DispatchWorkItem?
+    private var foregroundRefreshWork: [DispatchWorkItem] = []
     private var lastForegroundResyncAt: CFTimeInterval = 0
 
     init(session: TerminalSession, themeId: String, fontFamily: String, fontSize: CGFloat) {
@@ -66,7 +66,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
 
     deinit {
         foregroundObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        foregroundRefreshWork?.cancel()
+        foregroundRefreshWork.forEach { $0.cancel() }
     }
 
     private var pendingFeed: [UInt8] = []
@@ -121,20 +121,29 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
             return
         }
         lastForegroundResyncAt = now
-        foregroundRefreshWork?.cancel()
+        cancelForegroundRefreshWork()
         DiagLog.log("terminal", "foreground resync scheduled bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height)) window=\(view.window != nil)")
 
-        let early = DispatchWorkItem { [weak self] in self?.forceCurrentSizeAndRedraw() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: early)
-        let work = DispatchWorkItem { [weak self] in self?.forceCurrentSizeAndRedraw() }
-        foregroundRefreshWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: work)
+        scheduleForegroundRedraw(after: 0.05)
+        scheduleForegroundRedraw(after: 0.20)
+        scheduleForegroundRedraw(after: 0.65)
+        scheduleForegroundRedraw(after: 1.20)
     }
 
     private func cancelForegroundRefreshForBackground() {
-        foregroundRefreshWork?.cancel()
-        foregroundRefreshWork = nil
+        cancelForegroundRefreshWork()
         DiagLog.log("terminal", "foreground redraw cancelled: background")
+    }
+
+    private func scheduleForegroundRedraw(after delay: TimeInterval) {
+        let work = DispatchWorkItem { [weak self] in self?.forceCurrentSizeAndRedraw() }
+        foregroundRefreshWork.append(work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func cancelForegroundRefreshWork() {
+        foregroundRefreshWork.forEach { $0.cancel() }
+        foregroundRefreshWork.removeAll(keepingCapacity: true)
     }
 
     private func forceCurrentSizeAndRedraw() {
