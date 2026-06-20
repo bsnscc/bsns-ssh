@@ -56,10 +56,8 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         let refresh: @Sendable (Notification) -> Void = { [weak self] _ in
             Task { @MainActor in self?.resyncAfterForeground() }
         }
-        for name in [UIApplication.willEnterForegroundNotification, UIApplication.didBecomeActiveNotification] {
-            foregroundObservers.append(
-                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main, using: refresh))
-        }
+        foregroundObservers.append(
+            NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main, using: refresh))
         foregroundObservers.append(
             NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.cancelForegroundRefreshForBackground() }
@@ -113,8 +111,8 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     /// (bypassing the drag debounce) and repaint locally, then repeat once after
     /// the foreground transition settles.
     func resyncAfterForeground() {
-        guard UIApplication.shared.applicationState != .background else {
-            DiagLog.log("terminal", "foreground resync skipped: app background")
+        guard UIApplication.shared.applicationState == .active else {
+            DiagLog.log("terminal", "foreground resync skipped: app not active")
             return
         }
         let now = CACurrentMediaTime()
@@ -140,8 +138,8 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     }
 
     private func forceCurrentSizeAndRedraw() {
-        guard UIApplication.shared.applicationState != .background else {
-            DiagLog.log("terminal", "redraw skipped: app background")
+        guard UIApplication.shared.applicationState == .active else {
+            DiagLog.log("terminal", "redraw skipped: app not active")
             return
         }
         guard view.window != nil else {

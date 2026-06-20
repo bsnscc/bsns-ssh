@@ -267,6 +267,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
 
             lock.lock()
             let transportStillAllowed = appInForeground
+            let recoveryAllowed = appInForeground && appIsActive
             if !transportStillAllowed, moshReadable {
                 pendingForegroundRecovery = true
             }
@@ -275,6 +276,14 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 if moshReadable {
                     moshLog("datagram deferred after background ask=\(cols)x\(rows)")
                 }
+                continue
+            }
+            if moshReadable, !recoveryAllowed {
+                lock.lock()
+                pendingForegroundRecovery = true
+                lock.unlock()
+                moshLog("datagram deferred until active ask=\(cols)x\(rows)")
+                waitForWakeOnly()
                 continue
             }
 
@@ -289,11 +298,11 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 lastContactAt = Date()
                 if recovering {
                     lock.lock()
-                    let active = appInForeground
+                    let active = appInForeground && appIsActive
                     if !active { pendingForegroundRecovery = true }
                     lock.unlock()
                     guard active else {
-                        moshLog("recovering stale datagram deferred until foreground ask=\(cols)x\(rows)")
+                        moshLog("recovering stale datagram deferred until active ask=\(cols)x\(rows)")
                         continue
                     }
                     forceForegroundRecovery(c, reason: "stale datagram")
