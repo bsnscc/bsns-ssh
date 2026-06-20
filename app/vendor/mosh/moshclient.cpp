@@ -216,6 +216,15 @@ char* mosh_client_drain_ansi(MoshClient* c) {
   }
 }
 
+uint64_t mosh_client_state_num(MoshClient* c) {
+  if (!c || !c->transport) return 0;
+  try {
+    return c->transport->get_remote_state_num();
+  } catch (...) {
+    return 0;
+  }
+}
+
 const char* mosh_client_last_error(MoshClient* c) {
   return (c && !c->lastError.empty()) ? c->lastError.c_str() : nullptr;
 }

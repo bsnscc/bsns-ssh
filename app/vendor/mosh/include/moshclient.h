@@ -3,6 +3,8 @@
 #ifndef BSNS_MOSHCLIENT_H
 #define BSNS_MOSHCLIENT_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -58,6 +60,10 @@ void mosh_client_fb_dims(MoshClient* c, int* cols, int* rows);
 /// If the remote terminal state advanced, returns a malloc'd ANSI frame (caller
 /// frees) to feed the terminal; otherwise NULL.
 char* mosh_client_drain_ansi(MoshClient* c);
+
+/// Monotonic remote state number, useful for diagnostics around "input sent but
+/// no visible output" resume failures.
+uint64_t mosh_client_state_num(MoshClient* c);
 
 const char* mosh_client_last_error(MoshClient* c);
 

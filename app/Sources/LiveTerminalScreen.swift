@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import SwiftTerm
 import UniformTypeIdentifiers
+import QuartzCore
 
 private let minFontSize: CGFloat = 8
 private let maxFontSize: CGFloat = 30
@@ -400,6 +401,10 @@ final class ZoomableTerminalView: TerminalView {
     private var currentSize: CGFloat = defaultFontSize
     private var pinchStart: CGFloat = defaultFontSize
     private var fontFamily: String = TerminalFont.families[0]
+    private var diagnosticDrawSeq = 0
+    private var diagnosticLastFeedSeq = 0
+    private var diagnosticLastFeedBytes = 0
+    private var diagnosticDrawLogUntil: CFTimeInterval = 0
 
     /// Re-embedded into a window after leaving and returning to the terminal
     /// (home → back, or a tab switch). The view + its buffer are cached and
@@ -416,6 +421,41 @@ final class ZoomableTerminalView: TerminalView {
             self.snapToLiveTail(reason: "window")
             self.getTerminal().updateFullScreen()
             self.setNeedsDisplay(self.bounds)
+        }
+    }
+
+    func noteFeedForDiagnostics(seq: Int, bytes: Int) {
+        diagnosticLastFeedSeq = seq
+        diagnosticLastFeedBytes = bytes
+        diagnosticDrawLogUntil = CACurrentMediaTime() + 2.0
+        let drawCountAtFeed = diagnosticDrawSeq
+        scheduleDrawWatch(feedSeq: seq, bytes: bytes, drawCountAtFeed: drawCountAtFeed, after: 0.25)
+        scheduleDrawWatch(feedSeq: seq, bytes: bytes, drawCountAtFeed: drawCountAtFeed, after: 1.20)
+    }
+
+    private func scheduleDrawWatch(feedSeq: Int, bytes: Int, drawCountAtFeed: Int, after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self,
+                  self.diagnosticLastFeedSeq == feedSeq,
+                  self.diagnosticDrawSeq == drawCountAtFeed else { return }
+            DiagLog.log("terminal", "draw pending feedSeq=\(feedSeq) bytes=\(bytes) afterMs=\(Int(delay * 1000)) drawSeq=\(self.diagnosticDrawSeq) update=\(self.updateRangeDescription()) window=\(self.window != nil) bounds=\(Int(self.bounds.width))x\(Int(self.bounds.height))")
+        }
+    }
+
+    private func updateRangeDescription() -> String {
+        guard let range = getTerminal().getUpdateRange() else { return "nil" }
+        return "\(range.startY)-\(range.endY)"
+    }
+
+    override func draw(_ dirtyRect: CGRect) {
+        diagnosticDrawSeq += 1
+        let shouldLog = CACurrentMediaTime() < diagnosticDrawLogUntil
+        if shouldLog {
+            DiagLog.log("terminal", "draw begin drawSeq=\(diagnosticDrawSeq) feedSeq=\(diagnosticLastFeedSeq) bytes=\(diagnosticLastFeedBytes) dirty=\(Int(dirtyRect.width))x\(Int(dirtyRect.height)) update=\(updateRangeDescription())")
+        }
+        super.draw(dirtyRect)
+        if shouldLog {
+            DiagLog.log("terminal", "draw end drawSeq=\(diagnosticDrawSeq) feedSeq=\(diagnosticLastFeedSeq) update=\(updateRangeDescription())")
         }
     }
 

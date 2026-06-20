@@ -18,6 +18,8 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     private var foregroundObservers: [NSObjectProtocol] = []
     private var foregroundRefreshWork: [DispatchWorkItem] = []
     private var lastForegroundResyncAt: CFTimeInterval = 0
+    private var outputEnqueueSeq = 0
+    private var feedSeq = 0
 
     init(session: TerminalSession, themeId: String, fontFamily: String, fontSize: CGFloat) {
         self.session = session
@@ -48,7 +50,11 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         session.onOutput = { [weak self] bytes in
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.outputEnqueueSeq += 1
+                let seq = self.outputEnqueueSeq
+                let before = self.pendingFeed.count
                 self.pendingFeed.append(contentsOf: bytes)
+                DiagLog.log("terminal", "output enqueue seq=\(seq) bytes=\(bytes.count) pending=\(before)->\(self.pendingFeed.count) active=\(UIApplication.shared.applicationState.rawValue) window=\(self.view.window != nil)")
                 self.scheduleFlush()
             }
         }
@@ -83,8 +89,18 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
             guard !self.pendingFeed.isEmpty else { return }
             let chunk = self.pendingFeed
             self.pendingFeed.removeAll(keepingCapacity: true)
+            self.feedSeq += 1
+            let seq = self.feedSeq
+            DiagLog.log("terminal", "feed begin seq=\(seq) bytes=\(chunk.count) updateBefore=\(self.updateRangeDescription()) window=\(self.view.window != nil) bounds=\(Int(self.view.bounds.width))x\(Int(self.view.bounds.height))")
+            self.view.noteFeedForDiagnostics(seq: seq, bytes: chunk.count)
             self.view.feed(byteArray: chunk[...])
+            DiagLog.log("terminal", "feed end seq=\(seq) updateAfter=\(self.updateRangeDescription()) terminal=\(self.view.getTerminal().cols)x\(self.view.getTerminal().rows)")
         }
+    }
+
+    private func updateRangeDescription() -> String {
+        guard let range = view.getTerminal().getUpdateRange() else { return "nil" }
+        return "\(range.startY)-\(range.endY)"
     }
 
     /// Force a full repaint — used when the view is re-embedded after a tab

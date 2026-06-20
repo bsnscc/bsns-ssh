@@ -46,6 +46,11 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var lastFbCols: Int32 = 0
     private var lastFbRows: Int32 = 0
     private var lastReportedClientError = ""
+    private var inputPushSeq = 0
+    private var ansiDrainSeq = 0
+    private var awaitingOutputForInputSeq: Int?
+    private var awaitingOutputSince: Date?
+    private var lastAwaitingOutputLogAt: Date?
 
     // Connection params, kept so we can re-create the client socket after iOS
     // suspends us in the background (the mosh-server keeps running, so a fresh
@@ -228,6 +233,12 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 moshLog("resume resize/repaint end")
             }
             if !input.isEmpty {
+                inputPushSeq += 1
+                let inputSeq = inputPushSeq
+                awaitingOutputForInputSeq = inputSeq
+                awaitingOutputSince = Date()
+                lastAwaitingOutputLogAt = nil
+                moshLog("input push seq=\(inputSeq) bytes=\(input.count) state=\(mosh_client_state_num(c))")
                 input.withUnsafeBytes { raw in
                     mosh_client_push(c, raw.bindMemory(to: CChar.self).baseAddress, Int32(raw.count))
                 }
@@ -305,6 +316,20 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             if let ansi = mosh_client_drain_ansi(c) {
                 let bytes = Array(String(cString: ansi).utf8)
                 free(ansi)
+                ansiDrainSeq += 1
+                let state = mosh_client_state_num(c)
+                let waitedMs: Int?
+                if let started = awaitingOutputSince {
+                    waitedMs = Int(Date().timeIntervalSince(started) * 1000)
+                } else {
+                    waitedMs = nil
+                }
+                let inputLabel = awaitingOutputForInputSeq.map { String($0) } ?? "-"
+                let waitLabel = waitedMs.map { String($0) } ?? "-"
+                moshLog("drain ansi seq=\(ansiDrainSeq) bytes=\(bytes.count) state=\(state) inputSeq=\(inputLabel) waitMs=\(waitLabel)")
+                awaitingOutputForInputSeq = nil
+                awaitingOutputSince = nil
+                lastAwaitingOutputLogAt = nil
                 onOutput?(bytes[...])
                 // Note when the rendered framebuffer size changes — a value that
                 // diverges from our asked size (cols×rows) is the display desync.
@@ -319,6 +344,13 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 if message.isEmpty == false && message != lastReportedClientError {
                     lastReportedClientError = message
                     moshLog("client error: \(message)")
+                }
+            } else if let inputSeq = awaitingOutputForInputSeq, let started = awaitingOutputSince {
+                let now = Date()
+                if now.timeIntervalSince(started) > 0.75,
+                   lastAwaitingOutputLogAt.map({ now.timeIntervalSince($0) > 1.0 }) ?? true {
+                    lastAwaitingOutputLogAt = now
+                    moshLog("drain pending no ansi inputSeq=\(inputSeq) ageMs=\(Int(now.timeIntervalSince(started) * 1000)) state=\(mosh_client_state_num(c))")
                 }
             }
             // Flag staleness on transition (the loop wakes at least ~1/s, so this
