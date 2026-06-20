@@ -50,6 +50,7 @@ class BsnsSessionClient(
 class BsnsViewClient(
     private val view: () -> TerminalView,
     private val onEmulatorReady: () -> Unit,
+    private val onAlternateBufferScroll: (MotionEvent?, Int) -> Boolean = { _, _ -> false },
 ) : TerminalViewClient {
     override fun onScale(scale: Float): Float = scale
     override fun onSingleTapUp(e: MotionEvent?) {
@@ -63,6 +64,8 @@ class BsnsViewClient(
     override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
     override fun isTerminalViewSelected(): Boolean = true
     override fun copyModeChanged(copyMode: Boolean) {}
+    override fun onAlternateBufferScroll(event: MotionEvent?, rowsDown: Int): Boolean =
+        onAlternateBufferScroll(event, rowsDown)
     override fun onKeyDown(keyCode: Int, e: KeyEvent?, session: TerminalSession?): Boolean = false
     override fun onKeyUp(keyCode: Int, e: KeyEvent?): Boolean = false
     override fun onLongPress(event: MotionEvent?): Boolean = false

@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
@@ -216,7 +217,7 @@ fun parseJump(spec: String?, fallbackUser: String): JumpParse {
     return JumpParse.Ok(JumpSpec(hp, 22, who))
 }
 
-private enum class Route { Connect, Keys, Hosts, Settings, Backup, Import, Snippets }
+private enum class Route { Connect, Keys, Hosts, Settings, Backup, Import, Snippets, Help }
 
 @Composable
 fun App() {
@@ -331,12 +332,14 @@ fun App() {
                 settings, biometricAvailable = biometricAvailable(context),
                 onBackup = { route = Route.Backup },
                 onSnippets = { route = Route.Snippets },
+                onHelp = { route = Route.Help },
             ) {
                 showKeyBar = settings.showKeyBar
                 route = Route.Connect
             }
             Route.Backup -> BackupScreen { route = Route.Settings }
             Route.Snippets -> SnippetsScreen { route = Route.Settings }
+            Route.Help -> TerminalHelpScreen { route = Route.Settings }
             // Returning recreates ConnectScreen, which reloads saved hosts from disk.
             Route.Import -> ImportConfigScreen { route = Route.Connect }
         }
@@ -483,6 +486,15 @@ class TerminalHolder(
         setRemoteScrollMode(true)
     }
 
+    fun enterTmuxScrollModeFromAlternateScroll(event: MotionEvent?, rowsDown: Int): Boolean {
+        if (status != ConnStatus.Connected || remoteScrollActive || rowsDown >= 0) return false
+        session.write(TMUX_COPY_MODE_BYTES)
+        setRemoteScrollMode(true)
+        if (event != null) remoteScrollLastY = event.y
+        sendRemoteScrollRows(-rowsDown)
+        return true
+    }
+
     fun finishRemoteScrollMode(sendEscape: Boolean = true) {
         setRemoteScrollMode(false)
         if (sendEscape && status == ConnStatus.Connected) session.write(ESC_BYTES)
@@ -529,8 +541,14 @@ class TerminalHolder(
         var steps = (remoteScrollRemainder / lineHeight).toInt().coerceIn(-30, 30)
         if (steps == 0) return
         remoteScrollRemainder -= steps * lineHeight
-        val bytes = if (steps > 0) REMOTE_UP_BYTES else REMOTE_DOWN_BYTES
-        repeat(abs(steps)) { session.write(bytes) }
+        sendRemoteScrollRows(steps)
+    }
+
+    private fun sendRemoteScrollRows(rowsDown: Int) {
+        val rows = rowsDown.coerceIn(-30, 30)
+        if (rows == 0) return
+        val bytes = if (rows > 0) REMOTE_UP_BYTES else REMOTE_DOWN_BYTES
+        repeat(abs(rows)) { session.write(bytes) }
     }
 
     /** Send the completion's remaining suffix to the shell (the prefix is already typed). */
@@ -607,17 +625,23 @@ class TerminalHolder(
                     cm?.setPrimaryClip(ClipData.newPlainText("bsns.SSH", text))
                 },
             ), io)
-        terminalView.setTerminalViewClient(BsnsViewClient(view = { terminalView }, onEmulatorReady = {
-            wireOutput(initialSession)
-            terminalView.mEmulator?.let { Appearance.apply(it, theme) }
-            val esc = Appearance.cursorStyleEscape(cursorStyle)
-            termSession.appendToEmulator(esc, esc.size)
-            if (cursorBlink) {
-                terminalView.setTerminalCursorBlinkerRate(500)
-                terminalView.setTerminalCursorBlinkerState(true, true)
-            }
-            terminalView.invalidate()
-        }))
+        terminalView.setTerminalViewClient(BsnsViewClient(
+            view = { terminalView },
+            onEmulatorReady = {
+                wireOutput(initialSession)
+                terminalView.mEmulator?.let { Appearance.apply(it, theme) }
+                val esc = Appearance.cursorStyleEscape(cursorStyle)
+                termSession.appendToEmulator(esc, esc.size)
+                if (cursorBlink) {
+                    terminalView.setTerminalCursorBlinkerRate(500)
+                    terminalView.setTerminalCursorBlinkerState(true, true)
+                }
+                terminalView.invalidate()
+            },
+            onAlternateBufferScroll = { event, rowsDown ->
+                enterTmuxScrollModeFromAlternateScroll(event, rowsDown)
+            },
+        ))
         terminalView.attachSession(termSession)
     }
 
@@ -768,6 +792,7 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
     var searching by remember { mutableStateOf(false) }
     var showSnippets by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
+    var showHelp by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var hits by remember { mutableStateOf<List<Int>>(emptyList()) }
     var hitIdx by remember { mutableStateOf(0) }
@@ -860,6 +885,7 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                     IconButton(onClick = { showHistory = true }, enabled = live) { Icon(Icons.Default.History, "command history") }
                     IconButton(onClick = { showSnippets = true }, enabled = live) { Icon(Icons.Default.Code, "snippets") }
                     IconButton(onClick = { searching = true }) { Icon(Icons.Default.Search, "find") }
+                    IconButton(onClick = { showHelp = true }) { Icon(Icons.Default.Info, "terminal help") }
                     OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
                 }
             }
@@ -976,6 +1002,19 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                 if (items.isNotEmpty()) TextButton(onClick = { holder.clearHistory(); showHistory = false }) { Text("Clear") }
             },
             dismissButton = { TextButton(onClick = { showHistory = false }) { Text("Close") } },
+        )
+    }
+
+    if (showHelp) {
+        AlertDialog(
+            onDismissRequest = { showHelp = false },
+            title = { Text("Terminal Help") },
+            text = {
+                TerminalHelpContent(
+                    Modifier.verticalScroll(rememberScrollState()),
+                )
+            },
+            confirmButton = { TextButton(onClick = { showHelp = false }) { Text("Close") } },
         )
     }
 }

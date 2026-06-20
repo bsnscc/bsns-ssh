@@ -40,6 +40,12 @@ public interface TerminalViewClient {
 
     void copyModeChanged(boolean copyMode);
 
+    /**
+     * Give the app a chance to handle touch scrolling while the terminal is in
+     * the alternate buffer. Returning true consumes the scroll.
+     */
+    boolean onAlternateBufferScroll(MotionEvent event, int rowsDown);
+
 
 
     boolean onKeyDown(int keyCode, KeyEvent e, TerminalSession session);

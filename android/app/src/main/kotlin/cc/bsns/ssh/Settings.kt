@@ -74,7 +74,14 @@ private fun PickerRow(label: String, value: String, onTap: () -> Unit) {
 
 /** Settings: terminal appearance/behaviour + the app-lock toggle. */
 @Composable
-fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: () -> Unit, onSnippets: () -> Unit, onBack: () -> Unit) {
+fun SettingsScreen(
+    store: SettingsStore,
+    biometricAvailable: Boolean,
+    onBackup: () -> Unit,
+    onSnippets: () -> Unit,
+    onHelp: () -> Unit,
+    onBack: () -> Unit,
+) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var fontSize by remember { mutableStateOf(store.fontSize) }
     var scrollback by remember { mutableStateOf(store.scrollback) }
@@ -156,6 +163,12 @@ fun SettingsScreen(store: SettingsStore, biometricAvailable: Boolean, onBackup: 
             Section(title = "Snippets") {
                 SettingRow("Snippets", onClick = onSnippets) {
                     Text("Manage", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+
+            Section(title = "Help") {
+                SettingRow("Terminal Help", onClick = onHelp) {
+                    Text("Open", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
                 }
             }
 
