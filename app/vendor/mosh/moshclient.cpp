@@ -68,22 +68,46 @@ void mosh_client_free(MoshClient* c) {
 
 int mosh_client_fd(MoshClient* c) {
   if (!c || !c->transport) return -1;
-  std::vector<int> fds = c->transport->fds();
-  return fds.empty() ? -1 : fds.back();
+  try {
+    std::vector<int> fds = c->transport->fds();
+    return fds.empty() ? -1 : fds.back();
+  } catch (const std::exception& e) {
+    c->lastError = e.what();
+    return -1;
+  } catch (...) {
+    c->lastError = "mosh fd lookup failed";
+    return -1;
+  }
 }
 
 int mosh_client_fds(MoshClient* c, int* out, int capacity) {
   if (!c || !c->transport || !out || capacity <= 0) return 0;
-  std::vector<int> fds = c->transport->fds();
-  int n = static_cast<int>(fds.size());
-  if (n > capacity) n = capacity;
-  for (int i = 0; i < n; i++) out[i] = fds[i];
-  return n;
+  try {
+    std::vector<int> fds = c->transport->fds();
+    int n = static_cast<int>(fds.size());
+    if (n > capacity) n = capacity;
+    for (int i = 0; i < n; i++) out[i] = fds[i];
+    return n;
+  } catch (const std::exception& e) {
+    c->lastError = e.what();
+    return 0;
+  } catch (...) {
+    c->lastError = "mosh fd lookup failed";
+    return 0;
+  }
 }
 
 int mosh_client_wait_ms(MoshClient* c) {
   if (!c || !c->transport) return 1000;
-  return c->transport->wait_time();
+  try {
+    return c->transport->wait_time();
+  } catch (const std::exception& e) {
+    c->lastError = e.what();
+    return 1000;
+  } catch (...) {
+    c->lastError = "mosh wait time failed";
+    return 1000;
+  }
 }
 
 void mosh_client_freeze_time(void) {
@@ -94,14 +118,16 @@ void mosh_client_recv(MoshClient* c) {
   if (!c || !c->transport) return;
   try { c->transport->recv(); }
   catch (const Network::NetworkException&) { /* drop bad/duplicate datagrams */ }
-  catch (...) {}
+  catch (const std::exception& e) { c->lastError = e.what(); }
+  catch (...) { c->lastError = "mosh recv failed"; }
 }
 
 void mosh_client_tick(MoshClient* c) {
   if (!c || !c->transport) return;
   try { c->transport->tick(); }
   catch (const Network::NetworkException& e) { c->lastError = e.what(); }
-  catch (...) {}
+  catch (const std::exception& e) { c->lastError = e.what(); }
+  catch (...) { c->lastError = "mosh tick failed"; }
 }
 
 void mosh_client_hop(MoshClient* c) {
@@ -110,7 +136,8 @@ void mosh_client_hop(MoshClient* c) {
   // the crypto sequence the server requires. Called on resume-from-background,
   // where iOS has torn down our suspended UDP socket.
   try { c->transport->hop(); }
-  catch (...) {}
+  catch (const std::exception& e) { c->lastError = e.what(); }
+  catch (...) { c->lastError = "mosh hop failed"; }
 }
 
 void mosh_client_force_repaint(MoshClient* c) {
@@ -122,15 +149,27 @@ void mosh_client_force_repaint(MoshClient* c) {
 
 void mosh_client_push(MoshClient* c, const char* bytes, int len) {
   if (!c || !c->transport || !bytes) return;
-  Network::UserStream& s = c->transport->get_current_state();
-  for (int i = 0; i < len; i++) {
-    s.push_back(Parser::UserByte(static_cast<unsigned char>(bytes[i])));
+  try {
+    Network::UserStream& s = c->transport->get_current_state();
+    for (int i = 0; i < len; i++) {
+      s.push_back(Parser::UserByte(static_cast<unsigned char>(bytes[i])));
+    }
+  } catch (const std::exception& e) {
+    c->lastError = e.what();
+  } catch (...) {
+    c->lastError = "mosh input push failed";
   }
 }
 
 void mosh_client_resize(MoshClient* c, int cols, int rows) {
   if (!c || !c->transport) return;
-  c->transport->get_current_state().push_back(Parser::Resize(cols, rows));
+  try {
+    c->transport->get_current_state().push_back(Parser::Resize(cols, rows));
+  } catch (const std::exception& e) {
+    c->lastError = e.what();
+  } catch (...) {
+    c->lastError = "mosh resize failed";
+  }
 }
 
 void mosh_client_fb_dims(MoshClient* c, int* cols, int* rows) {

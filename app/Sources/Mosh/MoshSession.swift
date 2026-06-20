@@ -62,6 +62,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var pendingResize: (Int32, Int32)?
     private var resumeRequested = false
     private var appInForeground = true
+    private var appIsActive = true
     private var pendingForegroundRecovery = false
     private var lastResumeRequestAt: TimeInterval = 0
     private var stopRequested = false
@@ -92,30 +93,41 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         // row), and (c) hop to a fresh socket if we'd gone stale. Observe both
         // notifications — willEnterForeground fires earliest; didBecomeActive is the
         // backstop — since either alone has proven unreliable in a SwiftUI-scene app.
-        let resume: (Notification) -> Void = { [weak self] note in
+        let willEnterForeground: (Notification) -> Void = { [weak self] note in
+            guard let self else { return }
+            self.lock.lock()
+            self.appInForeground = true
+            self.appIsActive = false
+            self.lock.unlock()
+            moshLog("foreground note=\(note.name.rawValue) wake=true")
+            self.wake()
+        }
+        let didBecomeActive: (Notification) -> Void = { [weak self] note in
             guard let self else { return }
             let now = Date().timeIntervalSinceReferenceDate
             self.lock.lock()
-            let shouldWake = now - self.lastResumeRequestAt > 0.75
+            let shouldResume = now - self.lastResumeRequestAt > 1.25
             self.appInForeground = true
-            if shouldWake {
+            self.appIsActive = true
+            if shouldResume {
                 self.lastResumeRequestAt = now
                 self.resumeRequested = true
             }
             self.lock.unlock()
-            moshLog("foreground note=\(note.name.rawValue) shouldWake=\(shouldWake)")
-            guard shouldWake else { return }
+            moshLog("foreground note=\(note.name.rawValue) shouldResume=\(shouldResume)")
+            guard shouldResume else { return }
             self.wake()
         }
-        for name in [UIApplication.willEnterForegroundNotification, UIApplication.didBecomeActiveNotification] {
-            foregroundObservers.append(
-                NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil, using: resume))
-        }
+        foregroundObservers.append(
+            NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil, using: willEnterForeground))
+        foregroundObservers.append(
+            NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil, using: didBecomeActive))
         foregroundObservers.append(
             NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { [weak self] note in
                 guard let self else { return }
                 self.lock.lock()
                 self.appInForeground = false
+                self.appIsActive = false
                 self.lock.unlock()
                 moshLog("background note=\(note.name.rawValue)")
             })
@@ -250,10 +262,10 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 lastContactAt = Date()
                 if recovering {
                     lock.lock()
-                    let foreground = appInForeground
-                    if !foreground { pendingForegroundRecovery = true }
+                    let active = appInForeground && appIsActive
+                    if !active { pendingForegroundRecovery = true }
                     lock.unlock()
-                    guard foreground else {
+                    guard active else {
                         moshLog("recovering stale datagram deferred until foreground ask=\(cols)x\(rows)")
                         continue
                     }
