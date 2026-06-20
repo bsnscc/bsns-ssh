@@ -168,7 +168,8 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             // process death during stale datagram recovery.
             lock.lock()
             let stop = stopRequested
-            let transportAllowed = appInForeground
+            let waitingForActiveRecovery = pendingForegroundRecovery && !appIsActive
+            let transportAllowed = appInForeground && !waitingForActiveRecovery
             let resume = transportAllowed && resumeRequested
             let foregroundRecovery = resume ? pendingForegroundRecovery : false
             if resume {
