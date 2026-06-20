@@ -50,7 +50,8 @@ struct LiveTerminalScreen: View {
                                 themeId: themeId,
                                 fontFamily: fontFamily,
                                 hardwareKeyboard: hwKeyboard.isConnected,
-                                prefs: "\(cursorStyle)\(cursorBlink)\(optionAsMeta)")
+                                prefs: "\(cursorStyle)\(cursorBlink)\(optionAsMeta)",
+                                muxScrollActive: $muxScrollActive)
                 .overlay(alignment: .top) { transferBanner }
             // Our key row is redundant with SwiftTerm's soft-keyboard accessory,
             // so only show it when the soft keyboard is down. With a physical
@@ -389,6 +390,8 @@ final class ZoomableTerminalView: TerminalView {
     var onZoomChange: ((CGFloat) -> Void)?
     /// Send raw bytes to the remote (set by the surface → session.write).
     var onSendBytes: (([UInt8]) -> Void)?
+    /// Keeps SwiftUI controls in sync when a gesture enters multiplexer scroll mode.
+    var onRemoteScrollModeChanged: ((Bool) -> Void)?
     /// An image was dropped or pasted onto the terminal — (PNG/JPEG data, ext).
     /// Set by the surface → session.uploadImage.
     var onImageDropped: ((Data, String) -> Void)?
@@ -397,6 +400,7 @@ final class ZoomableTerminalView: TerminalView {
     private var remoteScrollMode = false
     private var remoteScrollAccumulator: CGFloat = 0
     private var scrollEnabledBeforeRemoteScroll = true
+    private var autoMuxScrollArmed = false
     private var editMenu: UIEditMenuInteraction?
     private var currentSize: CGFloat = defaultFontSize
     private var pinchStart: CGFloat = defaultFontSize
@@ -490,6 +494,7 @@ final class ZoomableTerminalView: TerminalView {
         addInteraction(menu)
         editMenu = menu
         addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(showEditMenu(_:))))
+        installRemoteScrollGesture()
         installImageDrop()
     }
 
@@ -497,44 +502,65 @@ final class ZoomableTerminalView: TerminalView {
         guard remoteScrollMode != active else { return }
         remoteScrollMode = active
         remoteScrollAccumulator = 0
+        autoMuxScrollArmed = false
+        installRemoteScrollGesture()
 
         if active {
-            installRemoteScrollGesture()
             scrollEnabledBeforeRemoteScroll = isScrollEnabled
             isScrollEnabled = false
-            remoteScrollPanGesture?.isEnabled = true
             _ = becomeFirstResponder()
         } else {
-            remoteScrollPanGesture?.isEnabled = false
             isScrollEnabled = scrollEnabledBeforeRemoteScroll
         }
+        onRemoteScrollModeChanged?(active)
     }
 
     private func installRemoteScrollGesture() {
         guard remoteScrollPanGesture == nil else { return }
         let gesture = UIPanGestureRecognizer(target: self, action: #selector(handleRemoteScrollPan(_:)))
-        gesture.cancelsTouchesInView = true
-        gesture.isEnabled = remoteScrollMode
+        gesture.cancelsTouchesInView = false
+        gesture.delegate = self
+        if #available(iOS 13.4, *) {
+            gesture.allowedScrollTypesMask = [.continuous, .discrete]
+        }
         addGestureRecognizer(gesture)
         remoteScrollPanGesture = gesture
     }
 
     @objc private func handleRemoteScrollPan(_ gesture: UIPanGestureRecognizer) {
-        guard remoteScrollMode else { return }
         switch gesture.state {
         case .began:
             remoteScrollAccumulator = 0
+            autoMuxScrollArmed = !remoteScrollMode && getTerminal().isCurrentBufferAlternate
             gesture.setTranslation(.zero, in: self)
         case .changed:
             let deltaY = gesture.translation(in: self).y
             gesture.setTranslation(.zero, in: self)
+            if !remoteScrollMode {
+                guard autoMuxScrollArmed, shouldEnterMuxScroll(deltaY: deltaY) else { return }
+                enterMuxScrollModeFromGesture()
+            }
             remoteScrollAccumulator += deltaY
             sendRemoteScrollSteps()
         case .ended, .cancelled, .failed:
             remoteScrollAccumulator = 0
+            autoMuxScrollArmed = false
         default:
             break
         }
+    }
+
+    private func shouldEnterMuxScroll(deltaY: CGFloat) -> Bool {
+        guard deltaY > 0, getTerminal().isCurrentBufferAlternate else { return false }
+        let rows = max(1, getTerminal().rows)
+        let lineHeight = max(12, bounds.height / CGFloat(rows))
+        return deltaY >= min(18, lineHeight * 0.75)
+    }
+
+    private func enterMuxScrollModeFromGesture() {
+        DiagLog.log("terminal", "auto mux scroll enter terminal=\(getTerminal().cols)x\(getTerminal().rows)")
+        onSendBytes?([0x02, 0x5b])
+        setRemoteScrollMode(true)
     }
 
     private func sendRemoteScrollSteps() {
@@ -713,9 +739,11 @@ struct TerminalSurfaceView: UIViewRepresentable {
     let hardwareKeyboard: Bool
     /// Bundles cursor/meta prefs so a change re-triggers updateUIView → applyPrefs.
     let prefs: String
+    @Binding var muxScrollActive: Bool
 
     func makeUIView(context: Context) -> ZoomableTerminalView {
         surface.onZoomChange = { fontSize = $0 }
+        surface.view.onRemoteScrollModeChanged = { muxScrollActive = $0 }
         surface.apply(themeId: themeId, fontFamily: fontFamily, fontSize: fontSize, hardwareKeyboard: hardwareKeyboard)
         surface.refresh()   // re-embed after a tab switch: redraw the kept buffer
         return surface.view
@@ -723,6 +751,14 @@ struct TerminalSurfaceView: UIViewRepresentable {
 
     func updateUIView(_ terminal: ZoomableTerminalView, context: Context) {
         surface.onZoomChange = { fontSize = $0 }
+        surface.view.onRemoteScrollModeChanged = { muxScrollActive = $0 }
         surface.apply(themeId: themeId, fontFamily: fontFamily, fontSize: fontSize, hardwareKeyboard: hardwareKeyboard)
+    }
+}
+
+extension ZoomableTerminalView: UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        gestureRecognizer === remoteScrollPanGesture || otherGestureRecognizer === remoteScrollPanGesture
     }
 }

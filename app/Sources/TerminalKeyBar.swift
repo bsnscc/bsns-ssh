@@ -62,7 +62,9 @@ struct TerminalKeyBar: View {
         }
     }
 
-    private var items: [Item] { minimal ? [Item(label: "esc", key: .esc, wide: true)] : fullItems }
+    private var items: [Item] {
+        minimal ? [Item(label: muxScrollActive ? "done" : "esc", key: .esc, wide: true)] : fullItems
+    }
 
     private var fullItems: [Item] {
         [
