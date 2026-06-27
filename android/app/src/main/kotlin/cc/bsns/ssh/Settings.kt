@@ -8,11 +8,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -54,6 +56,12 @@ class SettingsStore(context: Context) {
         get() = p.getBoolean("bellHaptic", true); set(v) { p.edit().putBoolean("bellHaptic", v).apply() }
     var commandHistory: Boolean
         get() = p.getBoolean("commandHistory", true); set(v) { p.edit().putBoolean("commandHistory", v).apply() }
+    var tmuxScrollSequence: String
+        get() = p.getString("tmuxScrollSequence", "C-b [") ?: "C-b ["
+        set(v) { p.edit().putString("tmuxScrollSequence", v).apply() }
+    var screenScrollSequence: String
+        get() = p.getString("screenScrollSequence", "C-a [") ?: "C-a ["
+        set(v) { p.edit().putString("screenScrollSequence", v).apply() }
 }
 
 @Composable
@@ -93,6 +101,8 @@ fun SettingsScreen(
     var theme by remember { mutableStateOf(store.theme) }
     var cursorStyle by remember { mutableStateOf(store.cursorStyle) }
     var bellHaptic by remember { mutableStateOf(store.bellHaptic) }
+    var tmuxScrollSequence by remember { mutableStateOf(store.tmuxScrollSequence) }
+    var screenScrollSequence by remember { mutableStateOf(store.screenScrollSequence) }
     val scrollbackOptions = listOf(500, 1000, 2000, 5000, 10000)
     val themeIds = Appearance.themes.map { it.id }
 
@@ -139,6 +149,29 @@ fun SettingsScreen(
                 SettingToggle("Keep screen awake while connected", keepAwake) { keepAwake = it; store.keepAwake = it }
                 RowDivider()
                 SettingToggle("Show terminal shortcut bar", showKeyBar) { showKeyBar = it; store.showKeyBar = it }
+            }
+
+            Section(
+                title = "Multiplexer scroll",
+                footer = "Used by the tmux and screen buttons to enter copy/scrollback mode. Examples: C-b [, C-a [, C-] [, Esc [. Tokens can be C-x, Ctrl-x, Esc, Tab, Enter, Space, 0x1b, or literal text.",
+            ) {
+                SettingRow("tmux sequence") {
+                    OutlinedTextField(
+                        value = tmuxScrollSequence,
+                        onValueChange = { tmuxScrollSequence = it; store.tmuxScrollSequence = it },
+                        singleLine = true,
+                        modifier = Modifier.widthIn(min = 110.dp, max = 180.dp),
+                    )
+                }
+                RowDivider()
+                SettingRow("screen sequence") {
+                    OutlinedTextField(
+                        value = screenScrollSequence,
+                        onValueChange = { screenScrollSequence = it; store.screenScrollSequence = it },
+                        singleLine = true,
+                        modifier = Modifier.widthIn(min = 110.dp, max = 180.dp),
+                    )
+                }
             }
 
             Section(

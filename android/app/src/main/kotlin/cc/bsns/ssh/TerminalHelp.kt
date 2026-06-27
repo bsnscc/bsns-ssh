@@ -46,7 +46,7 @@ fun TerminalHelpContent(modifier: Modifier = Modifier) {
         Section(title = "Scrolling") {
             HelpRow(
                 title = "Normal scrollback",
-                text = "In a regular shell, swipe or use scroll keys to move through local terminal scrollback.",
+                text = "In a regular shell, swipe to move through local terminal scrollback. With a hardware keyboard, Shift-Page Up and Shift-Page Down scroll locally.",
             )
             RowDivider()
             HelpRow(
@@ -55,27 +55,32 @@ fun TerminalHelpContent(modifier: Modifier = Modifier) {
             )
         }
 
-        Section(title = "Remote Scroll") {
+        Section(title = "Multiplexer Scroll") {
             HelpRow(
-                title = "Remote Scroll",
-                text = "The hand/finger or tmux control switches panning from local scrollback to remote navigation keys.",
+                title = "tmux scroll mode",
+                text = "Use the tmux button in the key bar to send the configured tmux copy-mode sequence. The default is C-b [.",
             )
             RowDivider()
             HelpRow(
-                title = "tmux copy mode",
-                text = "When you start scrolling in tmux, the app enters copy mode automatically. The shortcut bar shows done; tap it or press esc to leave.",
+                title = "screen scroll mode",
+                text = "Use the screen button to send the configured GNU screen copy-mode sequence. The default is C-a [, but you can change it in Settings if your screen prefix is different.",
+            )
+            RowDivider()
+            HelpRow(
+                title = "Active scroll mode",
+                text = "While active, panning and Page Up/Page Down send remote navigation keys instead of local scrollback. Tap done or press Esc to leave. Swiping up in an alternate-screen session can auto-enter the configured tmux path.",
             )
             RowDivider()
             HelpRow(
                 title = "Hardware keyboard",
-                text = "Page Up and Page Down go to the remote app. Shift-Page Up and Shift-Page Down scroll local output when local scrollback is available.",
+                text = "In tmux or screen scroll mode, Page Up and Page Down move a page through remote history, and Esc leaves the mode. Outside that mode, Page Up and Page Down go to the remote app; Shift-Page Up and Shift-Page Down scroll local output when available.",
             )
         }
 
         Section(title = "Tools") {
             HelpRow(
                 title = "Find",
-                text = "Use Find from the terminal menu to search local scrollback. It does not search tmux history until tmux has printed that text into the terminal.",
+                text = "Use the Search button to search local scrollback. It does not search tmux history until tmux has printed that text into the terminal.",
             )
             RowDivider()
             HelpRow(

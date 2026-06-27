@@ -56,7 +56,9 @@ object ConfigBundle {
             .put("scrollback", s.scrollback)
             .put("cursorBlink", s.cursorBlink)
             .put("keepAwake", s.keepAwake)
-            .put("showKeyBar", s.showKeyBar))
+            .put("showKeyBar", s.showKeyBar)
+            .put("tmuxScrollSequence", s.tmuxScrollSequence)
+            .put("screenScrollSequence", s.screenScrollSequence))
 
         if (includeKeys) {
             val keys = JSONArray()
@@ -162,6 +164,8 @@ object ConfigBundle {
             st.cursorBlink = s.optBoolean("cursorBlink", st.cursorBlink)
             st.keepAwake = s.optBoolean("keepAwake", st.keepAwake)
             st.showKeyBar = s.optBoolean("showKeyBar", st.showKeyBar)
+            st.tmuxScrollSequence = s.optString("tmuxScrollSequence", st.tmuxScrollSequence).take(80)
+            st.screenScrollSequence = s.optString("screenScrollSequence", st.screenScrollSequence).take(80)
             settings = true
         }
         // Snippets are executable configuration (a run-on-connect snippet auto-runs

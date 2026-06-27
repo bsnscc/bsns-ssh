@@ -2236,7 +2236,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// property in case someone needs the return key to send different sequences.
     public var returnByteSequence: [UInt8] = [13]
     
-    public override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+    open override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var didHandleEvent = false
         let wasCommandActive = commandActive
         let kittyFlags = terminal.keyboardEnhancementFlags

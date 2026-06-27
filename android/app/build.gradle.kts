@@ -15,7 +15,7 @@ android {
         applicationId = "cc.bsns.ssh"
         minSdk = 26
         targetSdk = 35
-        versionCode = 39
+        versionCode = 40
         versionName = "1.0"
         ndk { abiFilters += "arm64-v8a" }
     }

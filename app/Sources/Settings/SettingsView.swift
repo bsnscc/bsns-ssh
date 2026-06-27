@@ -12,6 +12,8 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.optionAsMeta) private var optionAsMeta = true
     @AppStorage(SettingsKey.pinchZoom) private var pinchZoom = true
     @AppStorage(SettingsKey.showKeyBar) private var showKeyBar = true
+    @AppStorage(SettingsKey.tmuxScrollSequence) private var tmuxScrollSequence = "C-b ["
+    @AppStorage(SettingsKey.screenScrollSequence) private var screenScrollSequence = "C-a ["
     @AppStorage(SettingsKey.keepAliveInterval) private var keepAlive = 30
     @AppStorage(SettingsKey.terminalType) private var terminalType = "xterm-256color"
     @AppStorage(SettingsKey.appLock) private var appLock = false
@@ -65,6 +67,19 @@ struct SettingsView: View {
                 Text("Input")
             } footer: {
                 Text("Option as Meta sends Esc-prefixed keys for Alt shortcuts (vim, emacs, readline).")
+            }
+
+            Section {
+                TextField("tmux sequence", text: $tmuxScrollSequence)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                TextField("screen sequence", text: $screenScrollSequence)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            } header: {
+                Text("Multiplexer scroll")
+            } footer: {
+                Text("Used by the tmux and screen buttons to enter copy/scrollback mode. Examples: C-b [, C-a [, C-] [, Esc [. Tokens can be C-x, Ctrl-x, Esc, Tab, Enter, Space, 0x1b, or literal text.")
             }
 
             Section("Sessions") {

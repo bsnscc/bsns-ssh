@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.annotation.SuppressLint
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -409,8 +410,48 @@ private val SECRET_PROMPT_CUES = listOf(
 )
 private val ESC_BYTES = byteArrayOf(0x1B.toByte())
 private val TMUX_COPY_MODE_BYTES = byteArrayOf(0x02.toByte(), 0x5B.toByte())
+private val SCREEN_COPY_MODE_BYTES = byteArrayOf(0x01.toByte(), 0x5B.toByte())
 private val REMOTE_UP_BYTES = "\u001B[A".toByteArray(Charsets.UTF_8)
 private val REMOTE_DOWN_BYTES = "\u001B[B".toByteArray(Charsets.UTF_8)
+
+private object KeySequence {
+    fun bytes(spec: String, fallback: ByteArray): ByteArray {
+        val out = ArrayList<Byte>()
+        spec.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.forEach { token ->
+            out.addAll(parseToken(token).toList())
+        }
+        return if (out.isEmpty()) fallback else out.toByteArray()
+    }
+
+    private fun parseToken(token: String): ByteArray {
+        val lower = token.lowercase()
+        when (lower) {
+            "esc", "escape" -> return byteArrayOf(0x1B)
+            "tab" -> return byteArrayOf(0x09)
+            "enter", "return" -> return byteArrayOf(0x0D)
+            "space" -> return byteArrayOf(0x20)
+        }
+        if (lower.startsWith("0x")) {
+            lower.drop(2).toIntOrNull(16)?.takeIf { it in 0..255 }?.let {
+                return byteArrayOf(it.toByte())
+            }
+        }
+        controlCharacter(token)?.let { return byteArrayOf(it) }
+        return token.toByteArray(Charsets.UTF_8)
+    }
+
+    private fun controlCharacter(token: String): Byte? {
+        val lower = token.lowercase()
+        val ch = when {
+            lower.startsWith("ctrl-") -> token.drop(5).firstOrNull()
+            lower.startsWith("control-") -> token.drop(8).firstOrNull()
+            lower.startsWith("c-") -> token.drop(2).firstOrNull()
+            lower.startsWith("^") -> token.drop(1).firstOrNull()
+            else -> null
+        } ?: return null
+        return (ch.uppercaseChar().code and 0x1F).toByte()
+    }
+}
 
 class TerminalHolder(
     context: android.content.Context,
@@ -482,13 +523,19 @@ class TerminalHolder(
 
     fun enterTmuxScrollMode() {
         if (status != ConnStatus.Connected) return
-        session.write(TMUX_COPY_MODE_BYTES)
+        session.write(KeySequence.bytes(settingsStore.tmuxScrollSequence, TMUX_COPY_MODE_BYTES))
+        setRemoteScrollMode(true)
+    }
+
+    fun enterScreenScrollMode() {
+        if (status != ConnStatus.Connected) return
+        session.write(KeySequence.bytes(settingsStore.screenScrollSequence, SCREEN_COPY_MODE_BYTES))
         setRemoteScrollMode(true)
     }
 
     fun enterTmuxScrollModeFromAlternateScroll(event: MotionEvent?, rowsDown: Int): Boolean {
         if (status != ConnStatus.Connected || remoteScrollActive || rowsDown >= 0) return false
-        session.write(TMUX_COPY_MODE_BYTES)
+        session.write(KeySequence.bytes(settingsStore.tmuxScrollSequence, TMUX_COPY_MODE_BYTES))
         setRemoteScrollMode(true)
         if (event != null) remoteScrollLastY = event.y
         sendRemoteScrollRows(-rowsDown)
@@ -544,11 +591,38 @@ class TerminalHolder(
         sendRemoteScrollRows(steps)
     }
 
-    private fun sendRemoteScrollRows(rowsDown: Int) {
-        val rows = rowsDown.coerceIn(-30, 30)
+    private fun sendRemoteScrollRows(rowsDown: Int, clamp: Boolean = true) {
+        val rows = if (clamp) rowsDown.coerceIn(-30, 30) else rowsDown
         if (rows == 0) return
         val bytes = if (rows > 0) REMOTE_UP_BYTES else REMOTE_DOWN_BYTES
         repeat(abs(rows)) { session.write(bytes) }
+    }
+
+    fun sendRemoteScrollPage(up: Boolean) {
+        if (status != ConnStatus.Connected) return
+        val rows = ((terminalView.mEmulator?.mRows ?: 24) - 2).coerceAtLeast(1)
+        sendRemoteScrollRows(if (up) rows else -rows, clamp = false)
+    }
+
+    private fun handleRemoteScrollHardwareKey(keyCode: Int, event: KeyEvent): Boolean {
+        if (!remoteScrollActive || event.action != KeyEvent.ACTION_DOWN) return false
+        val modified = event.isShiftPressed || event.isCtrlPressed || event.isAltPressed || event.isMetaPressed
+        if (modified) return false
+        return when (keyCode) {
+            KeyEvent.KEYCODE_PAGE_UP -> {
+                sendRemoteScrollPage(up = true)
+                true
+            }
+            KeyEvent.KEYCODE_PAGE_DOWN -> {
+                sendRemoteScrollPage(up = false)
+                true
+            }
+            KeyEvent.KEYCODE_ESCAPE -> {
+                finishRemoteScrollMode(sendEscape = true)
+                true
+            }
+            else -> false
+        }
     }
 
     /** Send the completion's remaining suffix to the shell (the prefix is already typed). */
@@ -642,6 +716,9 @@ class TerminalHolder(
                 enterTmuxScrollModeFromAlternateScroll(event, rowsDown)
             },
         ))
+        terminalView.setOnKeyListener { _, keyCode, event ->
+            handleRemoteScrollHardwareKey(keyCode, event)
+        }
         terminalView.attachSession(termSession)
     }
 
@@ -963,12 +1040,20 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
             KeyBar(
                 remoteScrollActive = holder.remoteScrollActive,
                 onKey = { holder.session.write(it) },
+                onRemotePage = { up -> holder.sendRemoteScrollPage(up) },
                 onEscape = { holder.finishRemoteScrollMode(sendEscape = true) },
                 onTmuxCopy = {
                     if (holder.remoteScrollActive) {
                         holder.finishRemoteScrollMode(sendEscape = true)
                     } else {
                         holder.enterTmuxScrollMode()
+                    }
+                },
+                onScreenCopy = {
+                    if (holder.remoteScrollActive) {
+                        holder.finishRemoteScrollMode(sendEscape = true)
+                    } else {
+                        holder.enterScreenScrollMode()
                     }
                 },
             )
@@ -1613,13 +1698,23 @@ private data class KeyBarItem(val label: String, val action: () -> Unit)
 private fun KeyBar(
     remoteScrollActive: Boolean,
     onKey: (ByteArray) -> Unit,
+    onRemotePage: (Boolean) -> Unit,
     onEscape: () -> Unit,
     onTmuxCopy: () -> Unit,
+    onScreenCopy: () -> Unit,
 ) {
+    val muxKeys = if (remoteScrollActive) {
+        listOf(KeyBarItem("done", onTmuxCopy))
+    } else {
+        listOf(
+            KeyBarItem("tmux", onTmuxCopy),
+            KeyBarItem("screen", onScreenCopy),
+        )
+    }
     val keys = listOf(
         KeyBarItem("esc", onEscape),
         KeyBarItem("tab") { onKey(seq(0x09)) },
-        KeyBarItem(if (remoteScrollActive) "done" else "tmux", onTmuxCopy),
+    ) + muxKeys + listOf(
         KeyBarItem("^C") { onKey(seq(0x03)) },
         KeyBarItem("^D") { onKey(seq(0x04)) },
         KeyBarItem("^Z") { onKey(seq(0x1A)) },
@@ -1628,8 +1723,12 @@ private fun KeyBar(
         KeyBarItem("↑") { onKey(seq(0x1B, 0x5B, 0x41)) },
         KeyBarItem("↓") { onKey(seq(0x1B, 0x5B, 0x42)) },
         KeyBarItem("→") { onKey(seq(0x1B, 0x5B, 0x43)) },
-        KeyBarItem("⇞") { onKey(seq(0x1B, 0x5B, 0x35, 0x7E)) },
-        KeyBarItem("⇟") { onKey(seq(0x1B, 0x5B, 0x36, 0x7E)) },
+        KeyBarItem("⇞") {
+            if (remoteScrollActive) onRemotePage(true) else onKey(seq(0x1B, 0x5B, 0x35, 0x7E))
+        },
+        KeyBarItem("⇟") {
+            if (remoteScrollActive) onRemotePage(false) else onKey(seq(0x1B, 0x5B, 0x36, 0x7E))
+        },
         KeyBarItem("|") { onKey(seq('|'.code)) },
         KeyBarItem("~") { onKey(seq('~'.code)) },
         KeyBarItem("/") { onKey(seq('/'.code)) },

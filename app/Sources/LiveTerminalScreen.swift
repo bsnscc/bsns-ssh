@@ -23,6 +23,8 @@ struct LiveTerminalScreen: View {
     @AppStorage(SettingsKey.optionAsMeta) private var optionAsMeta = true
     @AppStorage(SettingsKey.keepAwake) private var keepAwake = false
     @AppStorage(SettingsKey.showKeyBar) private var showKeyBar = true
+    @AppStorage(SettingsKey.tmuxScrollSequence) private var tmuxScrollSequence = "C-b ["
+    @AppStorage(SettingsKey.screenScrollSequence) private var screenScrollSequence = "C-a ["
 
     @State private var keyboardUp = false
     @State private var hwKeyboard = HardwareKeyboardMonitor()
@@ -51,15 +53,19 @@ struct LiveTerminalScreen: View {
                                 themeId: themeId,
                                 fontFamily: fontFamily,
                                 hardwareKeyboard: hwKeyboard.isConnected,
+                                tmuxSequence: tmuxScrollSequence,
+                                screenSequence: screenScrollSequence,
                                 prefs: "\(cursorStyle)\(cursorBlink)\(optionAsMeta)",
                                 muxScrollActive: $muxScrollActive)
                 .overlay(alignment: .top) { transferBanner }
             // Our key row is redundant with SwiftTerm's soft-keyboard accessory,
             // so only show it when the soft keyboard is down. With a physical
-            // keyboard it collapses to just Esc (see TerminalKeyBar.minimal).
+            // keyboard it collapses to Esc plus multiplexer scroll mode.
             if !keyboardUp && showKeyBar {
                 Divider().overlay(Color(theme.ansi[8].uiColor).opacity(0.5))
                 TerminalKeyBar(session: session, handle: handle, theme: theme,
+                               tmuxSequence: tmuxScrollSequence,
+                               screenSequence: screenScrollSequence,
                                minimal: hwKeyboard.isConnected,
                                muxScrollActive: $muxScrollActive)
             }
@@ -111,6 +117,7 @@ struct LiveTerminalScreen: View {
         HStack(spacing: 2) {
             Button { toggleFind() } label: { Image(systemName: "magnifyingglass") }
                 .accessibilityLabel("Find")
+            muxScrollButtons
             Button { setZoom(CGFloat(fontSize) - 1) } label: { Image(systemName: "textformat.size.smaller") }
                 .accessibilityLabel("Decrease text size")
             Button { setZoom(CGFloat(fontSize) + 1) } label: { Image(systemName: "textformat.size.larger") }
@@ -118,6 +125,25 @@ struct LiveTerminalScreen: View {
             settingsMenu
         }
         .labelStyle(.iconOnly)
+    }
+
+    @ViewBuilder private var muxScrollButtons: some View {
+        if muxScrollActive {
+            Button { finishMuxScroll() } label: { muxScrollLabel("done", active: true) }
+                .accessibilityLabel("Exit multiplexer scroll mode")
+        } else {
+            Button { startMuxScroll(sequence: tmuxScrollSequence, fallback: [0x02, 0x5b]) } label: { muxScrollLabel("tmux", active: false) }
+                .accessibilityLabel("Enter tmux scroll mode")
+            Button { startMuxScroll(sequence: screenScrollSequence, fallback: [0x01, 0x5b]) } label: { muxScrollLabel("screen", active: false) }
+                .accessibilityLabel("Enter screen scroll mode")
+        }
+    }
+
+    private func muxScrollLabel(_ text: String, active: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+            .foregroundStyle(active ? Brand.accent : Color.primary)
+            .frame(minWidth: text.count > 4 ? 52 : 38, minHeight: 28)
     }
 
     @ViewBuilder private var statusBanner: some View {
@@ -203,6 +229,19 @@ struct LiveTerminalScreen: View {
         handle.clearFind()
     }
 
+    private func startMuxScroll(sequence: String, fallback: [UInt8]) {
+        let bytes = KeySequence.bytes(for: sequence, fallback: fallback)
+        session.write(bytes[...])
+        muxScrollActive = true
+        handle.setRemoteScrollMode(true)
+    }
+
+    private func finishMuxScroll() {
+        muxScrollActive = false
+        handle.setRemoteScrollMode(false)
+        session.write([UInt8(0x1b)][...])
+    }
+
     private var settingsMenu: some View {
         Menu {
             Button { handle.paste() } label: { Label("Paste", systemImage: "doc.on.clipboard") }
@@ -273,6 +312,7 @@ final class TerminalHandle {
     func paste() { terminal?.paste(nil) }
     func selectAll() { terminal?.selectAll(nil) }
     func setRemoteScrollMode(_ active: Bool) { (terminal as? ZoomableTerminalView)?.setRemoteScrollMode(active) }
+    func sendRemoteScrollPage(up: Bool) { (terminal as? ZoomableTerminalView)?.sendRemoteScrollPage(up: up) }
 
     // MARK: Find in scrollback
 
@@ -400,6 +440,8 @@ final class ZoomableTerminalView: TerminalView {
     /// An image was dropped or pasted onto the terminal — (PNG/JPEG data, ext).
     /// Set by the surface → session.uploadImage.
     var onImageDropped: ((Data, String) -> Void)?
+    var tmuxScrollSequence = "C-b ["
+    var screenScrollSequence = "C-a ["
     private var dropInteractionInstalled = false
     private var remoteScrollPanGesture: UIPanGestureRecognizer?
     private var remoteScrollMode = false
@@ -442,12 +484,27 @@ final class ZoomableTerminalView: TerminalView {
         scheduleDrawWatch(feedSeq: seq, bytes: bytes, drawCountAtFeed: drawCountAtFeed, after: 1.20)
     }
 
+    /// Fires after a feed if no `draw(_:)` has happened since — the incremental
+    /// dirty-region path stalled. Seen after a long background: SwiftTerm feeds the
+    /// new output into the buffer and calls `setNeedsDisplay`, but UIKit never
+    /// services it, so typed characters reach the server (and tmux) yet never paint
+    /// locally. Recover by forcing a full repaint — the same hammer the resume path
+    /// uses — instead of merely logging the stall. Bounded: only the two watches per
+    /// feed can heal, and a heal that does draw bumps `diagnosticDrawSeq` so the
+    /// later watch no-ops.
     private func scheduleDrawWatch(feedSeq: Int, bytes: Int, drawCountAtFeed: Int, after delay: TimeInterval) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self,
                   self.diagnosticLastFeedSeq == feedSeq,
                   self.diagnosticDrawSeq == drawCountAtFeed else { return }
-            DiagLog.log("terminal", "draw pending feedSeq=\(feedSeq) bytes=\(bytes) afterMs=\(Int(delay * 1000)) drawSeq=\(self.diagnosticDrawSeq) update=\(self.updateRangeDescription()) window=\(self.window != nil) bounds=\(Int(self.bounds.width))x\(Int(self.bounds.height))")
+            let drawable = self.window != nil && self.bounds.width > 1 && self.bounds.height > 1
+            DiagLog.log("terminal", "draw pending feedSeq=\(feedSeq) bytes=\(bytes) afterMs=\(Int(delay * 1000)) drawSeq=\(self.diagnosticDrawSeq) update=\(self.updateRangeDescription()) window=\(self.window != nil) bounds=\(Int(self.bounds.width))x\(Int(self.bounds.height)) heal=\(drawable)")
+            // No draw serviced the feed: force the whole buffer dirty and re-request
+            // a paint. Leaves scroll position untouched (don't yank a user reading
+            // scrollback to the tail) — only the resume path snaps to live.
+            guard drawable else { return }
+            self.getTerminal().updateFullScreen()
+            self.setNeedsDisplay(self.bounds)
         }
     }
 
@@ -577,11 +634,21 @@ final class ZoomableTerminalView: TerminalView {
         steps = min(maxStepsPerEvent, max(-maxStepsPerEvent, steps))
         remoteScrollAccumulator -= CGFloat(steps) * lineHeight
 
+        sendRemoteScrollRows(steps)
+    }
+
+    func sendRemoteScrollPage(up: Bool) {
+        let lines = max(1, getTerminal().rows - 2)
+        sendRemoteScrollRows(up ? lines : -lines)
+    }
+
+    private func sendRemoteScrollRows(_ rows: Int) {
+        guard rows != 0 else { return }
         let terminal = getTerminal()
         let up = terminal.applicationCursor ? EscapeSequences.moveUpApp : EscapeSequences.moveUpNormal
         let down = terminal.applicationCursor ? EscapeSequences.moveDownApp : EscapeSequences.moveDownNormal
-        let sequence = steps > 0 ? up : down
-        for _ in 0..<abs(steps) {
+        let sequence = rows > 0 ? up : down
+        for _ in 0..<abs(rows) {
             onSendBytes?(sequence)
         }
     }
@@ -615,6 +682,10 @@ final class ZoomableTerminalView: TerminalView {
     }
 
     override var keyCommands: [UIKeyCommand]? {
+        let toggleMuxScroll = UIKeyCommand(title: "Toggle tmux Scroll Mode",
+                                           action: #selector(toggleMuxScrollMode),
+                                           input: "s",
+                                           modifierFlags: [.command, .alternate])
         let scroll = [
             UIKeyCommand(title: "Scroll Up", action: #selector(scrollPageUp), input: UIKeyCommand.inputUpArrow, modifierFlags: .command),
             UIKeyCommand(title: "Scroll Down", action: #selector(scrollPageDown), input: UIKeyCommand.inputDownArrow, modifierFlags: .command),
@@ -627,13 +698,43 @@ final class ZoomableTerminalView: TerminalView {
             UIKeyCommand(title: "Page Up", action: #selector(remotePageUp), input: UIKeyCommand.inputPageUp, modifierFlags: []),
             UIKeyCommand(title: "Page Down", action: #selector(remotePageDown), input: UIKeyCommand.inputPageDown, modifierFlags: []),
         ]
+        toggleMuxScroll.wantsPriorityOverSystemBehavior = true
         scroll.forEach { $0.wantsPriorityOverSystemBehavior = true }
         return (super.keyCommands ?? []) + [
             UIKeyCommand(title: "Zoom In", action: #selector(zoomIn), input: "=", modifierFlags: .command),
             UIKeyCommand(title: "Zoom In", action: #selector(zoomIn), input: "+", modifierFlags: .command),
             UIKeyCommand(title: "Zoom Out", action: #selector(zoomOut), input: "-", modifierFlags: .command),
             UIKeyCommand(title: "Actual Size", action: #selector(zoomReset), input: "0", modifierFlags: .command),
-        ] + scroll
+        ] + [toggleMuxScroll] + scroll
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard remoteScrollMode else {
+            super.pressesBegan(presses, with: event)
+            return
+        }
+
+        var passthrough = Set<UIPress>()
+        for press in presses {
+            guard let key = press.key else {
+                passthrough.insert(press)
+                continue
+            }
+            let modified = key.modifierFlags.contains(.command)
+                || key.modifierFlags.contains(.alternate)
+                || key.modifierFlags.contains(.control)
+                || key.modifierFlags.contains(.shift)
+            if !modified, key.keyCode == .keyboardPageUp {
+                sendRemoteScrollPage(up: true)
+            } else if !modified, key.keyCode == .keyboardPageDown {
+                sendRemoteScrollPage(up: false)
+            } else {
+                passthrough.insert(press)
+            }
+        }
+        if !passthrough.isEmpty {
+            super.pressesBegan(passthrough, with: event)
+        }
     }
 
     private var scrollPage: Int { max(1, getTerminal().rows - 2) }
@@ -643,8 +744,22 @@ final class ZoomableTerminalView: TerminalView {
     @objc private func scrollHome() { scrollUp(lines: 1_000_000) }
     @objc private func scrollEnd() { scrollDown(lines: 1_000_000) }
 
-    @objc private func remotePageUp() { onSendBytes?(EscapeSequences.cmdPageUp) }
-    @objc private func remotePageDown() { onSendBytes?(EscapeSequences.cmdPageDown) }
+    @objc private func remotePageUp() {
+        remoteScrollMode ? sendRemoteScrollPage(up: true) : onSendBytes?(EscapeSequences.cmdPageUp)
+    }
+    @objc private func remotePageDown() {
+        remoteScrollMode ? sendRemoteScrollPage(up: false) : onSendBytes?(EscapeSequences.cmdPageDown)
+    }
+
+    @objc private func toggleMuxScrollMode() {
+        if remoteScrollMode {
+            setRemoteScrollMode(false)
+            onSendBytes?([0x1b])
+        } else {
+            onSendBytes?(KeySequence.bytes(for: tmuxScrollSequence, fallback: [0x02, 0x5b]))
+            setRemoteScrollMode(true)
+        }
+    }
 
     @objc private func zoomIn() { onZoomChange?(min(maxFontSize, currentSize + 1)) }
     @objc private func zoomOut() { onZoomChange?(max(minFontSize, currentSize - 1)) }
@@ -742,6 +857,8 @@ struct TerminalSurfaceView: UIViewRepresentable {
     let themeId: String
     let fontFamily: String
     let hardwareKeyboard: Bool
+    let tmuxSequence: String
+    let screenSequence: String
     /// Bundles cursor/meta prefs so a change re-triggers updateUIView → applyPrefs.
     let prefs: String
     @Binding var muxScrollActive: Bool
@@ -749,6 +866,8 @@ struct TerminalSurfaceView: UIViewRepresentable {
     func makeUIView(context: Context) -> ZoomableTerminalView {
         surface.onZoomChange = { fontSize = $0 }
         surface.view.onRemoteScrollModeChanged = { muxScrollActive = $0 }
+        surface.view.tmuxScrollSequence = tmuxSequence
+        surface.view.screenScrollSequence = screenSequence
         surface.apply(themeId: themeId, fontFamily: fontFamily, fontSize: fontSize, hardwareKeyboard: hardwareKeyboard)
         surface.refresh()   // re-embed after a tab switch: redraw the kept buffer
         return surface.view
@@ -757,6 +876,8 @@ struct TerminalSurfaceView: UIViewRepresentable {
     func updateUIView(_ terminal: ZoomableTerminalView, context: Context) {
         surface.onZoomChange = { fontSize = $0 }
         surface.view.onRemoteScrollModeChanged = { muxScrollActive = $0 }
+        terminal.tmuxScrollSequence = tmuxSequence
+        terminal.screenScrollSequence = screenSequence
         surface.apply(themeId: themeId, fontFamily: fontFamily, fontSize: fontSize, hardwareKeyboard: hardwareKeyboard)
     }
 }

@@ -36,6 +36,7 @@ struct ExportedSecurityKey: Codable {
 
 struct SettingsSnapshot: Codable {
     var theme, fontFamily, cursorStyle, bellMode, terminalType: String
+    var tmuxScrollSequence, screenScrollSequence: String
     var fontSize: Double
     var scrollback, keepAliveInterval: Int
     var cursorBlink, keepAwake, optionAsMeta, pinchZoom, showKeyBar: Bool
@@ -48,6 +49,8 @@ struct SettingsSnapshot: Codable {
             cursorStyle: d.string(forKey: SettingsKey.cursorStyle) ?? "block",
             bellMode: d.string(forKey: SettingsKey.bellMode) ?? "haptic",
             terminalType: d.string(forKey: SettingsKey.terminalType) ?? "xterm-256color",
+            tmuxScrollSequence: d.string(forKey: SettingsKey.tmuxScrollSequence) ?? "C-b [",
+            screenScrollSequence: d.string(forKey: SettingsKey.screenScrollSequence) ?? "C-a [",
             fontSize: d.double(forKey: SettingsKey.fontSize),
             scrollback: d.integer(forKey: SettingsKey.scrollback),
             keepAliveInterval: d.integer(forKey: SettingsKey.keepAliveInterval),
@@ -67,6 +70,8 @@ struct SettingsSnapshot: Codable {
         d.set(cursorStyle, forKey: SettingsKey.cursorStyle)
         d.set(bellMode, forKey: SettingsKey.bellMode)
         d.set(terminalType, forKey: SettingsKey.terminalType)
+        d.set(String(tmuxScrollSequence.prefix(80)), forKey: SettingsKey.tmuxScrollSequence)
+        d.set(String(screenScrollSequence.prefix(80)), forKey: SettingsKey.screenScrollSequence)
         d.set(fontSize, forKey: SettingsKey.fontSize)
         d.set(scrollback, forKey: SettingsKey.scrollback)
         d.set(keepAliveInterval, forKey: SettingsKey.keepAliveInterval)
@@ -98,6 +103,7 @@ extension SettingsSnapshot {
     static func defaults() -> SettingsSnapshot {
         .init(theme: TerminalTheme.bsnsDark.id, fontFamily: TerminalFont.families[0],
               cursorStyle: "block", bellMode: "haptic", terminalType: "xterm-256color",
+              tmuxScrollSequence: "C-b [", screenScrollSequence: "C-a [",
               fontSize: 13, scrollback: 1000, keepAliveInterval: 0,
               cursorBlink: true, keepAwake: false, optionAsMeta: true,
               pinchZoom: true, showKeyBar: true)
@@ -105,6 +111,7 @@ extension SettingsSnapshot {
 
     enum CodingKeys: String, CodingKey {
         case theme, fontFamily, cursorStyle, bellMode, terminalType, fontSize
+        case tmuxScrollSequence, screenScrollSequence
         case scrollback, keepAliveInterval, cursorBlink, keepAwake, optionAsMeta, pinchZoom, showKeyBar
     }
 
@@ -118,6 +125,8 @@ extension SettingsSnapshot {
         cursorStyle = (try? c.decodeIfPresent(String.self, forKey: .cursorStyle)) ?? d.cursorStyle
         bellMode = (try? c.decodeIfPresent(String.self, forKey: .bellMode)) ?? d.bellMode
         terminalType = (try? c.decodeIfPresent(String.self, forKey: .terminalType)) ?? d.terminalType
+        tmuxScrollSequence = String(((try? c.decodeIfPresent(String.self, forKey: .tmuxScrollSequence)) ?? d.tmuxScrollSequence).prefix(80))
+        screenScrollSequence = String(((try? c.decodeIfPresent(String.self, forKey: .screenScrollSequence)) ?? d.screenScrollSequence).prefix(80))
         fontSize = (try? c.decodeIfPresent(Double.self, forKey: .fontSize)) ?? d.fontSize
         scrollback = (try? c.decodeIfPresent(Int.self, forKey: .scrollback)) ?? d.scrollback
         keepAliveInterval = (try? c.decodeIfPresent(Int.self, forKey: .keepAliveInterval)) ?? d.keepAliveInterval

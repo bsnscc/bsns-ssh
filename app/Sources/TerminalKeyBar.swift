@@ -10,16 +10,21 @@ struct TerminalKeyBar: View {
     let session: TerminalSession
     let handle: TerminalHandle
     let theme: TerminalTheme
-    /// When a physical keyboard is attached, collapse to just Esc — the one key
-    /// most iPad keyboards lack. The rest (Ctrl, Tab, arrows, …) are on the keyboard.
+    let tmuxSequence: String
+    let screenSequence: String
+    /// When a physical keyboard is attached, collapse to the controls that are
+    /// still useful on iPad: Escape and multiplexer scroll mode.
     var minimal: Bool = false
     @Binding var muxScrollActive: Bool
 
     init(session: TerminalSession, handle: TerminalHandle, theme: TerminalTheme,
+         tmuxSequence: String = "C-b [", screenSequence: String = "C-a [",
          minimal: Bool = false, muxScrollActive: Binding<Bool> = .constant(false)) {
         self.session = session
         self.handle = handle
         self.theme = theme
+        self.tmuxSequence = tmuxSequence
+        self.screenSequence = screenSequence
         self.minimal = minimal
         self._muxScrollActive = muxScrollActive
     }
@@ -27,6 +32,7 @@ struct TerminalKeyBar: View {
     private enum Key: Hashable {
         case esc, tab
         case tmuxCopy
+        case screenCopy
         case ctrl(Character)      // a Ctrl-<letter> chord
         case arrow(Arrow)
         case page(Bool)           // true = up
@@ -48,6 +54,7 @@ struct TerminalKeyBar: View {
             case .esc: return "Escape"
             case .tab: return "Tab"
             case .tmuxCopy: return "tmux copy mode"
+            case .screenCopy: return "screen copy mode"
             case .ctrl(let c): return "Control \(c.uppercased())"
             case .arrow(let a):
                 switch a {
@@ -63,14 +70,34 @@ struct TerminalKeyBar: View {
     }
 
     private var items: [Item] {
-        minimal ? [Item(label: muxScrollActive ? "done" : "esc", key: .esc, wide: true)] : fullItems
+        minimal ? minimalItems : fullItems
+    }
+
+    private var minimalItems: [Item] {
+        if muxScrollActive {
+            return [
+                Item(label: "esc", key: .esc, wide: true),
+                Item(label: "done", key: .tmuxCopy, wide: true),
+            ]
+        }
+        return [
+            Item(label: "esc", key: .esc, wide: true),
+            Item(label: "tmux", key: .tmuxCopy, wide: true),
+            Item(label: "screen", key: .screenCopy, wide: true),
+        ]
     }
 
     private var fullItems: [Item] {
-        [
+        let muxItems = muxScrollActive
+            ? [Item(label: "done", key: .tmuxCopy, wide: true)]
+            : [
+                Item(label: "tmux", key: .tmuxCopy, wide: true),
+                Item(label: "screen", key: .screenCopy, wide: true),
+            ]
+        return [
             Item(label: "esc", key: .esc, wide: true),
             Item(label: "tab", key: .tab, wide: true),
-            Item(label: muxScrollActive ? "done" : "tmux", key: .tmuxCopy, wide: true),
+        ] + muxItems + [
             Item(label: "⌃C", key: .ctrl("c"), wide: false),
             Item(label: "⌃D", key: .ctrl("d"), wide: false),
             Item(label: "⌃Z", key: .ctrl("z"), wide: false),
@@ -127,7 +154,17 @@ struct TerminalKeyBar: View {
             } else {
                 muxScrollActive = true
                 handle.setRemoteScrollMode(true)
-                bytes = [0x02, 0x5b]
+                bytes = KeySequence.bytes(for: tmuxSequence, fallback: [0x02, 0x5b])
+            }
+        case .screenCopy:
+            if muxScrollActive {
+                muxScrollActive = false
+                handle.setRemoteScrollMode(false)
+                bytes = [0x1b]
+            } else {
+                muxScrollActive = true
+                handle.setRemoteScrollMode(true)
+                bytes = KeySequence.bytes(for: screenSequence, fallback: [0x01, 0x5b])
             }
         case .ctrl(let c):
             // Ctrl-<letter> masks to the low 5 bits of the uppercase letter.
@@ -142,6 +179,10 @@ struct TerminalKeyBar: View {
             case .right: bytes = app ? EscapeSequences.moveRightApp : EscapeSequences.moveRightNormal
             }
         case .page(let up):
+            if muxScrollActive {
+                handle.sendRemoteScrollPage(up: up)
+                return
+            }
             bytes = up ? EscapeSequences.cmdPageUp : EscapeSequences.cmdPageDown
         case .text(let s):
             bytes = Array(s.utf8)

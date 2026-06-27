@@ -35,6 +35,15 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         set { lock.withLock { onLivenessHandler = newValue } }
     }
     private static let staleThreshold: TimeInterval = 8
+    private static let postResumeInputRecoveryWindow: TimeInterval = 120
+    private static let inputRecoveryDelay: TimeInterval = 0.9
+    private static let inputRecoveryCooldown: TimeInterval = 3.0
+    // Active recovery while the server is silent and no input is pending (mosh
+    // stops resending unacked state ~10s after it last heard from the server).
+    private static let staleRecoveryPrimeInterval: TimeInterval = 1.0
+    private static let staleRecoveryHopInterval: TimeInterval = 4.0
+    private static let staleRecoveryPollCeilingMs: Int32 = 250
+    private static let maxRecvDrainPerWake = 64
 
     private let queue = DispatchQueue(label: "cc.bsns.ssh.mosh")
     private var onOutputHandler: (@Sendable (ArraySlice<UInt8>) -> Void)?
@@ -51,7 +60,10 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var awaitingOutputForInputSeq: Int?
     private var awaitingOutputSince: Date?
     private var lastAwaitingOutputLogAt: Date?
-    private var lastInputRecoveryHopAt: Date?
+    private var lastResumeAt: Date?
+    private var lastInputRecoveryAt: Date?
+    private var lastStaleRecoveryPrimeAt: Date?
+    private var lastStaleRecoveryHopAt: Date?
 
     // Connection params, kept so we can re-create the client socket after iOS
     // suspends us in the background (the mosh-server keeps running, so a fresh
@@ -207,6 +219,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
 
             // Returning from the background.
             if resume {
+                lastResumeAt = Date()
                 let silent = Date().timeIntervalSince(lastContactAt)
                 // The actual size mosh is drawing right now, vs the size we'll re-assert.
                 var fbCols: Int32 = 0, fbRows: Int32 = 0
@@ -238,12 +251,16 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 inputPushSeq += 1
                 let inputSeq = inputPushSeq
                 let inputSilent = Date().timeIntervalSince(lastContactAt)
+                let recentlyResumed = lastResumeAt.map { Date().timeIntervalSince($0) <= Self.postResumeInputRecoveryWindow } ?? false
                 awaitingOutputForInputSeq = inputSeq
                 awaitingOutputSince = Date()
                 lastAwaitingOutputLogAt = nil
                 moshLog("input push seq=\(inputSeq) bytes=\(input.count) state=\(mosh_client_state_num(c))")
                 input.withUnsafeBytes { raw in
                     mosh_client_push(c, raw.bindMemory(to: CChar.self).baseAddress, Int32(raw.count))
+                }
+                if recentlyResumed {
+                    mosh_client_prime_active_retry(c)
                 }
                 if inputSilent > Self.staleThreshold {
                     mosh_client_prime_active_retry(c)
@@ -275,7 +292,12 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             }
             let wakeIndex = fds.count
             fds.append(pollfd(fd: wakeRead, events: Int16(POLLIN), revents: 0))
-            let timeout = max(1, min(mosh_client_wait_ms(c), 1000))
+            // While the server is silent past the stale threshold, wake more often
+            // so driveStaleRecovery() can re-prime/hop promptly instead of sleeping
+            // up to a full second (or up to mosh's backed-off wait_ms).
+            let silentBeforePoll = Date().timeIntervalSince(lastContactAt)
+            let pollCeiling: Int32 = silentBeforePoll > Self.staleThreshold ? Self.staleRecoveryPollCeilingMs : 1000
+            let timeout = max(1, min(mosh_client_wait_ms(c), pollCeiling))
             _ = fds.withUnsafeMutableBufferPointer { buf in
                 poll(buf.baseAddress, nfds_t(buf.count), Int32(timeout))
             }
@@ -305,8 +327,19 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 // on resume the first packet would otherwise update lastContactAt and
                 // skip the repaint/wiggle entirely. The real gap survives suspension.
                 let recovering = Date().timeIntervalSince(lastContactAt) > Self.staleThreshold
-                mosh_client_recv(c)
+                // Drain EVERY queued datagram, not just one. recv() takes a single
+                // datagram per call, and after a hop the server replays its state as
+                // a burst; without draining, the catch-up trickles in one datagram
+                // per loop iteration (slow, and each iteration re-polls).
+                var drained = 0
+                repeat {
+                    mosh_client_recv(c)
+                    drained += 1
+                } while drained < Self.maxRecvDrainPerWake && Self.anyMoshFDReadable(c)
                 lastContactAt = Date()
+                // Contact resumed — let the next stale episode act immediately.
+                lastStaleRecoveryPrimeAt = nil
+                lastStaleRecoveryHopAt = nil
                 if recovering {
                     lock.lock()
                     let active = appInForeground && appIsActive
@@ -337,6 +370,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 awaitingOutputForInputSeq = nil
                 awaitingOutputSince = nil
                 lastAwaitingOutputLogAt = nil
+                lastInputRecoveryAt = nil
                 onOutput?(bytes[...])
                 // Note when the rendered framebuffer size changes — a value that
                 // diverges from our asked size (cols×rows) is the display desync.
@@ -360,14 +394,32 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                     lastAwaitingOutputLogAt = now
                     moshLog("drain pending no ansi inputSeq=\(inputSeq) ageMs=\(Int(pendingAge * 1000)) state=\(mosh_client_state_num(c))")
                 }
-                if pendingAge > 1.5,
-                   Date().timeIntervalSince(lastContactAt) > Self.staleThreshold,
-                   lastInputRecoveryHopAt.map({ now.timeIntervalSince($0) > 3.0 }) ?? true {
-                    lastInputRecoveryHopAt = now
-                    moshLog("input recovery hop inputSeq=\(inputSeq) ageMs=\(Int(pendingAge * 1000)) state=\(mosh_client_state_num(c))")
-                    mosh_client_hop(c)
+                let recentlyResumed = lastResumeAt.map { now.timeIntervalSince($0) <= Self.postResumeInputRecoveryWindow } ?? false
+                let silent = now.timeIntervalSince(lastContactAt)
+                let shouldRecoverPostResume = recentlyResumed && pendingAge > Self.inputRecoveryDelay
+                let shouldHopForStale = pendingAge > 1.5 && silent > Self.staleThreshold
+                if (shouldRecoverPostResume || shouldHopForStale),
+                   lastInputRecoveryAt.map({ now.timeIntervalSince($0) > Self.inputRecoveryCooldown }) ?? true {
+                    lastInputRecoveryAt = now
+                    let reason = shouldHopForStale ? "stale input" : "post-resume input"
+                    moshLog("input recovery begin reason=\(reason) inputSeq=\(inputSeq) ageMs=\(Int(pendingAge * 1000)) silent=\(Int(silent))s state=\(mosh_client_state_num(c))")
+                    if shouldHopForStale {
+                        mosh_client_hop(c)
+                    }
                     mosh_client_prime_active_retry(c)
+                    forceForegroundRecovery(c, reason: reason)
+                    mosh_client_tick(c)
+                    moshLog("input recovery end reason=\(reason) inputSeq=\(inputSeq) state=\(mosh_client_state_num(c))")
                 }
+            }
+            // No datagram drove recovery above and we're not waiting on an echo for
+            // typed input (input-recovery owns that case): if the server has gone
+            // silent, keep mosh's active-retry window open so a torn-down socket
+            // re-establishes instead of freezing. Skip the resume iteration, which
+            // already hopped/primed.
+            let silent = Date().timeIntervalSince(lastContactAt)
+            if silent > Self.staleThreshold, awaitingOutputForInputSeq == nil, !resume {
+                driveStaleRecovery(c, silent: silent)
             }
             // Flag staleness on transition (the loop wakes at least ~1/s, so this
             // is checked promptly without a separate timer).
@@ -388,6 +440,47 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         guard wakeRead >= 0 else { return }
         var trash = [UInt8](repeating: 0, count: 64)
         while Darwin.read(wakeRead, &trash, trash.count) > 0 {}
+    }
+
+    /// Foreground + active, server silent past the stale threshold, and no typed
+    /// input is awaiting an echo (input-recovery handles that case). Upstream mosh
+    /// stops resending unacked state ACTIVE_RETRY_TIMEOUT (~10s) after it last heard
+    /// from the server, so a session whose UDP socket iOS tore down can sit frozen —
+    /// input reaches the server once but the path is never re-established and no
+    /// output flows back — until the user types or re-foregrounds. Keep the path
+    /// alive: refresh the active-retry window (prime) every second and, once we've
+    /// been silent a little longer, hop to a fresh socket (new NAT binding) every few
+    /// seconds, then tick to actually send.
+    private func driveStaleRecovery(_ c: OpaquePointer, silent: TimeInterval) {
+        let now = Date()
+        var acted = false
+        if lastStaleRecoveryPrimeAt.map({ now.timeIntervalSince($0) >= Self.staleRecoveryPrimeInterval }) ?? true {
+            lastStaleRecoveryPrimeAt = now
+            mosh_client_prime_active_retry(c)
+            acted = true
+        }
+        if silent >= Self.staleThreshold * 1.5,
+           lastStaleRecoveryHopAt.map({ now.timeIntervalSince($0) >= Self.staleRecoveryHopInterval }) ?? true {
+            lastStaleRecoveryHopAt = now
+            mosh_client_hop(c)
+            acted = true
+        }
+        if acted {
+            mosh_client_tick(c)
+            moshLog("stale recovery prime/hop silent=\(Int(silent))s state=\(mosh_client_state_num(c))")
+        }
+    }
+
+    /// Non-blocking check: is any of mosh's current sockets readable right now?
+    /// Used to drain a burst of datagrams within a single wake.
+    private static func anyMoshFDReadable(_ c: OpaquePointer) -> Bool {
+        var fdbuf = [Int32](repeating: -1, count: 16)
+        let n = Int(mosh_client_fds(c, &fdbuf, Int32(fdbuf.count)))
+        guard n > 0 else { return false }
+        var fds = fdbuf.prefix(n).map { pollfd(fd: $0, events: Int16(POLLIN), revents: 0) }
+        let rc = fds.withUnsafeMutableBufferPointer { poll($0.baseAddress, nfds_t($0.count), 0) }
+        guard rc > 0 else { return false }
+        return fds.contains { $0.revents & Int16(POLLIN) != 0 }
     }
 
     private func forceForegroundRecovery(_ c: OpaquePointer, reason: String) {
