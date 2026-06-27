@@ -17,6 +17,12 @@ struct SavedHost: Codable, Identifiable, Hashable {
     /// Fingerprint of the key to authenticate with (SSHKeyFormat fingerprint).
     /// Decodes as nil from older saved hosts — those fall back to the first key.
     var keyID: String?
+    /// Optional tmux session to attach on connect (mosh): the server runs
+    /// `tmux new-session -A -s <name>`, so the session lives server-side and every
+    /// (re)connect — roam recovery or relaunch after an iOS kill — re-attaches the
+    /// same window instead of spawning a fresh shell. Decodes as nil from older
+    /// saved hosts.
+    var tmuxSession: String?
 }
 
 private func appSupportURL(_ name: String) -> URL {

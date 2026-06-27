@@ -8,8 +8,10 @@ struct RootView: View {
     @Environment(KnownHostsStore.self) private var knownHosts
     @Environment(SyncStore.self) private var sync
     @Environment(SnippetStore.self) private var snippets
+    @Environment(SessionRestoreStore.self) private var sessionRestore
     @Environment(\.scenePhase) private var scenePhase
     @State private var homeTab = ProcessInfo.processInfo.environment["BSNS_DEV_TAB"] ?? "connect"
+    @State private var didRestore = false
 
     var body: some View {
         Group {
@@ -34,13 +36,43 @@ struct RootView: View {
         .tint(Brand.accent)   // brand accent on every control, link, and selection
         .task { await maybeDevAutoConnect() }
         // Auto-sync: pull + merge the user's folder on launch; push when backgrounded.
-        .task { await ConfigSync.autoPull(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets) }
+        // Then auto-reconnect any sessions that were open when iOS killed the app —
+        // after the pull so synced keys are available for the reconnect's auth.
+        .task {
+            sessions.restore = sessionRestore
+            await ConfigSync.autoPull(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets)
+            restoreSessions()
+        }
         .onChange(of: scenePhase) { _, phase in
             DiagLog.log("app", "scenePhase=\(String(describing: phase)) activeSessions=\(sessions.sessions.count)")
             if phase == .background {
                 DiagLog.log("sync", "autoPush requested on background")
                 ConfigSync.autoPush(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets)
             }
+        }
+    }
+
+    /// Re-create and reconnect the sessions that were open when the app was last
+    /// killed (iOS terminates backgrounded apps within minutes). The live `Spec` is
+    /// rebuilt from the persisted snapshot + the agent / known-hosts stores; mosh
+    /// re-bootstraps and, with a tmux session set, re-attaches the same server-side
+    /// session — so you land back where you were instead of a fresh shell. Runs once.
+    private func restoreSessions() {
+        guard !didRestore else { return }
+        didRestore = true
+        let snapshot = sessionRestore.snapshotForRestore()
+        guard !snapshot.isEmpty else { return }
+        DiagLog.log("app", "restoring \(snapshot.count) session(s)")
+        let existing = Set(sessions.sessions.map(\.id))
+        for r in snapshot where !existing.contains(r.id) {
+            let spec = TerminalSession.Spec(host: r.host, port: r.port, user: r.user,
+                                            agent: store.agent, knownHosts: knownHosts.knownHosts,
+                                            useMosh: r.useMosh, keyBlob: r.keyBlob,
+                                            tmuxSession: r.tmuxSession)
+            let s = TerminalSession(id: r.id, spec: spec, title: r.title)
+            s.restorable = r
+            sessions.add(s)
+            s.start()
         }
     }
 

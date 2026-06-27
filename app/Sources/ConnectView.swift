@@ -29,6 +29,7 @@ struct ConnectView: View {
     /// Fingerprint of the key to authenticate with — auth offers only this one.
     @State private var selectedKeyFP = ""
     @State private var useMosh = false
+    @State private var tmuxSession = ""
     @State private var showSFTP = false
     @State private var showImport = false
     @State private var busy = false
@@ -212,6 +213,12 @@ struct ConnectView: View {
             } else if useMosh {
                 Text("Starts mosh-server over SSH, then runs over UDP. Needs mosh-server on the host and a key (agent), not a password.")
                     .font(.caption).foregroundStyle(.secondary)
+                FieldRow(label: "tmux") {
+                    TextField("optional · session name", text: $tmuxSession)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                }
+                Text("Attach a persistent tmux session (`tmux new-session -A -s …`). Reconnects after a roam drop or an app relaunch re-attach the same session instead of opening a fresh shell.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -347,10 +354,15 @@ struct ConnectView: View {
         }
     }
 
+    /// The tmux session to attach, sanitized to the bootstrap's shell-safe set
+    /// (nil when blank). Persisted on the host and applied to mosh connections.
+    private var tmuxName: String? { MoshBootstrap.sanitizedTmuxName(tmuxSession) }
+
     private func loadHost(_ saved: SavedHost) {
         host = saved.host; port = String(saved.port); user = saved.user
         useMosh = saved.useMosh ?? false
         group = saved.group ?? ""; jump = saved.jump ?? ""
+        tmuxSession = saved.tmuxSession ?? ""
         // Restore the saved key if it still exists, else fall back to the default.
         if let kid = saved.keyID, store.identities.contains(where: { fp($0) == kid }) {
             selectedKeyFP = kid
@@ -373,7 +385,8 @@ struct ConnectView: View {
                                 useMosh: useMosh,
                                 jump: jump.trimmingCharacters(in: .whitespaces).isEmpty ? nil : jump.trimmingCharacters(in: .whitespaces),
                                 group: group.trimmingCharacters(in: .whitespaces).isEmpty ? nil : group.trimmingCharacters(in: .whitespaces),
-                                keyID: selectedKeyFP.isEmpty ? nil : selectedKeyFP))
+                                keyID: selectedKeyFP.isEmpty ? nil : selectedKeyFP,
+                                tmuxSession: tmuxName))
     }
 
     private enum JumpParseError: Error { case invalidPort }
@@ -423,6 +436,14 @@ struct ConnectView: View {
                                                     knownHosts: knownHostsStore.knownHosts, jump: hop,
                                                     keyBlob: keyBlob)
                     let s = TerminalSession(spec: spec, title: title)
+                    // Persist for auto-reconnect only when there's no jump host —
+                    // restoring a session without re-establishing its bastion could
+                    // connect to / trust the wrong endpoint.
+                    if hop == nil {
+                        s.restorable = RestorableSession(id: s.id, title: title, host: host,
+                                                         port: portValue, user: user, useMosh: false,
+                                                         keyBlob: keyBlob, tmuxSession: nil)
+                    }
                     s.adopt(shell)
                     sessions.add(s)
                     runStartupSnippets(on: s)
@@ -440,7 +461,7 @@ struct ConnectView: View {
         error = nil; notice = nil; busy = true
         let spec = TerminalSession.Spec(host: host, port: portValue, user: user, agent: store.agent,
                                         knownHosts: knownHostsStore.knownHosts, useMosh: true,
-                                        keyBlob: selectedKey?.blob)
+                                        keyBlob: selectedKey?.blob, tmuxSession: tmuxName)
         let hostName = host, userName = user
         Task {
             do {
@@ -452,6 +473,9 @@ struct ConnectView: View {
                 await MainActor.run {
                     busy = false
                     let s = TerminalSession(spec: spec, title: "\(userName)@\(hostName) · mosh")
+                    s.restorable = RestorableSession(id: s.id, title: s.title, host: hostName,
+                                                     port: portValue, user: userName, useMosh: true,
+                                                     keyBlob: spec.keyBlob, tmuxSession: spec.tmuxSession)
                     s.adopt(mosh)
                     sessions.add(s)
                     runStartupSnippets(on: s)

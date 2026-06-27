@@ -8,7 +8,7 @@ import BsnsSSHCore
 /// a reconnect swaps the underlying shell without the view knowing.
 @Observable
 final class TerminalSession: Identifiable, @unchecked Sendable {
-    let id = UUID()
+    let id: UUID
 
     enum Status: Equatable {
         case connecting
@@ -28,6 +28,9 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         /// The chosen key's public-key blob — auth offers only this identity (so a
         /// reconnect keeps using the same key the user picked). nil = offer all.
         var keyBlob: Data? = nil
+        /// Optional tmux session name (mosh): the bootstrap launches
+        /// `tmux new-session -A -s <name>` so reconnects re-attach the same session.
+        var tmuxSession: String? = nil
         // Note: no password is retained. Reconnect uses the agent (keys); a
         // password-only session must be re-established from the Connect screen.
     }
@@ -87,10 +90,22 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// Mosh has no in-session forwarding, so forwards only apply to an SSH shell.
     private var sshShell: SSHShell? { currentTransport as? SSHShell }
 
-    init(spec: Spec, title: String) {
+    /// A snapshot sufficient to re-create and reconnect this session after the app
+    /// is killed — set by the creator for sessions that should survive a relaunch
+    /// (mosh / direct SSH; nil for jump sessions, which aren't auto-restored). The
+    /// session store persists it on add and forgets it on close.
+    var restorable: RestorableSession?
+
+    init(id: UUID = UUID(), spec: Spec, title: String) {
+        self.id = id
         self.spec = spec
         self.title = title
     }
+
+    /// Connect a freshly-created session (e.g. one restored at launch) from its
+    /// spec — same path as a reconnect, so mosh re-bootstraps (re-attaching its
+    /// tmux session) and SSH rebuilds its shell.
+    func start() { performReconnect(reason: "launch restore") }
 
     /// Add a local forward and start it on the current shell. Returns nil on
     /// success or an error string (e.g. the local port is in use).
