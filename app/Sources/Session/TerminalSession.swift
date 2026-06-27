@@ -288,6 +288,21 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// `mosh-server`), since a hard drop means the old UDP session is gone.
     func reconnect() {
         guard isDisconnected else { return }
+        performReconnect(reason: nil)
+    }
+
+    /// Shared reconnect path. Unlike `reconnect()` it does not require the session
+    /// to already be disconnected, so an auto-recovery (`handleRoamFailed`) can
+    /// rebuild a still-"connected" but wedged transport. The old transport is torn
+    /// down with its callbacks detached first, so its teardown can't flip status
+    /// back to disconnected and race the new connection.
+    private func performReconnect(reason: String?) {
+        if let old = currentTransport {
+            old.onOutput = nil
+            old.onClosed = nil
+            (old as? MoshSession)?.onRoamFailed = nil
+            old.disconnect()
+        }
         DispatchQueue.main.async { self.isStale = false }
         setStatus(.connecting)
         lock.lock(); let cols = self.cols, rows = self.rows; lock.unlock()
@@ -332,7 +347,20 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             mosh.onLiveness = { [weak self] stale in
                 DispatchQueue.main.async { self?.isStale = stale }
             }
+            mosh.onRoamFailed = { [weak self] in
+                DispatchQueue.main.async { self?.handleRoamFailed() }
+            }
         }
+    }
+
+    /// A mosh resume couldn't re-establish — the server-side session is alive
+    /// (input still lands there) but no new state comes back over the roamed path.
+    /// Re-bootstrap a fresh mosh-server, which re-attaches to the same session
+    /// (tmux etc.), turning an indefinite freeze into an automatic reconnect.
+    private func handleRoamFailed() {
+        if case .connecting = status { return }   // a reconnect is already in flight
+        if isDisconnected { return }              // a real close already won the race
+        performReconnect(reason: "stalled after resume")
     }
 
     /// Forward transport output to the surface, or buffer it until the surface

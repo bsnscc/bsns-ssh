@@ -34,6 +34,14 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         get { lock.withLock { onLivenessHandler } }
         set { lock.withLock { onLivenessHandler = newValue } }
     }
+    /// Fires once when a resume's roam fails to re-establish: the remote terminal
+    /// state stays frozen despite the user typing into it. The owner falls back to
+    /// a full re-bootstrap of a fresh mosh-server (which re-attaches to the same
+    /// server-side session) rather than leaving the screen stuck forever.
+    var onRoamFailed: (@Sendable () -> Void)? {
+        get { lock.withLock { onRoamFailedHandler } }
+        set { lock.withLock { onRoamFailedHandler = newValue } }
+    }
     private static let staleThreshold: TimeInterval = 8
     private static let postResumeInputRecoveryWindow: TimeInterval = 120
     private static let inputRecoveryDelay: TimeInterval = 0.9
@@ -44,11 +52,16 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private static let staleRecoveryHopInterval: TimeInterval = 4.0
     private static let staleRecoveryPollCeilingMs: Int32 = 250
     private static let maxRecvDrainPerWake = 64
+    // After a resume, if the remote state stays frozen this long while the user is
+    // typing into it (send works, receive of state doesn't — a wedged roam), give
+    // up on roaming and re-bootstrap a fresh mosh-server.
+    private static let roamFailTimeout: TimeInterval = 5.0
 
     private let queue = DispatchQueue(label: "cc.bsns.ssh.mosh")
     private var onOutputHandler: (@Sendable (ArraySlice<UInt8>) -> Void)?
     private var onClosedHandler: (@Sendable (String?) -> Void)?
     private var onLivenessHandler: (@Sendable (Bool) -> Void)?
+    private var onRoamFailedHandler: (@Sendable () -> Void)?
     private var client: OpaquePointer?
     private var lastContactAt = Date()
     private var staleReported = false
@@ -64,6 +77,12 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var lastInputRecoveryAt: Date?
     private var lastStaleRecoveryPrimeAt: Date?
     private var lastStaleRecoveryHopAt: Date?
+    // Roam-failure watch, armed on each resume (see roamFailTimeout).
+    private var resumeStateNum: UInt64 = 0
+    private var resumeInputPushSeq = 0
+    private var roamWatchActive = false
+    private var roamReconnectFired = false
+    private var datagramsSinceResume = 0
 
     // Connection params, kept so we can re-create the client socket after iOS
     // suspends us in the background (the mosh-server keeps running, so a fresh
@@ -246,6 +265,17 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 mosh_client_resize(c, cols, rows)
                 mosh_client_force_repaint(c)
                 moshLog("resume resize/repaint end")
+                // Arm the roam-failure watch only when we actually attempted a
+                // recovery (a real silence gap). If the remote state never advances
+                // past this point while the user types, the roam is wedged (send ok,
+                // receive of state dead) and we'll fall back to a full reconnect.
+                if needsRecoveryWiggle {
+                    resumeStateNum = mosh_client_state_num(c)
+                    resumeInputPushSeq = inputPushSeq
+                    datagramsSinceResume = 0
+                    roamWatchActive = true
+                    roamReconnectFired = false
+                }
             }
             if !input.isEmpty {
                 inputPushSeq += 1
@@ -337,6 +367,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                     drained += 1
                 } while drained < Self.maxRecvDrainPerWake && Self.anyMoshFDReadable(c)
                 lastContactAt = Date()
+                datagramsSinceResume += drained
                 // Contact resumed — let the next stale episode act immediately.
                 lastStaleRecoveryPrimeAt = nil
                 lastStaleRecoveryHopAt = nil
@@ -420,6 +451,24 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             let silent = Date().timeIntervalSince(lastContactAt)
             if silent > Self.staleThreshold, awaitingOutputForInputSeq == nil, !resume {
                 driveStaleRecovery(c, silent: silent)
+            }
+            // Roam-failure detection: after a recovery, if the remote state never
+            // advanced past the resume snapshot AND the user has typed into it, the
+            // roam is wedged — input reaches the server (send works) but no new state
+            // comes back (receive dead). Datagrams may even be arriving (acks /
+            // duplicates), so silence alone can't catch this. Fall back to a full
+            // re-bootstrap, which re-attaches to the same server-side session.
+            if roamWatchActive, !roamReconnectFired, let resumedAt = lastResumeAt {
+                if mosh_client_state_num(c) > resumeStateNum {
+                    roamWatchActive = false                      // roam re-established
+                } else if inputPushSeq > resumeInputPushSeq,
+                          Date().timeIntervalSince(resumedAt) > Self.roamFailTimeout {
+                    roamReconnectFired = true
+                    roamWatchActive = false
+                    moshLog("roam failed: state stuck=\(mosh_client_state_num(c)) inputs=\(inputPushSeq - resumeInputPushSeq) datagrams=\(datagramsSinceResume) silent=\(Int(Date().timeIntervalSince(lastContactAt)))s — requesting reconnect")
+                    let handler = lock.withLock { onRoamFailedHandler }
+                    handler?()
+                }
             }
             // Flag staleness on transition (the loop wakes at least ~1/s, so this
             // is checked promptly without a separate timer).
