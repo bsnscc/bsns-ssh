@@ -114,12 +114,18 @@ void mosh_client_freeze_time(void) {
   freeze_timestamp();
 }
 
-void mosh_client_recv(MoshClient* c) {
-  if (!c || !c->transport) return;
-  try { c->transport->recv(); }
-  catch (const Network::NetworkException&) { /* drop bad/duplicate datagrams */ }
-  catch (const std::exception& e) { c->lastError = e.what(); }
-  catch (...) { c->lastError = "mosh recv failed"; }
+int mosh_client_recv(MoshClient* c) {
+  if (!c || !c->transport) return 0;
+  // recv() returns normally only when a datagram was received AND decrypted into a
+  // real peer packet; connection.recv() throws NetworkException on EAGAIN, a
+  // stray/ICMP wake on a dead post-hop socket, a failed decrypt, or a duplicate.
+  // So the return value distinguishes "the server is actually reaching us" (1)
+  // from "the socket was merely readable but nothing valid arrived" (0) — the
+  // fork between a dead roamed path and an in-protocol state drop.
+  try { c->transport->recv(); return 1; }
+  catch (const Network::NetworkException&) { return 0; }
+  catch (const std::exception& e) { c->lastError = e.what(); return 0; }
+  catch (...) { c->lastError = "mosh recv failed"; return 0; }
 }
 
 void mosh_client_tick(MoshClient* c) {

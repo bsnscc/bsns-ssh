@@ -31,8 +31,10 @@ int mosh_client_wait_ms(MoshClient* c);
 /// input is never transmitted). Mirrors stmclient.cc's per-iteration freeze.
 void mosh_client_freeze_time(void);
 
-/// Process an incoming datagram (call when the socket is readable).
-void mosh_client_recv(MoshClient* c);
+/// Process an incoming datagram (call when the socket is readable). Returns 1 if a
+/// real peer packet was received and decrypted, 0 if nothing valid was read (EAGAIN,
+/// a stray/ICMP wake on a dead post-hop socket, a failed decrypt, or a duplicate).
+int mosh_client_recv(MoshClient* c);
 /// Send any pending local state / keepalive.
 void mosh_client_tick(MoshClient* c);
 

@@ -83,6 +83,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var roamWatchActive = false
     private var roamReconnectFired = false
     private var datagramsSinceResume = 0
+    private var validRecvSinceResume = 0
 
     // Connection params, kept so we can re-create the client socket after iOS
     // suspends us in the background (the mosh-server keeps running, so a fresh
@@ -273,6 +274,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                     resumeStateNum = mosh_client_state_num(c)
                     resumeInputPushSeq = inputPushSeq
                     datagramsSinceResume = 0
+                    validRecvSinceResume = 0
                     roamWatchActive = true
                     roamReconnectFired = false
                 }
@@ -363,7 +365,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 // per loop iteration (slow, and each iteration re-polls).
                 var drained = 0
                 repeat {
-                    mosh_client_recv(c)
+                    if mosh_client_recv(c) == 1 { validRecvSinceResume += 1 }
                     drained += 1
                 } while drained < Self.maxRecvDrainPerWake && Self.anyMoshFDReadable(c)
                 lastContactAt = Date()
@@ -465,7 +467,10 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                           Date().timeIntervalSince(resumedAt) > Self.roamFailTimeout {
                     roamReconnectFired = true
                     roamWatchActive = false
-                    moshLog("roam failed: state stuck=\(mosh_client_state_num(c)) inputs=\(inputPushSeq - resumeInputPushSeq) datagrams=\(datagramsSinceResume) silent=\(Int(Date().timeIntervalSince(lastContactAt)))s — requesting reconnect")
+                    // validRecv is the discriminator: 0 ⇒ no real peer packets are
+                    // arriving (dead roamed path), >0 with frozen state ⇒ packets
+                    // decrypt but mosh drops them in-protocol (reference-state reject).
+                    moshLog("roam failed: state stuck=\(mosh_client_state_num(c)) inputs=\(inputPushSeq - resumeInputPushSeq) datagrams=\(datagramsSinceResume) validRecv=\(validRecvSinceResume) silent=\(Int(Date().timeIntervalSince(lastContactAt)))s — requesting reconnect")
                     let handler = lock.withLock { onRoamFailedHandler }
                     handler?()
                 }
