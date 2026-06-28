@@ -16,6 +16,7 @@ xcuserdata/
 
 # Generated Xcode project (XcodeGen) — regenerated from app/project.yml
 *.xcodeproj/
+app/build/
 
 # Vendored xcframework — built from source by app/vendor/build-cssh.sh, not committed.
 app/vendor/CSSH/CSSH.xcframework/
