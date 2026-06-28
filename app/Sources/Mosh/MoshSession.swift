@@ -64,6 +64,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var lastInputRecoveryAt: Date?
     private var lastStaleRecoveryPrimeAt: Date?
     private var lastStaleRecoveryHopAt: Date?
+    private var lastInvalidReadableLogAt: Date?
 
     // Connection params, kept so we can re-create the client socket after iOS
     // suspends us in the background (the mosh-server keeps running, so a fresh
@@ -350,24 +351,34 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 // a burst; without draining, the catch-up trickles in one datagram
                 // per loop iteration (slow, and each iteration re-polls).
                 var drained = 0
+                var accepted = 0
                 repeat {
-                    _ = mosh_client_recv(c)
+                    if mosh_client_recv(c) != 0 { accepted += 1 }
                     drained += 1
                 } while drained < Self.maxRecvDrainPerWake && Self.anyMoshFDReadable(c)
-                lastContactAt = Date()
-                // Contact resumed — let the next stale episode act immediately.
-                lastStaleRecoveryPrimeAt = nil
-                lastStaleRecoveryHopAt = nil
-                if recovering {
-                    lock.lock()
-                    let active = appInForeground && appIsActive
-                    if !active { pendingForegroundRecovery = true }
-                    lock.unlock()
-                    guard active else {
-                        moshLog("recovering stale datagram deferred until active ask=\(cols)x\(rows)")
-                        continue
+                if accepted > 0 {
+                    lastContactAt = Date()
+                    lastInvalidReadableLogAt = nil
+                    // Contact resumed — let the next stale episode act immediately.
+                    lastStaleRecoveryPrimeAt = nil
+                    lastStaleRecoveryHopAt = nil
+                    if recovering {
+                        lock.lock()
+                        let active = appInForeground && appIsActive
+                        if !active { pendingForegroundRecovery = true }
+                        lock.unlock()
+                        guard active else {
+                            moshLog("recovering stale datagram deferred until active ask=\(cols)x\(rows)")
+                            continue
+                        }
+                        forceForegroundRecovery(c, reason: "stale datagram")
                     }
-                    forceForegroundRecovery(c, reason: "stale datagram")
+                } else {
+                    let now = Date()
+                    if lastInvalidReadableLogAt.map({ now.timeIntervalSince($0) > 1.0 }) ?? true {
+                        lastInvalidReadableLogAt = now
+                        moshLog("readable sockets had no accepted packets drained=\(drained) silent=\(Int(now.timeIntervalSince(lastContactAt)))s state=\(mosh_client_state_num(c))")
+                    }
                 }
             }
             mosh_client_tick(c)
