@@ -435,6 +435,8 @@ final class ZoomableTerminalView: TerminalView {
     var onZoomChange: ((CGFloat) -> Void)?
     /// Send raw bytes to the remote (set by the surface → session.write).
     var onSendBytes: (([UInt8]) -> Void)?
+    /// Called when the cached terminal view is attached to a visible window.
+    var onBecameVisible: (() -> Void)?
     /// Keeps SwiftUI controls in sync when a gesture enters multiplexer scroll mode.
     var onRemoteScrollModeChanged: ((Bool) -> Void)?
     /// An image was dropped or pasted onto the terminal — (PNG/JPEG data, ext).
@@ -467,6 +469,7 @@ final class ZoomableTerminalView: TerminalView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         guard window != nil else { return }
+        onBecameVisible?()
         DispatchQueue.main.async { [weak self] in
             guard let self, self.window != nil else { return }
             self.snapToLiveTail(reason: "window")

@@ -29,6 +29,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         view.terminalDelegate = self
         view.onZoomChange = { [weak self] newSize in self?.onZoomChange?(newSize) }
         view.onSendBytes = { [weak self] bytes in self?.session.write(bytes[...]) }
+        view.onBecameVisible = { [weak self] in self?.session.refreshDisplay() }
         view.onImageDropped = { [weak self] data, ext in self?.session.uploadImage(data, ext: ext) }
         view.installZoomGestures()
         view.setFont(family: fontFamily, size: fontSize)
@@ -58,6 +59,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
                 self.scheduleFlush()
             }
         }
+        session.refreshDisplay()
 
         let refresh: @Sendable (Notification) -> Void = { [weak self] _ in
             Task { @MainActor in self?.resyncAfterForeground() }
@@ -106,6 +108,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     /// Force a full repaint — used when the view is re-embedded after a tab
     /// switch so the preserved buffer redraws immediately.
     func refresh() {
+        session.refreshDisplay()
         view.getTerminal().updateFullScreen()
         view.setNeedsDisplay(view.bounds)
     }
@@ -139,6 +142,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         lastForegroundResyncAt = now
         cancelForegroundRefreshWork()
         DiagLog.log("terminal", "foreground resync scheduled bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height)) window=\(view.window != nil)")
+        session.refreshDisplay()
 
         scheduleForegroundRedraw(after: 0.05)
         scheduleForegroundRedraw(after: 0.20)
@@ -182,6 +186,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
             return
         }
         DiagLog.log("terminal", "redraw force resize=\(terminal.cols)x\(terminal.rows) bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height))")
+        session.refreshDisplay()
         sendResize(cols: terminal.cols, rows: terminal.rows, force: true)
         view.snapToLiveTail(reason: "foreground")
         terminal.updateFullScreen()
