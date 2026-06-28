@@ -11,6 +11,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.bellMode) private var bellMode = "haptic"
     @AppStorage(SettingsKey.optionAsMeta) private var optionAsMeta = true
     @AppStorage(SettingsKey.pinchZoom) private var pinchZoom = true
+    @AppStorage(SettingsKey.predictiveText) private var predictiveText = false
     @AppStorage(SettingsKey.showKeyBar) private var showKeyBar = true
     @AppStorage(SettingsKey.tmuxScrollSequence) private var tmuxScrollSequence = "C-b ["
     @AppStorage(SettingsKey.screenScrollSequence) private var screenScrollSequence = "C-a ["
@@ -63,10 +64,11 @@ struct SettingsView: View {
                 Toggle("Show terminal shortcut bar", isOn: $showKeyBar)
                 Toggle("Pinch to zoom", isOn: $pinchZoom)
                 Toggle("Use Option as Meta", isOn: $optionAsMeta)
+                Toggle("Predictive text", isOn: $predictiveText)
             } header: {
                 Text("Input")
             } footer: {
-                Text("Option as Meta sends Esc-prefixed keys for Alt shortcuts (vim, emacs, readline).")
+                Text("Predictive text can make phone typing easier, but iOS may replace shell commands, paths, flags, or secrets. Smart quotes and dashes stay disabled.")
             }
 
             Section {

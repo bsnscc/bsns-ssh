@@ -193,12 +193,21 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         view.setNeedsDisplay(view.bounds)
     }
 
-    /// Apply the live-changeable preferences (cursor, Option-as-Meta).
+    /// Apply the live-changeable preferences (cursor, Option-as-Meta, keyboard traits).
     private func applyPrefs() {
         let d = UserDefaults.standard
         let shape = CursorShape(rawValue: d.string(forKey: SettingsKey.cursorStyle) ?? "block") ?? .block
         view.getTerminal().setCursorStyle(shape.swiftTerm(blink: d.bool(forKey: SettingsKey.cursorBlink)))
         view.optionAsMetaKey = d.bool(forKey: SettingsKey.optionAsMeta)
+        let predictive = d.bool(forKey: SettingsKey.predictiveText)
+        let desiredAutocorrection: UITextAutocorrectionType = predictive ? .yes : .no
+        let reload = view.autocorrectionType != desiredAutocorrection
+        view.autocorrectionType = desiredAutocorrection
+        view.spellCheckingType = .no
+        view.smartQuotesType = .no
+        view.smartDashesType = .no
+        view.smartInsertDeleteType = .no
+        if reload { view.reloadInputViews() }
     }
 
     // MARK: TerminalViewDelegate

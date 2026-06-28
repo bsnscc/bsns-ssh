@@ -14,6 +14,7 @@ enum SettingsKey {
     static let bellMode = "terminal.bellMode"          // silent | haptic | sound
     static let optionAsMeta = "input.optionAsMeta"
     static let pinchZoom = "input.pinchZoom"
+    static let predictiveText = "input.predictiveText"
     static let showKeyBar = "input.showKeyBar"
     static let tmuxScrollSequence = "input.tmuxScrollSequence"
     static let screenScrollSequence = "input.screenScrollSequence"
@@ -35,6 +36,7 @@ enum SettingsKey {
             bellMode: "haptic",
             optionAsMeta: true,
             pinchZoom: true,
+            predictiveText: false,
             showKeyBar: true,
             tmuxScrollSequence: "C-b [",
             screenScrollSequence: "C-a [",

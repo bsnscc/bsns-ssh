@@ -39,7 +39,7 @@ struct SettingsSnapshot: Codable {
     var tmuxScrollSequence, screenScrollSequence: String
     var fontSize: Double
     var scrollback, keepAliveInterval: Int
-    var cursorBlink, keepAwake, optionAsMeta, pinchZoom, showKeyBar: Bool
+    var cursorBlink, keepAwake, optionAsMeta, pinchZoom, predictiveText, showKeyBar: Bool
 
     static func capture() -> SettingsSnapshot {
         let d = UserDefaults.standard
@@ -58,6 +58,7 @@ struct SettingsSnapshot: Codable {
             keepAwake: d.bool(forKey: SettingsKey.keepAwake),
             optionAsMeta: d.bool(forKey: SettingsKey.optionAsMeta),
             pinchZoom: d.bool(forKey: SettingsKey.pinchZoom),
+            predictiveText: d.bool(forKey: SettingsKey.predictiveText),
             showKeyBar: d.bool(forKey: SettingsKey.showKeyBar))
     }
 
@@ -79,6 +80,7 @@ struct SettingsSnapshot: Codable {
         d.set(keepAwake, forKey: SettingsKey.keepAwake)
         d.set(optionAsMeta, forKey: SettingsKey.optionAsMeta)
         d.set(pinchZoom, forKey: SettingsKey.pinchZoom)
+        d.set(predictiveText, forKey: SettingsKey.predictiveText)
         d.set(showKeyBar, forKey: SettingsKey.showKeyBar)
     }
 }
@@ -106,13 +108,13 @@ extension SettingsSnapshot {
               tmuxScrollSequence: "C-b [", screenScrollSequence: "C-a [",
               fontSize: 13, scrollback: 1000, keepAliveInterval: 0,
               cursorBlink: true, keepAwake: false, optionAsMeta: true,
-              pinchZoom: true, showKeyBar: true)
+              pinchZoom: true, predictiveText: false, showKeyBar: true)
     }
 
     enum CodingKeys: String, CodingKey {
         case theme, fontFamily, cursorStyle, bellMode, terminalType, fontSize
         case tmuxScrollSequence, screenScrollSequence
-        case scrollback, keepAliveInterval, cursorBlink, keepAwake, optionAsMeta, pinchZoom, showKeyBar
+        case scrollback, keepAliveInterval, cursorBlink, keepAwake, optionAsMeta, pinchZoom, predictiveText, showKeyBar
     }
 
     /// Per-field tolerant decode: a missing key falls back to the app default
@@ -134,6 +136,7 @@ extension SettingsSnapshot {
         keepAwake = (try? c.decodeIfPresent(Bool.self, forKey: .keepAwake)) ?? d.keepAwake
         optionAsMeta = (try? c.decodeIfPresent(Bool.self, forKey: .optionAsMeta)) ?? d.optionAsMeta
         pinchZoom = (try? c.decodeIfPresent(Bool.self, forKey: .pinchZoom)) ?? d.pinchZoom
+        predictiveText = (try? c.decodeIfPresent(Bool.self, forKey: .predictiveText)) ?? d.predictiveText
         showKeyBar = (try? c.decodeIfPresent(Bool.self, forKey: .showKeyBar)) ?? d.showKeyBar
     }
 }

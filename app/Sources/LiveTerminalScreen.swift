@@ -21,6 +21,7 @@ struct LiveTerminalScreen: View {
     @AppStorage(SettingsKey.cursorStyle) private var cursorStyle = "block"
     @AppStorage(SettingsKey.cursorBlink) private var cursorBlink = true
     @AppStorage(SettingsKey.optionAsMeta) private var optionAsMeta = true
+    @AppStorage(SettingsKey.predictiveText) private var predictiveText = false
     @AppStorage(SettingsKey.keepAwake) private var keepAwake = false
     @AppStorage(SettingsKey.showKeyBar) private var showKeyBar = true
     @AppStorage(SettingsKey.tmuxScrollSequence) private var tmuxScrollSequence = "C-b ["
@@ -55,7 +56,7 @@ struct LiveTerminalScreen: View {
                                 hardwareKeyboard: hwKeyboard.isConnected,
                                 tmuxSequence: tmuxScrollSequence,
                                 screenSequence: screenScrollSequence,
-                                prefs: "\(cursorStyle)\(cursorBlink)\(optionAsMeta)",
+                                prefs: "\(cursorStyle)\(cursorBlink)\(optionAsMeta)\(predictiveText)",
                                 muxScrollActive: $muxScrollActive)
                 .overlay(alignment: .top) { transferBanner }
             // Our key row is redundant with SwiftTerm's soft-keyboard accessory,
