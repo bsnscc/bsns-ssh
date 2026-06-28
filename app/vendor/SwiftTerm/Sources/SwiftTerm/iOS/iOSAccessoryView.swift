@@ -32,6 +32,7 @@ public class TerminalAccessory: UIInputView, UIInputViewAudioFeedback {
     
     var touchButton: UIButton!
     var keyboardButton: UIButton!
+    var predictiveButton: UIButton!
     
     var views: [UIView] = []
     
@@ -175,6 +176,23 @@ public class TerminalAccessory: UIInputView, UIInputViewAudioFeedback {
         touchButton.isSelected = !(terminalView?.allowMouseReporting ?? false)
     }
 
+    @objc func togglePredictiveText (_ sender: UIButton) {
+        let key = "input.predictiveText"
+        let enabled = !UserDefaults.standard.bool(forKey: key)
+        UserDefaults.standard.set(enabled, forKey: key)
+        applyPredictiveText(enabled)
+    }
+
+    private func applyPredictiveText(_ enabled: Bool) {
+        predictiveButton?.isSelected = enabled
+        terminalView?.autocorrectionType = enabled ? .yes : .no
+        terminalView?.spellCheckingType = .no
+        terminalView?.smartQuotesType = .no
+        terminalView?.smartDashesType = .no
+        terminalView?.smartInsertDeleteType = .no
+        terminalView?.reloadInputViews()
+    }
+
     var leftViews: [UIView] = []
     var floatViews: [UIView] = []
     var rightViews: [UIView] = []
@@ -216,13 +234,16 @@ public class TerminalAccessory: UIInputView, UIInputViewAudioFeedback {
         touchButton = makeButton ("", #selector(toggleTouch), icon: "hand.draw", isNormal: false)
         touchButton.isSelected = terminalView?.allowMouseReporting ?? false
         rightViews.append (touchButton)
+        predictiveButton = makeButton ("ABC", #selector(togglePredictiveText), isNormal: false)
+        predictiveButton.isSelected = UserDefaults.standard.bool(forKey: "input.predictiveText")
+        rightViews.append (predictiveButton)
         keyboardButton = makeButton ("", #selector(toggleInputKeyboard), icon: "keyboard.chevron.compact.down", isNormal: false)
         rightViews.append (keyboardButton)
 
         // calculate aditional space we can give to keys we want to be bigger (all top level except function keys)
         let minWidth: CGFloat = useSmall ? 20.0 : (UIDevice.current.userInterfaceIdiom == .phone) ? 22 : 32
         let maxFuncKeyWidth = (minWidth + buttonPad) * 10
-        let importantKeysCount: Double = useSmall ? 11 : 13
+        let importantKeysCount: Double = useSmall ? 12 : 14
         let maxSpaceForImportantKeys = frame.width - maxFuncKeyWidth - buttonPad
         var aditionalSpaceForImportantKeys: CGFloat = 0
         if maxSpaceForImportantKeys > 0 {

@@ -119,7 +119,7 @@ struct LiveTerminalScreen: View {
             Button { toggleFind() } label: { Image(systemName: "magnifyingglass") }
                 .accessibilityLabel("Find")
             Button { predictiveText.toggle() } label: {
-                Image(systemName: "keyboard")
+                Image(systemName: "textformat.abc")
                     .foregroundStyle(predictiveText ? Brand.accent : Color.primary)
             }
             .accessibilityLabel(predictiveText ? "Predictive text on" : "Predictive text off")
@@ -262,6 +262,9 @@ struct LiveTerminalScreen: View {
             Button { showSnippets = true } label: { Label("Run a snippet…", systemImage: "text.badge.plus") }
             Button { showHistory = true } label: { Label("Command history…", systemImage: "clock.arrow.circlepath") }
             Button { showHelp = true } label: { Label("Terminal Help…", systemImage: "questionmark.circle") }
+            Toggle(isOn: $predictiveText) {
+                Label("Predictive text", systemImage: "textformat.abc")
+            }
 
             Picker("Theme", selection: $themeId) {
                 ForEach(TerminalTheme.all) { Text($0.id).tag($0.id) }
