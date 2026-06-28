@@ -34,6 +34,14 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         get { lock.withLock { onLivenessHandler } }
         set { lock.withLock { onLivenessHandler = newValue } }
     }
+    /// Fires when foreground resume recovery still leaves the terminal frozen:
+    /// user input has been sent, but no accepted peer packets/output/state arrive.
+    /// The owner can then re-bootstrap mosh and reattach to the user's server-side
+    /// session instead of letting keystrokes disappear into a blind terminal.
+    var onRoamFailed: (@Sendable () -> Void)? {
+        get { lock.withLock { onRoamFailedHandler } }
+        set { lock.withLock { onRoamFailedHandler = newValue } }
+    }
     private static let staleThreshold: TimeInterval = 8
     private static let postResumeInputRecoveryWindow: TimeInterval = 120
     private static let inputRecoveryDelay: TimeInterval = 0.9
@@ -44,11 +52,14 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private static let staleRecoveryHopInterval: TimeInterval = 4.0
     private static let staleRecoveryPollCeilingMs: Int32 = 250
     private static let maxRecvDrainPerWake = 64
+    private static let roamNoPeerReconnectDelay: TimeInterval = 3.0
+    private static let roamFrozenStateReconnectDelay: TimeInterval = 6.0
 
     private let queue = DispatchQueue(label: "cc.bsns.ssh.mosh")
     private var onOutputHandler: (@Sendable (ArraySlice<UInt8>) -> Void)?
     private var onClosedHandler: (@Sendable (String?) -> Void)?
     private var onLivenessHandler: (@Sendable (Bool) -> Void)?
+    private var onRoamFailedHandler: (@Sendable () -> Void)?
     private var client: OpaquePointer?
     private var lastContactAt = Date()
     private var staleReported = false
@@ -65,6 +76,13 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var lastStaleRecoveryPrimeAt: Date?
     private var lastStaleRecoveryHopAt: Date?
     private var lastInvalidReadableLogAt: Date?
+    private var resumeStateNum: UInt64 = 0
+    private var resumeInputPushSeq = 0
+    private var roamWatchActive = false
+    private var roamReconnectFired = false
+    private var firstInputAfterResumeAt: Date?
+    private var readableDatagramsSinceResume = 0
+    private var acceptedPacketsSinceResume = 0
 
     // Connection params, kept so we can re-create the client socket after iOS
     // suspends us in the background (the mosh-server keeps running, so a fresh
@@ -258,6 +276,11 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 mosh_client_resize(c, cols, rows)
                 mosh_client_force_repaint(c)
                 moshLog("resume resize/repaint end")
+                if needsRecoveryWiggle {
+                    armRoamWatch(c)
+                } else {
+                    clearRoamWatch(reason: "resume fresh")
+                }
             }
             if !input.isEmpty {
                 inputPushSeq += 1
@@ -271,6 +294,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 input.withUnsafeBytes { raw in
                     mosh_client_push(c, raw.bindMemory(to: CChar.self).baseAddress, Int32(raw.count))
                 }
+                noteRoamInput(inputSeq: inputSeq)
                 if recentlyResumed {
                     mosh_client_prime_active_retry(c)
                 }
@@ -356,6 +380,10 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                     if mosh_client_recv(c) != 0 { accepted += 1 }
                     drained += 1
                 } while drained < Self.maxRecvDrainPerWake && Self.anyMoshFDReadable(c)
+                if roamWatchActive {
+                    readableDatagramsSinceResume += drained
+                    acceptedPacketsSinceResume += accepted
+                }
                 if accepted > 0 {
                     lastContactAt = Date()
                     lastInvalidReadableLogAt = nil
@@ -387,6 +415,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 free(ansi)
                 ansiDrainSeq += 1
                 let state = mosh_client_state_num(c)
+                noteRoamState(state: state)
                 let waitedMs: Int?
                 if let started = awaitingOutputSince {
                     waitedMs = Int(Date().timeIntervalSince(started) * 1000)
@@ -450,12 +479,64 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             if silent > Self.staleThreshold, awaitingOutputForInputSeq == nil, !resume {
                 driveStaleRecovery(c, silent: silent)
             }
+            checkRoamWatch(c)
             // Flag staleness on transition (the loop wakes at least ~1/s, so this
             // is checked promptly without a separate timer).
             let stale = Date().timeIntervalSince(lastContactAt) > Self.staleThreshold
             if stale != staleReported { staleReported = stale; onLiveness?(stale) }
         }
         teardown()
+    }
+
+    private func armRoamWatch(_ c: OpaquePointer) {
+        resumeStateNum = mosh_client_state_num(c)
+        resumeInputPushSeq = inputPushSeq
+        roamWatchActive = true
+        roamReconnectFired = false
+        firstInputAfterResumeAt = nil
+        readableDatagramsSinceResume = 0
+        acceptedPacketsSinceResume = 0
+        moshLog("roam watch armed state=\(resumeStateNum) inputSeq=\(resumeInputPushSeq)")
+    }
+
+    private func clearRoamWatch(reason: String) {
+        guard roamWatchActive || firstInputAfterResumeAt != nil else { return }
+        roamWatchActive = false
+        roamReconnectFired = false
+        firstInputAfterResumeAt = nil
+        moshLog("roam watch cleared reason=\(reason)")
+    }
+
+    private func noteRoamInput(inputSeq: Int) {
+        guard roamWatchActive, firstInputAfterResumeAt == nil, inputSeq > resumeInputPushSeq else { return }
+        firstInputAfterResumeAt = Date()
+        moshLog("roam watch input firstSeq=\(inputSeq) state=\(resumeStateNum)")
+    }
+
+    private func noteRoamState(state: UInt64) {
+        guard roamWatchActive, state > resumeStateNum else { return }
+        clearRoamWatch(reason: "state advanced \(resumeStateNum)->\(state)")
+    }
+
+    private func checkRoamWatch(_ c: OpaquePointer) {
+        guard roamWatchActive, !roamReconnectFired else { return }
+        let state = mosh_client_state_num(c)
+        if state > resumeStateNum {
+            clearRoamWatch(reason: "state advanced \(resumeStateNum)->\(state)")
+            return
+        }
+        guard let firstInputAfterResumeAt else { return }
+        let age = Date().timeIntervalSince(firstInputAfterResumeAt)
+        let noAcceptedPeer = acceptedPacketsSinceResume == 0 && age >= Self.roamNoPeerReconnectDelay
+        let frozenState = acceptedPacketsSinceResume > 0 && age >= Self.roamFrozenStateReconnectDelay
+        guard noAcceptedPeer || frozenState else { return }
+
+        roamReconnectFired = true
+        roamWatchActive = false
+        let reason = noAcceptedPeer ? "no accepted peer packets" : "state frozen"
+        moshLog("roam failed reason=\(reason) state=\(state) resumeState=\(resumeStateNum) inputs=\(inputPushSeq - resumeInputPushSeq) readable=\(readableDatagramsSinceResume) accepted=\(acceptedPacketsSinceResume) ageMs=\(Int(age * 1000)) — requesting reconnect")
+        let handler = lock.withLock { onRoamFailedHandler }
+        handler?()
     }
 
     private func waitForWakeOnly() {

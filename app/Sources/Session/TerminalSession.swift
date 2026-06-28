@@ -316,6 +316,10 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         if let old = currentTransport {
             old.onOutput = nil
             old.onClosed = nil
+            if let oldMosh = old as? MoshSession {
+                oldMosh.onLiveness = nil
+                oldMosh.onRoamFailed = nil
+            }
             old.disconnect()
         }
         DispatchQueue.main.async { self.isStale = false }
@@ -362,7 +366,20 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             mosh.onLiveness = { [weak self] stale in
                 DispatchQueue.main.async { self?.isStale = stale }
             }
+            mosh.onRoamFailed = { [weak self] in
+                DispatchQueue.main.async { self?.handleMoshRoamFailed() }
+            }
         }
+    }
+
+    /// A resumed mosh transport is still accepting local input, but fresh remote
+    /// state never came back. Re-bootstrap mosh so the user gets a visible session
+    /// again instead of typing into a frozen terminal.
+    private func handleMoshRoamFailed() {
+        if case .connecting = status { return }
+        if isDisconnected { return }
+        DiagLog.log("session", "mosh roam failed; reconnecting \(title)")
+        performReconnect(reason: "stalled after resume")
     }
 
     /// Forward transport output to the surface, or buffer it until the surface
