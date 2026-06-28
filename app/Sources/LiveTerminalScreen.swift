@@ -118,6 +118,12 @@ struct LiveTerminalScreen: View {
         HStack(spacing: 2) {
             Button { toggleFind() } label: { Image(systemName: "magnifyingglass") }
                 .accessibilityLabel("Find")
+            Button { predictiveText.toggle() } label: {
+                Image(systemName: "keyboard")
+                    .foregroundStyle(predictiveText ? Brand.accent : Color.primary)
+            }
+            .accessibilityLabel(predictiveText ? "Predictive text on" : "Predictive text off")
+            .accessibilityHint("Toggles predictive text")
             muxScrollButtons
             Button { setZoom(CGFloat(fontSize) - 1) } label: { Image(systemName: "textformat.size.smaller") }
                 .accessibilityLabel("Decrease text size")
