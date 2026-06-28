@@ -22,12 +22,32 @@ struct MoshHandle {
     MoshClient* client;
     int wake[2];          // self-pipe: wake[1] written to interrupt the poll
     uint64_t lastContactMs;   // monotonic time of the last datagram from the server
+    int lastReadableDatagrams;
+    int lastAcceptedPackets;
 };
 
 uint64_t nowMonoMs() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+bool anyMoshFDReadable(MoshClient* client) {
+    int mfds[16];
+    int nf = mosh_client_fds(client, mfds, 16);
+    if (nf <= 0) return false;
+    struct pollfd pfds[16];
+    for (int i = 0; i < nf; i++) {
+        pfds[i].fd = mfds[i];
+        pfds[i].events = POLLIN;
+        pfds[i].revents = 0;
+    }
+    int r = poll(pfds, nf, 0);
+    if (r <= 0) return false;
+    for (int i = 0; i < nf; i++) {
+        if (pfds[i].revents & POLLIN) return true;
+    }
+    return false;
 }
 }
 
@@ -53,6 +73,8 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshOpen(
     MoshHandle* h = (MoshHandle*)calloc(1, sizeof(MoshHandle));
     h->client = c;
     h->lastContactMs = nowMonoMs();
+    h->lastReadableDatagrams = 0;
+    h->lastAcceptedPackets = 0;
     if (pipe(h->wake) == 0) {
         fcntl(h->wake[0], F_SETFL, O_NONBLOCK);
         fcntl(h->wake[1], F_SETFL, O_NONBLOCK);
@@ -70,6 +92,8 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshService(
     (void)thiz;
     MoshHandle* h = (MoshHandle*)(intptr_t)handle;
     if (!h || !h->client) return nullptr;
+    h->lastReadableDatagrams = 0;
+    h->lastAcceptedPackets = 0;
 
     // Refresh mosh's frozen clock once per service iteration. Without this the
     // send/ack timers stall after the first packet and local input is never
@@ -105,12 +129,20 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshService(
             }
         }
         if (gotData) {
-            // First contact after a stale gap: redraw the recovered framebuffer
-            // absolutely rather than diffing it against the stale pre-gap baseline,
-            // which would leave stray colored cells until a manual resize (mirrors iOS).
-            if (nowMonoMs() - h->lastContactMs > 8000) mosh_client_force_repaint(h->client);
-            mosh_client_recv(h->client);
-            h->lastContactMs = nowMonoMs();   // a datagram arrived from the server
+            int drained = 0;
+            int accepted = 0;
+            do {
+                if (mosh_client_recv(h->client) != 0) accepted++;
+                drained++;
+            } while (drained < 64 && anyMoshFDReadable(h->client));
+            h->lastReadableDatagrams = drained;
+            h->lastAcceptedPackets = accepted;
+            if (accepted > 0) {
+                // First accepted peer packet after a stale gap: redraw the recovered
+                // framebuffer absolutely rather than diffing it against stale cells.
+                if (nowMonoMs() - h->lastContactMs > 8000) mosh_client_force_repaint(h->client);
+                h->lastContactMs = nowMonoMs();
+            }
         }
     }
     mosh_client_tick(h->client);
@@ -134,6 +166,47 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshMsSinceContact(
     MoshHandle* h = (MoshHandle*)(intptr_t)handle;
     if (!h) return 0;
     return (jlong)(nowMonoMs() - h->lastContactMs);
+}
+
+JNIEXPORT jint JNICALL
+Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshLastReadableDatagrams(
+    JNIEnv* env, jobject thiz, jlong handle) {
+    (void)env; (void)thiz;
+    MoshHandle* h = (MoshHandle*)(intptr_t)handle;
+    return h ? h->lastReadableDatagrams : 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshLastAcceptedPackets(
+    JNIEnv* env, jobject thiz, jlong handle) {
+    (void)env; (void)thiz;
+    MoshHandle* h = (MoshHandle*)(intptr_t)handle;
+    return h ? h->lastAcceptedPackets : 0;
+}
+
+JNIEXPORT jlong JNICALL
+Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshStateNum(
+    JNIEnv* env, jobject thiz, jlong handle) {
+    (void)env; (void)thiz;
+    MoshHandle* h = (MoshHandle*)(intptr_t)handle;
+    if (!h || !h->client) return 0;
+    return (jlong)mosh_client_state_num(h->client);
+}
+
+JNIEXPORT void JNICALL
+Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshHop(
+    JNIEnv* env, jobject thiz, jlong handle) {
+    (void)env; (void)thiz;
+    MoshHandle* h = (MoshHandle*)(intptr_t)handle;
+    if (h && h->client) mosh_client_hop(h->client);
+}
+
+JNIEXPORT void JNICALL
+Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshPrimeActiveRetry(
+    JNIEnv* env, jobject thiz, jlong handle) {
+    (void)env; (void)thiz;
+    MoshHandle* h = (MoshHandle*)(intptr_t)handle;
+    if (h && h->client) mosh_client_prime_active_retry(h->client);
 }
 
 JNIEXPORT void JNICALL

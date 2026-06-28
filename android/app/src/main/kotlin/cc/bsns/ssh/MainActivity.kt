@@ -766,6 +766,7 @@ class TerminalHolder(
             is MoshSession -> {
                 s.onClosed = { reason -> onDropped(reason) }
                 s.onLiveness = { stale -> main.post { isStale = stale } }
+                s.onRoamFailed = { main.post { handleMoshRoamFailed() } }
             }
         }
     }
@@ -777,6 +778,11 @@ class TerminalHolder(
                 status = ConnStatus.Disconnected
             }
         }
+    }
+
+    private fun handleMoshRoamFailed() {
+        if (status != ConnStatus.Connected) return
+        reconnect()
     }
 
     /** Rebuild the transport behind the same terminal view (the buffer persists). */
@@ -794,7 +800,7 @@ class TerminalHolder(
                     // (which would duplicate output and flip status after replacement).
                     old.onOutput = null
                     when (old) {
-                        is MoshSession -> { old.onClosed = null; old.onLiveness = null }
+                        is MoshSession -> { old.onClosed = null; old.onLiveness = null; old.onRoamFailed = null }
                         is SshSession -> old.onClosed = null
                     }
                     old.close()
@@ -816,6 +822,11 @@ class TerminalHolder(
     fun close() {
         userClosing = true
         session.onOutput = null
+        (session as? MoshSession)?.let {
+            it.onClosed = null
+            it.onLiveness = null
+            it.onRoamFailed = null
+        }
         session.close()
     }
 }

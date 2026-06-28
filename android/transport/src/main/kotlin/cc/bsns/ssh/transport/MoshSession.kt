@@ -1,5 +1,6 @@
 package cc.bsns.ssh.transport
 
+import android.os.SystemClock
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -29,6 +30,9 @@ class MoshSession(
      *  threshold, false when contact resumes. mosh never self-closes on silence
      *  (it roams), so this is the only signal a dead session gives the UI. */
     var onLiveness: ((Boolean) -> Unit)? = null
+    /** Fires when an Android sleep/resume leaves mosh accepting local input but
+     *  fresh remote state never returns. The holder re-bootstraps mosh. */
+    var onRoamFailed: (() -> Unit)? = null
     private var staleReported = false
 
     private val bridge = MoshBridge()
@@ -41,6 +45,15 @@ class MoshSession(
     // size wiggle, forcing the server to redraw + re-home its cursor.
     private var lastCols = 0
     private var lastRows = 0
+    private var lastLoopFinishedAtMs = 0L
+    private var inputPushSeq = 0
+    private var resumeStateNum = 0L
+    private var resumeInputPushSeq = 0
+    private var roamWatchActive = false
+    private var roamReconnectFired = false
+    private var firstInputAfterResumeAtMs = 0L
+    private var readableDatagramsSinceResume = 0
+    private var acceptedPacketsSinceResume = 0
 
     /** Open the UDP transport with the MOSH CONNECT key, then start the I/O loop.
      *  Returns false if the transport couldn't be opened. */
@@ -71,6 +84,8 @@ class MoshSession(
     private fun loop() {
         try {
             while (running.get()) {
+                val loopStartedAtMs = SystemClock.elapsedRealtime()
+                val loopGapMs = if (lastLoopFinishedAtMs == 0L) 0L else loopStartedAtMs - lastLoopFinishedAtMs
                 val writes: List<ByteArray>
                 val resize: Pair<Int, Int>?
                 synchronized(lock) {
@@ -79,14 +94,24 @@ class MoshSession(
                     resize = pendingResize
                     pendingResize = null
                 }
-                for (w in writes) bridge.nativeMoshPush(handle, w)
+                for (w in writes) {
+                    inputPushSeq += 1
+                    bridge.nativeMoshPush(handle, w)
+                    noteRoamInput(inputPushSeq)
+                }
                 resize?.let { bridge.nativeMoshResize(handle, it.first, it.second); lastCols = it.first; lastRows = it.second }
 
                 // Silence BEFORE servicing — survives a full OS suspension (where the
                 // loop was frozen and never marked stale). The native repaint-on-
                 // recovery uses the same elapsed-gap test; the cursor wiggle must too.
                 val silenceBeforeMs = bridge.nativeMoshMsSinceContact(handle)
+                if (loopGapMs > STALE_THRESHOLD_MS) armRoamWatch()
                 val ansi = bridge.nativeMoshService(handle, 1000)
+                if (roamWatchActive) {
+                    readableDatagramsSinceResume += bridge.nativeMoshLastReadableDatagrams(handle)
+                    acceptedPacketsSinceResume += bridge.nativeMoshLastAcceptedPackets(handle)
+                }
+                noteRoamState(bridge.nativeMoshStateNum(handle))
                 if (ansi != null && ansi.isNotEmpty()) {
                     synchronized(lock) {
                         val cb = onOutput
@@ -102,10 +127,12 @@ class MoshSession(
                     if (lastRows > 1) bridge.nativeMoshResize(handle, lastCols, lastRows - 1)
                     bridge.nativeMoshResize(handle, lastCols, lastRows)
                 }
+                checkRoamWatch()
                 // nativeMoshService blocks up to ~1s, so staleness is checked
                 // promptly without a separate timer.
                 val stale = bridge.nativeMoshMsSinceContact(handle) > STALE_THRESHOLD_MS
                 if (stale != staleReported) { staleReported = stale; onLiveness?.invoke(stale) }
+                lastLoopFinishedAtMs = SystemClock.elapsedRealtime()
             }
         } finally {
             val err = if (handle != 0L) bridge.nativeMoshLastError(handle) else null
@@ -114,7 +141,54 @@ class MoshSession(
         }
     }
 
+    private fun armRoamWatch() {
+        if (roamWatchActive) return
+        resumeStateNum = bridge.nativeMoshStateNum(handle)
+        resumeInputPushSeq = inputPushSeq
+        roamWatchActive = true
+        roamReconnectFired = false
+        firstInputAfterResumeAtMs = 0L
+        readableDatagramsSinceResume = 0
+        acceptedPacketsSinceResume = 0
+        bridge.nativeMoshHop(handle)
+        bridge.nativeMoshPrimeActiveRetry(handle)
+    }
+
+    private fun clearRoamWatch() {
+        roamWatchActive = false
+        roamReconnectFired = false
+        firstInputAfterResumeAtMs = 0L
+    }
+
+    private fun noteRoamInput(inputSeq: Int) {
+        if (!roamWatchActive || firstInputAfterResumeAtMs != 0L || inputSeq <= resumeInputPushSeq) return
+        firstInputAfterResumeAtMs = SystemClock.elapsedRealtime()
+        bridge.nativeMoshPrimeActiveRetry(handle)
+    }
+
+    private fun noteRoamState(state: Long) {
+        if (roamWatchActive && state > resumeStateNum) clearRoamWatch()
+    }
+
+    private fun checkRoamWatch() {
+        if (!roamWatchActive || roamReconnectFired || firstInputAfterResumeAtMs == 0L) return
+        val state = bridge.nativeMoshStateNum(handle)
+        if (state > resumeStateNum) {
+            clearRoamWatch()
+            return
+        }
+        val ageMs = SystemClock.elapsedRealtime() - firstInputAfterResumeAtMs
+        val noAcceptedPeer = acceptedPacketsSinceResume == 0 && ageMs >= ROAM_NO_PEER_RECONNECT_DELAY_MS
+        val frozenState = acceptedPacketsSinceResume > 0 && ageMs >= ROAM_FROZEN_STATE_RECONNECT_DELAY_MS
+        if (!noAcceptedPeer && !frozenState) return
+        roamReconnectFired = true
+        roamWatchActive = false
+        onRoamFailed?.invoke()
+    }
+
     private companion object {
         const val STALE_THRESHOLD_MS = 8000L
+        const val ROAM_NO_PEER_RECONNECT_DELAY_MS = 3000L
+        const val ROAM_FROZEN_STATE_RECONNECT_DELAY_MS = 6000L
     }
 }

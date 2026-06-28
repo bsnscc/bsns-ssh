@@ -17,6 +17,11 @@ class MoshBridge {
     external fun nativeMoshWake(handle: Long)
     /** Milliseconds since the last datagram from the server (liveness signal). */
     external fun nativeMoshMsSinceContact(handle: Long): Long
+    external fun nativeMoshLastReadableDatagrams(handle: Long): Int
+    external fun nativeMoshLastAcceptedPackets(handle: Long): Int
+    external fun nativeMoshStateNum(handle: Long): Long
+    external fun nativeMoshHop(handle: Long)
+    external fun nativeMoshPrimeActiveRetry(handle: Long)
     external fun nativeMoshLastError(handle: Long): String?
     external fun nativeMoshClose(handle: Long)
 
