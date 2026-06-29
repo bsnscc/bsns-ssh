@@ -98,7 +98,7 @@ struct LiveTerminalScreen: View {
                 CommandHistoryPicker { cmd in session.runCommand(cmd) }
             }
             .sheet(isPresented: $showHelp) {
-                NavigationStack { TerminalHelpView() }
+                NavigationStack { TerminalHelpView(showsDoneButton: true) }
             }
     }
 

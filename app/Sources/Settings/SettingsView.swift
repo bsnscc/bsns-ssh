@@ -81,7 +81,7 @@ struct SettingsView: View {
             } header: {
                 Text("Multiplexer scroll")
             } footer: {
-                Text("Used by the tmux and screen buttons to enter copy/scrollback mode. Examples: C-b [, C-a [, C-] [, Esc [. Tokens can be C-x, Ctrl-x, Esc, Tab, Enter, Space, 0x1b, or literal text.")
+                Text("Used by the tmux and screen buttons to enter copy/scrollback mode inside an already-running tmux or GNU screen session. Examples: C-b [, C-a [, C-] [, Esc [. Tokens can be C-x, Ctrl-x, Esc, Tab, Enter, Space, 0x1b, or literal text.")
             }
 
             Section("Sessions") {

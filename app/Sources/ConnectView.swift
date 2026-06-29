@@ -211,13 +211,13 @@ struct ConnectView: View {
                 Text("Via a jump host, only a shell tunnels through — mosh, SFTP, and key install go direct and are off. The bastion uses your key; any password is for the target only.")
                     .font(.caption).foregroundStyle(.secondary)
             } else if useMosh {
-                Text("Starts mosh-server over SSH, then runs over UDP. Needs mosh-server on the host and a key (agent), not a password.")
+                Text("Starts mosh-server over SSH, then roams over UDP across sleep and network changes. Needs mosh-server on the host and key-based login.")
                     .font(.caption).foregroundStyle(.secondary)
                 FieldRow(label: "tmux") {
                     TextField("optional · session name", text: $tmuxSession)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
                 }
-                Text("Attach a persistent tmux session (`tmux new-session -A -s …`). Reconnects after a roam drop or an app relaunch re-attach the same session instead of opening a fresh shell.")
+                Text("Recommended for real work: attach a persistent tmux session (`tmux new-session -A -s …`). Auto reconnect and app relaunch will re-attach here instead of opening a fresh shell.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
