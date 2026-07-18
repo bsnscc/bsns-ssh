@@ -16,6 +16,14 @@ struct TerminalKeyBar: View {
     /// still useful on iPad: Escape and multiplexer scroll mode.
     var minimal: Bool = false
     @Binding var muxScrollActive: Bool
+    @AppStorage(SettingsKey.multiplexer) private var multiplexer = MultiplexerPref.both.rawValue
+
+    /// tmux/screen buttons to show — narrowed to tmux for app-launched tmux sessions,
+    /// else the user's preference. Matches the top control row.
+    private var muxButtons: (tmux: Bool, screen: Bool) {
+        (MultiplexerPref(rawValue: multiplexer) ?? .both)
+            .buttons(tmuxKnown: session.spec.tmuxSession != nil)
+    }
 
     init(session: TerminalSession, handle: TerminalHandle, theme: TerminalTheme,
          tmuxSequence: String = "C-b [", screenSequence: String = "C-a [",
@@ -73,27 +81,20 @@ struct TerminalKeyBar: View {
         minimal ? minimalItems : fullItems
     }
 
+    /// The tmux/screen (or single "done") copy-mode items, filtered to what applies.
+    private var muxItems: [Item] {
+        if muxScrollActive { return [Item(label: "done", key: .tmuxCopy, wide: true)] }
+        var items: [Item] = []
+        if muxButtons.tmux { items.append(Item(label: "tmux", key: .tmuxCopy, wide: true)) }
+        if muxButtons.screen { items.append(Item(label: "screen", key: .screenCopy, wide: true)) }
+        return items
+    }
+
     private var minimalItems: [Item] {
-        if muxScrollActive {
-            return [
-                Item(label: "esc", key: .esc, wide: true),
-                Item(label: "done", key: .tmuxCopy, wide: true),
-            ]
-        }
-        return [
-            Item(label: "esc", key: .esc, wide: true),
-            Item(label: "tmux", key: .tmuxCopy, wide: true),
-            Item(label: "screen", key: .screenCopy, wide: true),
-        ]
+        [Item(label: "esc", key: .esc, wide: true)] + muxItems
     }
 
     private var fullItems: [Item] {
-        let muxItems = muxScrollActive
-            ? [Item(label: "done", key: .tmuxCopy, wide: true)]
-            : [
-                Item(label: "tmux", key: .tmuxCopy, wide: true),
-                Item(label: "screen", key: .screenCopy, wide: true),
-            ]
         return [
             Item(label: "esc", key: .esc, wide: true),
             Item(label: "tab", key: .tab, wide: true),

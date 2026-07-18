@@ -18,6 +18,7 @@ enum SettingsKey {
     static let showKeyBar = "input.showKeyBar"
     static let tmuxScrollSequence = "input.tmuxScrollSequence"
     static let screenScrollSequence = "input.screenScrollSequence"
+    static let multiplexer = "input.multiplexer"           // which copy/scroll buttons to show
     static let keepAliveInterval = "session.keepAliveInterval"
     static let terminalType = "session.terminalType"
     static let appLock = "security.appLock"
@@ -41,6 +42,7 @@ enum SettingsKey {
             showKeyBar: true,
             tmuxScrollSequence: "C-b [",
             screenScrollSequence: "C-a [",
+            multiplexer: MultiplexerPref.both.rawValue,
             keepAliveInterval: 30,
             terminalType: "xterm-256color",
             appLock: false,
@@ -111,4 +113,25 @@ enum BellMode: String, CaseIterable, Identifiable {
     case silent, haptic, sound
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
+}
+
+/// Which multiplexer copy/scroll buttons to surface. Most people use one of tmux
+/// or GNU screen, so showing both is noise — this lets them pick.
+enum MultiplexerPref: String, CaseIterable, Identifiable {
+    case both, tmux, screen
+    var id: String { rawValue }
+    var label: String { self == .both ? "Both" : rawValue }
+
+    /// Resolve to the buttons to show. `tmuxKnown` is true when the app itself
+    /// launched the tmux session (mosh + tmux integration), so screen is definitely
+    /// wrong and we narrow to tmux regardless of the stored preference — the specific
+    /// per-connection fact beats the global default.
+    func buttons(tmuxKnown: Bool) -> (tmux: Bool, screen: Bool) {
+        if tmuxKnown { return (true, false) }
+        switch self {
+        case .both:   return (true, true)
+        case .tmux:   return (true, false)
+        case .screen: return (false, true)
+        }
+    }
 }

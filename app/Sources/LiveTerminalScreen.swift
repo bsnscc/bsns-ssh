@@ -26,6 +26,7 @@ struct LiveTerminalScreen: View {
     @AppStorage(SettingsKey.showKeyBar) private var showKeyBar = true
     @AppStorage(SettingsKey.tmuxScrollSequence) private var tmuxScrollSequence = "C-b ["
     @AppStorage(SettingsKey.screenScrollSequence) private var screenScrollSequence = "C-a ["
+    @AppStorage(SettingsKey.multiplexer) private var multiplexer = MultiplexerPref.both.rawValue
 
     @State private var keyboardUp = false
     @State private var hwKeyboard = HardwareKeyboardMonitor()
@@ -134,15 +135,26 @@ struct LiveTerminalScreen: View {
         .labelStyle(.iconOnly)
     }
 
+    /// Only surface the buttons for the multiplexer(s) that apply here — an
+    /// app-launched tmux session shows tmux only; otherwise the user's preference.
+    private var muxButtons: (tmux: Bool, screen: Bool) {
+        (MultiplexerPref(rawValue: multiplexer) ?? .both)
+            .buttons(tmuxKnown: session.spec.tmuxSession != nil)
+    }
+
     @ViewBuilder private var muxScrollButtons: some View {
         if muxScrollActive {
             Button { finishMuxScroll() } label: { muxScrollLabel("done", active: true) }
                 .accessibilityLabel("Exit multiplexer scroll mode")
         } else {
-            Button { startMuxScroll(sequence: tmuxScrollSequence, fallback: [0x02, 0x5b]) } label: { muxScrollLabel("tmux", active: false) }
-                .accessibilityLabel("Enter tmux scroll mode")
-            Button { startMuxScroll(sequence: screenScrollSequence, fallback: [0x01, 0x5b]) } label: { muxScrollLabel("screen", active: false) }
-                .accessibilityLabel("Enter screen scroll mode")
+            if muxButtons.tmux {
+                Button { startMuxScroll(sequence: tmuxScrollSequence, fallback: [0x02, 0x5b]) } label: { muxScrollLabel("tmux", active: false) }
+                    .accessibilityLabel("Enter tmux scroll mode")
+            }
+            if muxButtons.screen {
+                Button { startMuxScroll(sequence: screenScrollSequence, fallback: [0x01, 0x5b]) } label: { muxScrollLabel("screen", active: false) }
+                    .accessibilityLabel("Enter screen scroll mode")
+            }
         }
     }
 

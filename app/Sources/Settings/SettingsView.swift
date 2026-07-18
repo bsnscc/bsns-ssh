@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.showKeyBar) private var showKeyBar = true
     @AppStorage(SettingsKey.tmuxScrollSequence) private var tmuxScrollSequence = "C-b ["
     @AppStorage(SettingsKey.screenScrollSequence) private var screenScrollSequence = "C-a ["
+    @AppStorage(SettingsKey.multiplexer) private var multiplexer = MultiplexerPref.both.rawValue
     @AppStorage(SettingsKey.keepAliveInterval) private var keepAlive = 30
     @AppStorage(SettingsKey.terminalType) private var terminalType = "xterm-256color"
     @AppStorage(SettingsKey.appLock) private var appLock = false
@@ -72,6 +73,9 @@ struct SettingsView: View {
             }
 
             Section {
+                Picker("Show buttons for", selection: $multiplexer) {
+                    ForEach(MultiplexerPref.allCases) { Text($0.label).tag($0.rawValue) }
+                }
                 TextField("tmux sequence", text: $tmuxScrollSequence)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -81,7 +85,7 @@ struct SettingsView: View {
             } header: {
                 Text("Multiplexer scroll")
             } footer: {
-                Text("Used by the tmux and screen buttons to enter copy/scrollback mode inside an already-running tmux or GNU screen session. Examples: C-b [, C-a [, C-] [, Esc [. Tokens can be C-x, Ctrl-x, Esc, Tab, Enter, Space, 0x1b, or literal text.")
+                Text("Which copy/scrollback buttons appear on the terminal. Pick tmux or screen to hide the other; a session the app started as tmux always shows tmux only. The sequences below enter copy mode inside an already-running session — e.g. C-b [, C-a [, C-] [, Esc [. Tokens can be C-x, Ctrl-x, Esc, Tab, Enter, Space, 0x1b, or literal text.")
             }
 
             Section("Sessions") {
