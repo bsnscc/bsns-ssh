@@ -268,6 +268,18 @@ struct ConnectView: View {
         }
     }
 
+    /// Why Connect is disabled, so an empty form reads as "fill this in", not
+    /// "broken button". Short, leads with the host (the first thing needed).
+    private var connectHint: String? {
+        guard !busy else { return nil }
+        if host.isEmpty || user.isEmpty { return "Enter a host to connect over SSH." }
+        let needsCredential = (useMosh || hasJump) ? store.identities.isEmpty
+                                                   : (password.isEmpty && store.identities.isEmpty)
+        guard needsCredential else { return nil }
+        return store.identities.isEmpty ? "Add a key on the Keys tab to connect."
+                                        : "Enter a password or select a key to connect."
+    }
+
     @ViewBuilder private var actionsSection: some View {
         Section {
             Button(busy ? "Working…" : (useMosh && !hasJump ? "Connect (mosh)" : "Connect")) { attemptConnect() }
@@ -282,6 +294,8 @@ struct ConnectView: View {
                 .disabled(busy || host.isEmpty || user.isEmpty || password.isEmpty || store.identities.isEmpty || hasJump)
             Button("Save host") { saveHost() }
                 .disabled(host.isEmpty || user.isEmpty)
+        } footer: {
+            if let connectHint { Text(connectHint) }
         }
     }
 

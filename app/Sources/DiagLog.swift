@@ -24,13 +24,29 @@ final class DiagLog {
     nonisolated private static let fileQueue = DispatchQueue(label: "cc.bsns.ssh.diagfile")
     nonisolated private static let persistentCapBytes = 256 * 1024
 
-    /// Record an event. Safe to call from any thread/actor: it writes the unified
-    /// log + persistent file inline (nonisolated) and hops to the main actor to
-    /// append to the live buffer.
+    /// Master gate. Recording is OFF by default: a live session (e.g. a mosh tmux
+    /// with an updating pane) emits several events per frame, and each `log` call
+    /// does a synchronous file write + unified-log write + a main-actor hop — dozens
+    /// of synchronous disk writes a second, which needlessly drains the battery in
+    /// normal use. Enable it from Settings → Diagnostics only while reproducing an
+    /// issue. Read lock-free from every I/O thread; a stale value costs at most one
+    /// logged (or dropped) line, which is harmless.
+    nonisolated(unsafe) static var enabled = false
+
+    /// Re-read the persisted toggle into the cached flag. Called at launch and when
+    /// the Diagnostics toggle changes.
+    nonisolated static func refreshEnabled() {
+        enabled = UserDefaults.standard.bool(forKey: SettingsKey.diagnosticsEnabled)
+    }
+
+    /// Record an event. A no-op unless recording is `enabled`. Safe to call from any
+    /// thread/actor: it writes the unified log + persistent file inline (nonisolated)
+    /// and hops to the main actor to append to the live buffer.
     /// INVARIANT: never pass secrets here (keys, PINs, passphrases, tokens) — the
     /// message is mirrored to the unified log at `.public`, so it's readable via
     /// Console.app / sysdiagnose. Log only timing, sizes, and state.
     nonisolated static func log(_ category: String, _ message: String) {
+        guard enabled else { return }
         logger.notice("[\(category, privacy: .public)] \(message, privacy: .public)")
         appendPersistent(category, message)
         Task { @MainActor in shared.append(category, message) }
@@ -118,6 +134,7 @@ struct DiagnosticsView: View {
     @State private var log = DiagLog.shared
     @State private var savedLog = ""
     @State private var copied = false
+    @AppStorage(SettingsKey.diagnosticsEnabled) private var recording = false
 
     private var savedLines: [String] {
         savedLog.split(separator: "\n", omittingEmptySubsequences: true)
@@ -132,8 +149,14 @@ struct DiagnosticsView: View {
 
     var body: some View {
         List {
-            if savedLines.isEmpty && log.entries.isEmpty {
-                Text("No events yet. Reproduce an issue (e.g. connect via mosh, then background and return) and the log will fill here.")
+            Section {
+                Toggle("Record events", isOn: $recording)
+                    .onChange(of: recording) { _, _ in DiagLog.refreshEnabled() }
+            } footer: {
+                Text("Off by default to save battery — recording writes several events per frame to disk. Turn it on, reproduce the issue, then copy the log below.")
+            }
+            if recording && savedLines.isEmpty && log.entries.isEmpty {
+                Text("Recording… reproduce an issue (e.g. connect via mosh, then background and return) and the log will fill here.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             if savedLines.isEmpty == false {

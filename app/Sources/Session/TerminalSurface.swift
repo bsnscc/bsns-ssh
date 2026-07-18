@@ -142,12 +142,16 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         lastForegroundResyncAt = now
         cancelForegroundRefreshWork()
         DiagLog.log("terminal", "foreground resync scheduled bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height)) window=\(view.window != nil)")
+        // One transport replay: the mosh resume path already force-repaints, so this
+        // single refresh is enough to pull the current framebuffer. The scheduled
+        // redraws below are LOCAL only — re-requesting a transport refresh (or a
+        // forced resize at an unchanged size) on each tick just makes mosh re-emit the
+        // whole framebuffer again, which is the resume repaint storm we're avoiding.
         session.refreshDisplay()
 
-        scheduleForegroundRedraw(after: 0.05)
-        scheduleForegroundRedraw(after: 0.20)
-        scheduleForegroundRedraw(after: 0.65)
-        scheduleForegroundRedraw(after: 1.20)
+        // Two attempts cover an early layout and a late-settling one; four was churn.
+        scheduleForegroundRedraw(after: 0.10)
+        scheduleForegroundRedraw(after: 0.60)
     }
 
     private func cancelForegroundRefreshForBackground() {
@@ -185,9 +189,12 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
             DiagLog.log("terminal", "redraw skipped: terminal=\(terminal.cols)x\(terminal.rows)")
             return
         }
-        DiagLog.log("terminal", "redraw force resize=\(terminal.cols)x\(terminal.rows) bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height))")
-        session.refreshDisplay()
-        sendResize(cols: terminal.cols, rows: terminal.rows, force: true)
+        DiagLog.log("terminal", "redraw local resize=\(terminal.cols)x\(terminal.rows) bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height))")
+        // Only nudge the transport if the size genuinely changed while backgrounded
+        // (rotation, keyboard, Stage Manager) — that's the case a resize fixes. At an
+        // unchanged size, resize+refresh would just re-emit the whole framebuffer for
+        // nothing, so repaint the already-current buffer locally instead.
+        sendResize(cols: terminal.cols, rows: terminal.rows, force: false)
         view.snapToLiveTail(reason: "foreground")
         terminal.updateFullScreen()
         view.setNeedsDisplay(view.bounds)

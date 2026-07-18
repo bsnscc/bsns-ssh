@@ -13,6 +13,7 @@ struct BsnsSSHApp: App {
 
     init() {
         SettingsKey.registerDefaults()
+        DiagLog.refreshEnabled()
         DiagLog.markLaunch()
     }
 

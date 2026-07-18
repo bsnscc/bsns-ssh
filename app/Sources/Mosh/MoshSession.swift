@@ -52,8 +52,14 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private static let staleRecoveryHopInterval: TimeInterval = 4.0
     private static let staleRecoveryPollCeilingMs: Int32 = 250
     private static let maxRecvDrainPerWake = 64
-    private static let roamNoPeerReconnectDelay: TimeInterval = 3.0
-    private static let roamFrozenStateReconnectDelay: TimeInterval = 6.0
+    // How long a resumed session may look frozen before we fall back to a full
+    // reconnect. Generous on purpose: mosh's own hop/prime recovery (driveStaleRecovery,
+    // input recovery) keeps retrying every 1–4s and usually re-establishes on its own,
+    // and the terminal still accepts input meanwhile — so a reconnect (fresh mosh-server,
+    // tmux re-attach) is the last resort, not the first move. Too-eager thresholds
+    // abandon a slow-but-recovering cellular resume before mosh gets there.
+    private static let roamNoPeerReconnectDelay: TimeInterval = 8.0
+    private static let roamFrozenStateReconnectDelay: TimeInterval = 12.0
 
     private let queue = DispatchQueue(label: "cc.bsns.ssh.mosh")
     private var onOutputHandler: (@Sendable (ArraySlice<UInt8>) -> Void)?

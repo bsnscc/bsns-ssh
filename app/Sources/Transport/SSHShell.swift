@@ -844,7 +844,12 @@ public final class SSHShell: @unchecked Sendable {
 
             serviceForwards(session: session)
 
-            waitSocket(session: session, timeoutMs: 30)
+            // Idle wait. The self-pipe (`wake()`) breaks this immediately for
+            // keystrokes, resizes, disconnect, and new forwards; inbound channel
+            // data wakes it via POLLIN; forward sockets are in the pollfd set. So
+            // the timeout only bounds how often we poll keepalives (≥30s) — a short
+            // spin here just burns CPU/battery on an idle connection for nothing.
+            waitSocket(session: session, timeoutMs: 1000)
         }
         teardownForwards()
         teardown()
