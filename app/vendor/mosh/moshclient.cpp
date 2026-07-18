@@ -30,6 +30,7 @@ struct MoshClient {
   uint64_t lastStateNum;
   bool rendered;
   std::string lastError;
+  std::string sendError;   // last consumed sendto() failure (see mosh_client_send_error)
 
   MoshClient(int cols, int rows)
     : local(), remote(cols, rows), display(false), lastFb(cols, rows),
@@ -240,6 +241,20 @@ uint64_t mosh_client_state_num(MoshClient* c) {
 
 const char* mosh_client_last_error(MoshClient* c) {
   return (c && !c->lastError.empty()) ? c->lastError.c_str() : nullptr;
+}
+
+const char* mosh_client_send_error(MoshClient* c) {
+  if (!c || !c->transport) return nullptr;
+  // Consume-and-clear (as upstream's client does after reporting): each call
+  // returns a send failure recorded since the previous call, else NULL — so a
+  // stale error can't mask a later recovery.
+  try {
+    std::string& err = c->transport->get_send_error();
+    if (err.empty()) return nullptr;
+    c->sendError = err;
+    err.clear();
+    return c->sendError.c_str();
+  } catch (...) { return nullptr; }
 }
 
 }  // extern "C"

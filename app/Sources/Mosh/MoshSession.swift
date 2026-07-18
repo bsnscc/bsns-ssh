@@ -416,6 +416,12 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 }
             }
             mosh_client_tick(c)
+            // Outbound health: sendto() failures are recorded, not thrown, so
+            // without this a resume whose sends are dying (radio not up yet,
+            // dead socket) is indistinguishable from "server not replying".
+            if let sendErr = mosh_client_send_error(c) {
+                moshLog("send error: \(String(cString: sendErr)) silent=\(Int(Date().timeIntervalSince(lastContactAt)))s state=\(mosh_client_state_num(c))")
+            }
             if let ansi = mosh_client_drain_ansi(c) {
                 let bytes = Array(String(cString: ansi).utf8)
                 free(ansi)

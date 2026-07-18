@@ -75,6 +75,13 @@ uint64_t mosh_client_state_num(MoshClient* c);
 
 const char* mosh_client_last_error(MoshClient* c);
 
+/// The last sendto() failure ("sendto: <errno text>"), or NULL if sends are
+/// healthy. mosh's Connection::send() records socket errors in a string
+/// instead of throwing, so without this a resumed session whose outbound
+/// datagrams are failing (e.g. ENETDOWN while the radio wakes) looks
+/// identical to a healthy one that just isn't hearing back.
+const char* mosh_client_send_error(MoshClient* c);
+
 #ifdef __cplusplus
 }
 #endif
