@@ -886,6 +886,8 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
     var hitIdx by remember { mutableStateOf(0) }
     val findFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    // Read fresh each recomposition so a change in Settings takes effect on return.
+    val (showTmuxKey, showScreenKey) = multiplexerButtons(SettingsStore(LocalContext.current).multiplexer)
 
     // When the search bar opens, take focus off the terminal View so the IME types
     // into the find field (a traditional View otherwise keeps Android focus), and
@@ -1067,6 +1069,8 @@ fun TerminalPane(holder: TerminalHolder, showKeyBar: Boolean = true, onDisconnec
                         holder.enterScreenScrollMode()
                     }
                 },
+                showTmux = showTmuxKey,
+                showScreen = showScreenKey,
             )
         }
     }
@@ -1713,14 +1717,16 @@ private fun KeyBar(
     onEscape: () -> Unit,
     onTmuxCopy: () -> Unit,
     onScreenCopy: () -> Unit,
+    showTmux: Boolean = true,
+    showScreen: Boolean = true,
 ) {
     val muxKeys = if (remoteScrollActive) {
         listOf(KeyBarItem("done", onTmuxCopy))
     } else {
-        listOf(
-            KeyBarItem("tmux", onTmuxCopy),
-            KeyBarItem("screen", onScreenCopy),
-        )
+        buildList {
+            if (showTmux) add(KeyBarItem("tmux", onTmuxCopy))
+            if (showScreen) add(KeyBarItem("screen", onScreenCopy))
+        }
     }
     val keys = listOf(
         KeyBarItem("esc", onEscape),

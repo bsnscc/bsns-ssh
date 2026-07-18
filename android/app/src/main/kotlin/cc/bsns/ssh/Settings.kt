@@ -62,6 +62,19 @@ class SettingsStore(context: Context) {
     var screenScrollSequence: String
         get() = p.getString("screenScrollSequence", "C-a [") ?: "C-a ["
         set(v) { p.edit().putString("screenScrollSequence", v).apply() }
+    /** Which copy/scroll buttons to show: "both", "tmux", or "screen". */
+    var multiplexer: String
+        get() = p.getString("multiplexer", "both") ?: "both"
+        set(v) { p.edit().putString("multiplexer", v).apply() }
+}
+
+val multiplexerOptions = listOf("both", "tmux", "screen")
+
+/** Resolve the multiplexer preference to (showTmux, showScreen). */
+fun multiplexerButtons(pref: String): Pair<Boolean, Boolean> = when (pref) {
+    "tmux" -> true to false
+    "screen" -> false to true
+    else -> true to true
 }
 
 @Composable
@@ -103,6 +116,7 @@ fun SettingsScreen(
     var bellHaptic by remember { mutableStateOf(store.bellHaptic) }
     var tmuxScrollSequence by remember { mutableStateOf(store.tmuxScrollSequence) }
     var screenScrollSequence by remember { mutableStateOf(store.screenScrollSequence) }
+    var multiplexer by remember { mutableStateOf(store.multiplexer) }
     val scrollbackOptions = listOf(500, 1000, 2000, 5000, 10000)
     val themeIds = Appearance.themes.map { it.id }
 
@@ -153,8 +167,13 @@ fun SettingsScreen(
 
             Section(
                 title = "Multiplexer scroll",
-                footer = "Used by the tmux and screen buttons to enter copy/scrollback mode. Examples: C-b [, C-a [, C-] [, Esc [. Tokens can be C-x, Ctrl-x, Esc, Tab, Enter, Space, 0x1b, or literal text.",
+                footer = "Which copy/scrollback buttons appear on the terminal. Pick tmux or screen to hide the other. The sequences enter copy mode inside an already-running session — e.g. C-b [, C-a [, C-] [, Esc [. Tokens can be C-x, Ctrl-x, Esc, Tab, Enter, Space, 0x1b, or literal text.",
             ) {
+                PickerRow("Show buttons for", multiplexer) {
+                    val next = multiplexerOptions[(multiplexerOptions.indexOf(multiplexer).coerceAtLeast(0) + 1) % multiplexerOptions.size]
+                    multiplexer = next; store.multiplexer = next
+                }
+                RowDivider()
                 SettingRow("tmux sequence") {
                     OutlinedTextField(
                         value = tmuxScrollSequence,
