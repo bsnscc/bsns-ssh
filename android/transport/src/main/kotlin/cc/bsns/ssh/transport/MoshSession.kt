@@ -188,7 +188,12 @@ class MoshSession(
 
     private companion object {
         const val STALE_THRESHOLD_MS = 8000L
-        const val ROAM_NO_PEER_RECONNECT_DELAY_MS = 3000L
-        const val ROAM_FROZEN_STATE_RECONNECT_DELAY_MS = 6000L
+        // How long a resumed session may look frozen before falling back to a full
+        // reconnect. Generous on purpose: mosh's own hop/prime recovery keeps retrying
+        // and the terminal still accepts input meanwhile, so a reconnect (fresh
+        // mosh-server, tmux re-attach) is the last resort. Too-eager thresholds abandon
+        // a slow-but-recovering resume before mosh gets there.
+        const val ROAM_NO_PEER_RECONNECT_DELAY_MS = 8000L
+        const val ROAM_FROZEN_STATE_RECONNECT_DELAY_MS = 12000L
     }
 }
