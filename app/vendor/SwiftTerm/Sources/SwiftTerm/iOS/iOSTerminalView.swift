@@ -1102,15 +1102,19 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         switch gestureRecognizer.state {
         case .began:
             let _ = becomeFirstResponder()
-            selection.startSelection(row: hit.row, col: hit.col)
+            // calculateTapHit returns a BUFFER-absolute position (the view is a
+            // scroll view, so view coords are content coords). startSelection's
+            // row:col: API is screen-relative and adds yDisp again — with any
+            // scrollback that double-add pushed the anchor past the end of the
+            // buffer (clamped to the bottom), selecting everything from the
+            // bottom up to the pointer. Anchor in buffer space, and set an
+            // explicit pivot so the drag can extend in either direction.
+            selection.setSelection(start: hit, end: hit)
             selection.selectionMode = .character
+            selection.pivot = selection.start
             requestDisplay()
         case .changed:
-            // dragExtend (not pivotExtend): a click-drag anchors at the start cell
-            // and moves the END to follow the pointer. pivotExtend no-ops here
-            // because startSelection never sets `pivot` — which is why dragging
-            // selected a point but never extended it.
-            selection.dragExtend(bufferPosition: hit)
+            selection.pivotExtend(bufferPosition: hit)
             requestDisplay()
         case .ended:
             if selection.active {

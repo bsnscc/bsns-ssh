@@ -32,14 +32,21 @@ highlight text for copy.
 
 The patch adds a `UIPanGestureRecognizer` restricted to
 `UITouch.TouchType.indirectPointer` that drives the existing `selection` engine:
-`.began` → `startSelection` (anchor at the start cell), `.changed` → `dragExtend`
-(move the END to follow the pointer), `.ended` → `showContextMenu`. Note it uses
-`dragExtend`, **not** `pivotExtend` — `pivotExtend` no-ops unless `selection.pivot`
-is set (which `startSelection` doesn't do), so an early version selected a single
-cell but never extended on drag. To stop a trackpad drag from *scrolling* instead
+`.began` anchors at the clicked cell, `.changed` extends to follow the pointer,
+`.ended` requests the menu. To stop a trackpad drag from *scrolling* instead
 of selecting, the scroll view's own `panGestureRecognizer` is restricted to
 `UITouch.TouchType.direct` (finger) touches. Finger long-press selection and
 two-finger scrolling are unchanged.
+
+Coordinate-space note (fixed after shipping an earlier version):
+`calculateTapHit` returns a **buffer-absolute** position, but the original
+patch anchored via `startSelection(row:col:)`, whose API is screen-relative and
+adds `yDisp` again. With any scrollback the double-add pushed the anchor past
+the end of the buffer (clamped to the bottom), so a click-drag selected
+everything from the bottom of the buffer up to the pointer. The anchor is now
+set in buffer space via `setSelection`, with `selection.pivot` set explicitly
+so `pivotExtend` can grow the selection in either direction (the old
+`dragExtend` could only move the end, so upward drags misbehaved too).
 
 ### 2. PageUp / PageDown forwarded to the remote (tmux scrollback)
 
