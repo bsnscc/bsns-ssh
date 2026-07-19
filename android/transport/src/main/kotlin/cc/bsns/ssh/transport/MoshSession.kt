@@ -54,6 +54,8 @@ class MoshSession(
     private var firstInputAfterResumeAtMs = 0L
     private var readableDatagramsSinceResume = 0
     private var acceptedPacketsSinceResume = 0
+    private var lastStaleRecoveryPrimeAtMs = 0L
+    private var lastStaleRecoveryHopAtMs = 0L
 
     /** Open the UDP transport with the MOSH CONNECT key, then start the I/O loop.
      *  Returns false if the transport couldn't be opened. */
@@ -130,7 +132,30 @@ class MoshSession(
                 checkRoamWatch()
                 // nativeMoshService blocks up to ~1s, so staleness is checked
                 // promptly without a separate timer.
-                val stale = bridge.nativeMoshMsSinceContact(handle) > STALE_THRESHOLD_MS
+                val silentMs = bridge.nativeMoshMsSinceContact(handle)
+                // Continuous stale recovery (mirrors iOS driveStaleRecovery): mosh
+                // stops resending unacked state ~10s after it last heard from the
+                // server, so a torn-down socket can leave the session frozen until
+                // the user types. While silent past the threshold, keep the
+                // active-retry window open every second and hop to a fresh socket
+                // (new NAT binding) every few seconds. Timers reset on contact so
+                // the next stale episode acts immediately.
+                if (silentMs > STALE_THRESHOLD_MS) {
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastStaleRecoveryPrimeAtMs >= STALE_RECOVERY_PRIME_MS) {
+                        lastStaleRecoveryPrimeAtMs = now
+                        bridge.nativeMoshPrimeActiveRetry(handle)
+                    }
+                    if (silentMs >= STALE_THRESHOLD_MS * 3 / 2 &&
+                        now - lastStaleRecoveryHopAtMs >= STALE_RECOVERY_HOP_MS) {
+                        lastStaleRecoveryHopAtMs = now
+                        bridge.nativeMoshHop(handle)
+                    }
+                } else {
+                    lastStaleRecoveryPrimeAtMs = 0L
+                    lastStaleRecoveryHopAtMs = 0L
+                }
+                val stale = silentMs > STALE_THRESHOLD_MS
                 if (stale != staleReported) { staleReported = stale; onLiveness?.invoke(stale) }
                 lastLoopFinishedAtMs = SystemClock.elapsedRealtime()
             }
@@ -188,6 +213,9 @@ class MoshSession(
 
     private companion object {
         const val STALE_THRESHOLD_MS = 8000L
+        // Active recovery cadence while the server is silent (see loop()).
+        const val STALE_RECOVERY_PRIME_MS = 1000L
+        const val STALE_RECOVERY_HOP_MS = 4000L
         // How long a resumed session may look frozen before falling back to a full
         // reconnect. Generous on purpose: mosh's own hop/prime recovery keeps retrying
         // and the terminal still accepts input meanwhile, so a reconnect (fresh

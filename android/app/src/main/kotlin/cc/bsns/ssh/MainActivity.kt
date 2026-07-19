@@ -1513,6 +1513,19 @@ fun ConnectScreen(
                         }
                     }) { Text("Install key") }
                 }
+
+                // Why Connect won't work yet, so an empty form reads as "fill this
+                // in", not a broken button (iOS ConnectView parity).
+                val connectHint = when {
+                    busy -> null
+                    host.isBlank() || user.isBlank() -> "Enter a host to connect over SSH."
+                    keys.isEmpty() && (useMosh || hasJump) -> "Add a key on the Keys tab to connect."
+                    keys.isEmpty() && password.isEmpty() -> "Enter a password or add a key on the Keys tab to connect."
+                    else -> null
+                }
+                connectHint?.let {
+                    Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         enabled = host.isNotBlank() && user.isNotBlank(),
