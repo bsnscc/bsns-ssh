@@ -75,3 +75,26 @@ hazard that made upstream ignore dirty rects — scroll-coalesced rects delivere
 with the wrong origin — is detected by intersection: a mis-offset rect misses
 the visible band entirely and falls back to the full-viewport draw, preserving
 upstream's safety behaviour.
+
+### 4. Native-feeling touch selection (long-press select + drag extend)
+
+`longPress(_:)`, `selectionMenuRequested`, and the `.ended` branch of
+`pointerSelectHandler`.
+
+Upstream's finger story was broken on modern iOS: long-press only popped a
+deprecated `UIMenuController` with an empty item list (invisible on iOS 16+),
+and no finger gesture could start or extend a selection at all — drag-to-select
+was wired to indirect pointers only. The app compensated with its own long-press
+recognizer to show a modern edit menu, and the two recognizers raced, making
+selection feel random. Practical result: double-tap word select and Select All
+were the only working touch selections.
+
+The patch makes long-press behave like iOS text views: press selects the word
+under the finger (with a selection haptic), dragging while pressed extends the
+selection live (word-granularity, auto-scrolling past the top/bottom edge),
+and lifting requests the edit menu. A long-press beginning near an endpoint of
+an existing selection adjusts that end instead of starting over. Menu
+presentation is delegated to the host app through the new
+`selectionMenuRequested` callback (falling back to the legacy path when unset),
+so the app presents a `UIEditMenuInteraction` menu at the selection and no
+longer needs a competing recognizer.

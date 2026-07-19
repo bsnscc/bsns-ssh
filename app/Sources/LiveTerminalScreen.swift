@@ -574,13 +574,21 @@ final class ZoomableTerminalView: TerminalView {
 
     func installZoomGestures() {
         addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:))))
-        // SwiftTerm starts text selection on long-press but offers Copy through the
-        // deprecated UIMenuController, which doesn't appear on iOS 16+. Add the
-        // modern edit menu and present it on long-press so selected text is copyable.
+        // Selection is handled by the terminal's own long-press (press selects a
+        // word, drag extends, lift asks for a menu). Present the MODERN edit menu
+        // when it asks — the built-in fallback is the deprecated UIMenuController,
+        // which never appears on iOS 16+. A second app-level long-press recognizer
+        // used to race the terminal's own and made selection feel coin-flip.
         let menu = UIEditMenuInteraction(delegate: self)
         addInteraction(menu)
         editMenu = menu
-        addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(showEditMenu(_:))))
+        selectionMenuRequested = { [weak self] region in
+            guard let self, let editMenu = self.editMenu else { return }
+            // Region is in this view's (content) coordinate space; aim the menu
+            // at the top edge of the selection.
+            let point = CGPoint(x: region.midX, y: region.minY)
+            editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+        }
         installRemoteScrollGesture()
         installImageDrop()
     }
@@ -685,15 +693,6 @@ final class ZoomableTerminalView: TerminalView {
         dropInteractionInstalled = true
         isUserInteractionEnabled = true
         addInteraction(UIDropInteraction(delegate: self))
-    }
-
-    @objc private func showEditMenu(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began, let editMenu else { return }
-        let point = gesture.location(in: self)
-        // Let SwiftTerm's own long-press set the selection first, then show Copy.
-        DispatchQueue.main.async {
-            editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
-        }
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {

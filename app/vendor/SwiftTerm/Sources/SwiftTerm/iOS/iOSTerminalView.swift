@@ -592,16 +592,68 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                        height: CGFloat (selection.end.row-selection.start.row+1)*cellDimension.height)
     }
     
+    /// bsns fork: when set, selection gestures ask the host app to present a
+    /// modern edit menu at the given content-space region instead of the
+    /// deprecated UIMenuController (which no longer appears on iOS 16+).
+    public var selectionMenuRequested: ((CGRect) -> Void)?
+
+    // bsns fork: native-feeling touch selection. Upstream's long-press only
+    // popped a (deprecated, empty) UIMenuController, and no finger gesture
+    // could start or extend a selection at all — drag-to-select was wired to
+    // indirect pointers only. Long-press now behaves like iOS text views:
+    // press selects the word under the finger, dragging while pressed extends
+    // the selection live (auto-scrolling at the edges), lifting presents the
+    // edit menu. A long-press starting near an endpoint of an existing
+    // selection adjusts that end instead of starting over.
     @objc func longPress (_ gestureRecognizer: UILongPressGestureRecognizer)
     {
-         if gestureRecognizer.state == .began {
-             let _ = self.becomeFirstResponder()
-             let tapLocation = gestureRecognizer.location(in: gestureRecognizer.view)
-             let tapRegion = makeContextMenuRegionForTap (point: tapLocation)
-             
-             showContextMenu (forRegion: tapRegion,
-                              pos: calculateTapHit (gesture: gestureRecognizer).grid)
-          }
+        func near (_ pos1: Position, _ pos2: Position) -> Bool {
+            return abs (pos1.col-pos2.col) < 3 && abs (pos1.row-pos2.row) < 2
+        }
+        let hit = calculateTapHit (gesture: gestureRecognizer).grid
+        switch gestureRecognizer.state {
+        case .began:
+            let _ = self.becomeFirstResponder()
+            if selection.active, near (hit, selection.start) {
+                selection.pivot = selection.end
+                selection.pivotExtend (bufferPosition: hit)
+            } else if selection.active, near (hit, selection.end) {
+                selection.pivot = selection.start
+                selection.pivotExtend (bufferPosition: hit)
+            } else {
+                selection.selectWordOrExpression (at: hit, in: terminal.displayBuffer)
+                selection.pivot = selection.start
+            }
+            UISelectionFeedbackGenerator ().selectionChanged ()
+            requestDisplay ()
+        case .changed:
+            selection.pivotExtend (bufferPosition: hit)
+            // Auto-scroll when the finger crosses the top or bottom edge so a
+            // selection can grow beyond the visible screen.
+            let absoluteY = gestureRecognizer.location (in: self).y - contentOffset.y
+            stopSelectionTimer ()
+            if absoluteY < 0 || absoluteY > bounds.height {
+                startSelectionTimer {
+                    let newPlace = CGRect (x: 0, y: max (0, self.contentOffset.y+absoluteY), width: self.bounds.width, height: self.bounds.height)
+                    self.scrollRectToVisible (newPlace, animated: true)
+                }
+            }
+            requestDisplay ()
+        case .ended:
+            stopSelectionTimer ()
+            if selection.active {
+                let region = makeContextMenuRegionForSelection ()
+                if let requestMenu = selectionMenuRequested {
+                    requestMenu (region)
+                } else {
+                    showContextMenu (forRegion: region, pos: hit)
+                }
+            }
+        case .cancelled, .failed:
+            stopSelectionTimer ()
+        default:
+            break
+        }
     }
     
     /// This controls whether the backspace should send ^? or ^H, the default is ^?
@@ -1062,7 +1114,12 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             requestDisplay()
         case .ended:
             if selection.active {
-                showContextMenu(forRegion: makeContextMenuRegionForSelection(), pos: hit)
+                let region = makeContextMenuRegionForSelection()
+                if let requestMenu = selectionMenuRequested {
+                    requestMenu(region)
+                } else {
+                    showContextMenu(forRegion: region, pos: hit)
+                }
             }
         case .cancelled:
             selection.selectNone()
