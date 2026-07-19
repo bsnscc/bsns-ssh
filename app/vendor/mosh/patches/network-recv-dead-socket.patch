@@ -1,0 +1,64 @@
+--- a/src/network/network.cc	2026-07-18 17:00:21
++++ b/src/network/network.cc	2026-07-18 17:00:20
+@@ -31,6 +31,8 @@
+ */
+ 
+ #include "config.h"
++
++#include <algorithm>
+ 
+ #include <sys/types.h>
+ #include <sys/socket.h>
+@@ -431,22 +433,50 @@
+ string Connection::recv( void )
+ {
+   assert( !socks.empty() );
++  /* [bsns.ssh] Mobile OSes invalidate a suspended app's UDP sockets: after
++     resume, the old socket can report readable to poll() forever while every
++     recvmsg() on it fails with a non-EAGAIN error. Upstream's behavior —
++     throwing on the first such error — then aborts EVERY receive pass at the
++     dead socket, so the newest (hopped) socket, where the roamed server's
++     replies actually arrive later in the deque, is never read: input flows
++     out, nothing ever displays. Instead, skip a dead OLD socket and prune it
++     after the pass; only a hard error on the newest socket (the one sends go
++     out on) still throws. */
++  std::vector< int > dead_socks;
++  bool got_payload = false;
++  string payload;
+   for ( std::deque< Socket >::const_iterator it = socks.begin();
+ 	it != socks.end();
+ 	it++ ) {
+-    string payload;
+     try {
+       payload = recv_one( it->fd());
++      got_payload = true;
++      break;
+     } catch ( NetworkException & e ) {
+       if ( (e.the_errno == EAGAIN)
+ 	   || (e.the_errno == EWOULDBLOCK) ) {
+ 	continue;
++      } else if ( it->fd() != sock() ) {
++	dead_socks.push_back( it->fd() );  /* dead old socket: skip and prune */
++	continue;
+       } else {
+ 	throw;
+       }
+     }
++  }
+ 
+-    /* succeeded */
++  if ( !dead_socks.empty() ) {
++    for ( std::deque< Socket >::iterator it = socks.begin();
++	  it != socks.end() && socks.size() > 1; ) {
++      if ( std::find( dead_socks.begin(), dead_socks.end(), it->fd() ) != dead_socks.end() ) {
++	it = socks.erase( it );  /* Socket dtor closes the fd */
++      } else {
++	it++;
++      }
++    }
++  }
++
++  if ( got_payload ) {
+     prune_sockets();
+     return payload;
+   }

@@ -71,5 +71,13 @@ cp "$HERE/config-ios.h" "$HERE/mosh-src/src/include/config.h"
 echo "==> applying networktransport hop() patch"
 patch -p1 -d "$HERE/mosh-src" < "$HERE/patches/networktransport-hop.patch"
 
+# recv() resilience: a suspended-then-invalidated UDP socket (mobile OSes do
+# this) fails recvmsg with a non-EAGAIN error while staying poll-readable;
+# upstream recv() throws at the first such socket, so the hopped socket's
+# datagrams behind it in the deque are never read — the frozen-resume bug.
+# Skip and prune dead old sockets instead.
+echo "==> applying network recv() dead-socket patch"
+patch -p1 -d "$HERE/mosh-src" < "$HERE/patches/network-recv-dead-socket.patch"
+
 echo "==> done. Source tree assembled under $HERE"
 rm -rf "$WORK"
