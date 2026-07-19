@@ -1148,15 +1148,31 @@ extension TerminalView {
         }
         // draw lines
         #if os(iOS) || os(visionOS)
-        // On iOS, use contentOffset.y to determine the first visible row rather than
+        // On iOS, use contentOffset.y to determine the visible row band rather than
         // dirtyRect.minY. UIKit coalesces dirty rects across scroll and data updates and
         // can deliver a rect with minY=0 even when the scroll position (contentOffset.y)
         // is non-zero. This causes SwiftTerm to draw scrollback-buffer rows at viewport
         // positions, producing garbled output. contentOffset.y is always correct because
         // the scroll view is kept in sync with yDisp (contentOffset.y == yDisp * cellHeight).
+        //
+        // bsns fork: within that visible band, honor a NARROW dirty rect — the
+        // row-region invalidation from updateDisplay — so a few changed rows
+        // don't redraw the whole viewport. The scroll-coalescing hazard above is
+        // detected by intersection: a mis-offset rect (content top while scrolled)
+        // misses the visible band entirely, and we fall back to the full viewport.
         let cellHeight = cellDimension.height
-        let firstRow = Int(contentOffset.y / cellHeight)
-        let lastRow = firstRow + Int(ceil(bounds.height / cellHeight))
+        let visibleFirst = Int(contentOffset.y / cellHeight)
+        let visibleLast = visibleFirst + Int(ceil(bounds.height / cellHeight))
+        var firstRow = visibleFirst
+        var lastRow = visibleLast
+        if dirtyRect.height < bounds.height - cellHeight {
+            let dirtyFirst = Int(floor(dirtyRect.minY / cellHeight))
+            let dirtyLast = Int(ceil(dirtyRect.maxY / cellHeight))
+            if dirtyLast >= visibleFirst && dirtyFirst <= visibleLast {
+                firstRow = max(visibleFirst, dirtyFirst)
+                lastRow = min(visibleLast, dirtyLast)
+            }
+        }
         #else
         // On Mac, we are drawing the terminal buffer
         let cellHeight = cellDimension.height
@@ -1632,17 +1648,21 @@ extension TerminalView {
         setNeedsDisplay(region)
 #endif
         #else
-        // TODO iOS: need to update the code above, but will do that when I get some real
-        // life data being fed into it.
+        // iOS: invalidate only the changed rows instead of the whole view. The
+        // update range is screen-relative (0..rows-1); the view draws in content
+        // space where contentOffset.y == yDisp * cellHeight, so the changed band
+        // starts at (yDisp + rowStart) rows from the content top. A busy tmux
+        // pane emits several small diffs per second — full-bounds invalidation
+        // made each one repaint every visible cell. (bsns fork)
         #if canImport(MetalKit)
         if metalView != nil {
             metalDirtyRange = metalVisibleRange()
             requestMetalDisplay()
         } else {
-            setNeedsDisplay(bounds)
+            setNeedsDisplay(iosRegion(forUpdateRows: rowStart, rowEnd))
         }
         #else
-        setNeedsDisplay(bounds)
+        setNeedsDisplay(iosRegion(forUpdateRows: rowStart, rowEnd))
         #endif
         #endif
 
@@ -1657,6 +1677,25 @@ extension TerminalView {
         }
     }
     
+    #if os(iOS) || os(visionOS)
+    /// Content-space rect covering screen-relative rows `rowStart...rowEnd`
+    /// (from `getUpdateRange`), padded by one row on each side so glyphs that
+    /// overhang their cell (descenders, box drawing) redraw cleanly. (bsns fork)
+    func iosRegion (forUpdateRows rowStart: Int, _ rowEnd: Int) -> CGRect
+    {
+        let cellHeight = cellDimension.height
+        guard cellHeight > 0 else { return bounds }
+        // yBase anchors the live screen in content space (same mapping the
+        // caret uses: content row = yBase + screen row). At the live tail
+        // yBase == yDisp; scrolled back, the changed rows are simply below the
+        // viewport and UIKit clips the invalidation away.
+        let yBase = terminal.displayBuffer.yBase
+        let top = CGFloat (yBase + rowStart - 1) * cellHeight
+        let height = CGFloat (rowEnd - rowStart + 3) * cellHeight
+        return CGRect (x: 0, y: max (0, top), width: bounds.width, height: height)
+    }
+    #endif
+
     func updateCursorPosition()
     {
         guard let caretView else { return }

@@ -15,8 +15,9 @@ macOS example apps, and the benchmark targets are intentionally dropped from
 2. Re-apply each patch listed here (search for the `bsns fork:` markers).
 3. `xcodegen generate && xcodebuild ... build` to confirm it still compiles.
 
-Pinned upstream: **1.13.0**. All patches live in
-`Sources/SwiftTerm/iOS/iOSTerminalView.swift` and are tagged with a `// bsns fork:`
+Pinned upstream: **1.13.0**. Patches live in
+`Sources/SwiftTerm/iOS/iOSTerminalView.swift` and
+`Sources/SwiftTerm/Apple/AppleTerminalView.swift`, tagged with a `bsns fork`
 comment so they're greppable.
 
 ## Patches
@@ -54,3 +55,23 @@ The patch forwards plain PageUp/PageDown to the remote as `ESC[5~` / `ESC[6~`
 (`EscapeSequences.cmdPageUp` / `cmdPageDown`), and reserves **Shift+PageUp/PageDown**
 for local-buffer scrolling. Both the normal and Kitty-keyboard-protocol code paths are
 patched so the behaviour is consistent regardless of negotiated keyboard mode.
+
+### 3. iOS region repaint (battery)
+
+`AppleTerminalView.updateDisplay` (iOS branch), `iosRegion(forUpdateRows:_:)`,
+and the row-band selection in `drawTerminalContents`.
+
+Upstream's iOS path invalidated the full view bounds on every feed (the macOS
+branch computes a dirty region; the iOS side was a `TODO`). A busy pane — e.g. a
+tmux window running a program with an animated status line — emits several small
+diffs per second, and each one repainted every visible cell plus filled the whole
+view with background first: identical pixels, ~20× the drawing work, a steady
+battery cost.
+
+The patch invalidates only the changed rows (content-space band anchored at
+`yBase`, ±1 row of padding for glyph overhang) and lets `drawTerminalContents`
+draw just that band when the incoming dirty rect is narrow. The known UIKit
+hazard that made upstream ignore dirty rects — scroll-coalesced rects delivered
+with the wrong origin — is detected by intersection: a mis-offset rect misses
+the visible band entirely and falls back to the full-viewport draw, preserving
+upstream's safety behaviour.
