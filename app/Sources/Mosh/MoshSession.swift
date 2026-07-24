@@ -52,6 +52,11 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private static let staleRecoveryHopInterval: TimeInterval = 4.0
     private static let staleRecoveryPollCeilingMs: Int32 = 250
     private static let maxRecvDrainPerWake = 64
+    // Render-batch window for passive output (latest-wins catch-up). Short
+    // enough that steady output still feels live (~12 fps), long enough that a
+    // burst of queued frames collapses into one diff. Typed-input echo bypasses
+    // the window entirely.
+    private static let drainMinInterval: TimeInterval = 0.08
     // How long a resumed session may look frozen before we fall back to a full
     // reconnect. Generous on purpose: mosh's own hop/prime recovery (driveStaleRecovery,
     // input recovery) keeps retrying every 1–4s and usually re-establishes on its own,
@@ -84,6 +89,8 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var lastInvalidReadableLogAt: Date?
     private var resumeStateNum: UInt64 = 0
     private var resumeInputPushSeq = 0
+    private var lastDrainAt = Date.distantPast
+    private var lastDrainedStateNum: UInt64 = 0
     private var roamWatchActive = false
     private var roamReconnectFired = false
     private var firstInputAfterResumeAt: Date?
@@ -345,7 +352,12 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             // so driveStaleRecovery() can re-prime/hop promptly instead of sleeping
             // up to a full second (or up to mosh's backed-off wait_ms).
             let silentBeforePoll = Date().timeIntervalSince(lastContactAt)
-            let pollCeiling: Int32 = silentBeforePoll > Self.staleThreshold ? Self.staleRecoveryPollCeilingMs : 1000
+            var pollCeiling: Int32 = silentBeforePoll > Self.staleThreshold ? Self.staleRecoveryPollCeilingMs : 1000
+            // An undrained state is waiting out the render-batch window — wake in
+            // time to render it rather than sleeping up to a full second.
+            if mosh_client_state_num(c) != lastDrainedStateNum {
+                pollCeiling = min(pollCeiling, Int32(Self.drainMinInterval * 1000 / 2))
+            }
             let timeout = max(1, min(mosh_client_wait_ms(c), pollCeiling))
             _ = fds.withUnsafeMutableBufferPointer { buf in
                 poll(buf.baseAddress, nfds_t(buf.count), Int32(timeout))
@@ -422,6 +434,27 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             if let sendErr = mosh_client_send_error(c) {
                 moshLog("send error: \(String(cString: sendErr)) silent=\(Int(Date().timeIntervalSince(lastContactAt)))s state=\(mosh_client_state_num(c))")
             }
+            // Latest-wins rendering: batch passive output on a short window so a
+            // catch-up burst renders as ONE diff to the newest state (drain_ansi
+            // collapses every state since the last drain) instead of replaying
+            // each intermediate frame — the slow "scrolling through history" on
+            // congested links. Typed input is exempt so its echo renders
+            // immediately, as are resume/refresh repaints and the no-new-state
+            // case (whose cheap nil drain keeps the error/recovery branches
+            // serviced). ACK/keepalive timing lives in recv/tick, not here.
+            let drainNow = Date()
+            let stateAdvanced = mosh_client_state_num(c) != lastDrainedStateNum
+            let drainDue = awaitingOutputForInputSeq != nil || resume || displayRefresh
+                || !stateAdvanced
+                || drainNow.timeIntervalSince(lastDrainAt) >= Self.drainMinInterval
+            guard drainDue else {
+                checkRoamWatch(c)
+                let staleSkip = Date().timeIntervalSince(lastContactAt) > Self.staleThreshold
+                if staleSkip != staleReported { staleReported = staleSkip; onLiveness?(staleSkip) }
+                continue
+            }
+            lastDrainAt = drainNow
+            defer { lastDrainedStateNum = mosh_client_state_num(c) }
             if let ansi = mosh_client_drain_ansi(c) {
                 let bytes = Array(String(cString: ansi).utf8)
                 free(ansi)
