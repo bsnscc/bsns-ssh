@@ -24,7 +24,17 @@ struct MoshHandle {
     uint64_t lastContactMs;   // monotonic time of the last datagram from the server
     int lastReadableDatagrams;
     int lastAcceptedPackets;
+    // Latest-wins render batching (mirrors iOS MoshSession.drainMinInterval):
+    // passive output is drained at most every DRAIN_MIN_INTERVAL_MS so a
+    // catch-up burst collapses into one diff to the newest state instead of
+    // replaying each intermediate frame. drainNow bypasses the window (typed
+    // input echo, resize, recovery repaints) and clears once a frame renders.
+    uint64_t lastDrainMs;
+    uint64_t lastDrainedState;
+    int drainNow;
 };
+
+const uint64_t DRAIN_MIN_INTERVAL_MS = 80;
 
 uint64_t nowMonoMs() {
     struct timespec ts;
@@ -75,6 +85,9 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshOpen(
     h->lastContactMs = nowMonoMs();
     h->lastReadableDatagrams = 0;
     h->lastAcceptedPackets = 0;
+    h->lastDrainMs = 0;
+    h->lastDrainedState = 0;
+    h->drainNow = 1;   // first frame paints immediately
     if (pipe(h->wake) == 0) {
         fcntl(h->wake[0], F_SETFL, O_NONBLOCK);
         fcntl(h->wake[1], F_SETFL, O_NONBLOCK);
@@ -103,6 +116,12 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshService(
     int waitMs = mosh_client_wait_ms(h->client);
     if (waitMs < 0) waitMs = 1000;
     if (maxMs >= 0 && maxMs < waitMs) waitMs = maxMs;
+    // An undrained state is waiting out the render-batch window — wake in time
+    // to render it rather than sleeping up to a full second.
+    if (mosh_client_state_num(h->client) != h->lastDrainedState &&
+        waitMs > (int)(DRAIN_MIN_INTERVAL_MS / 2)) {
+        waitMs = (int)(DRAIN_MIN_INTERVAL_MS / 2);
+    }
 
     // Poll EVERY mosh UDP socket, not just one: after a port hop mosh keeps the
     // old socket(s) briefly while sending on the newest, so polling a single fd
@@ -140,15 +159,29 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshService(
             if (accepted > 0) {
                 // First accepted peer packet after a stale gap: redraw the recovered
                 // framebuffer absolutely rather than diffing it against stale cells.
-                if (nowMonoMs() - h->lastContactMs > 8000) mosh_client_force_repaint(h->client);
+                if (nowMonoMs() - h->lastContactMs > 8000) {
+                    mosh_client_force_repaint(h->client);
+                    h->drainNow = 1;   // recovery repaint bypasses the batch window
+                }
                 h->lastContactMs = nowMonoMs();
             }
         }
     }
     mosh_client_tick(h->client);
 
+    // Latest-wins render batching: skip the drain while the window is open and
+    // a newer state is pending — the eventual drain diffs straight to the
+    // newest screen. The no-new-state case drains anyway (cheap nil).
+    uint64_t now = nowMonoMs();
+    int stateAdvanced = mosh_client_state_num(h->client) != h->lastDrainedState;
+    if (!h->drainNow && stateAdvanced && now - h->lastDrainMs < DRAIN_MIN_INTERVAL_MS) {
+        return nullptr;
+    }
+    h->lastDrainMs = now;
     char* ansi = mosh_client_drain_ansi(h->client);
+    h->lastDrainedState = mosh_client_state_num(h->client);
     if (!ansi) return nullptr;
+    h->drainNow = 0;   // a frame rendered; passive output re-enters the window
     size_t len = strlen(ansi);
     jbyteArray out = env->NewByteArray((jsize)len);
     if (out) env->SetByteArrayRegion(out, 0, (jsize)len, (const jbyte*)ansi);
@@ -219,6 +252,7 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshPush(
     jbyte* d = env->GetByteArrayElements(jdata, nullptr);
     mosh_client_push(h->client, (const char*)d, (int)len);
     env->ReleaseByteArrayElements(jdata, d, JNI_ABORT);
+    h->drainNow = 1;   // typed input: render its echo immediately (no batching)
 }
 
 JNIEXPORT void JNICALL
@@ -226,7 +260,10 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshResize(
     JNIEnv* env, jobject thiz, jlong handle, jint cols, jint rows) {
     (void)env; (void)thiz;
     MoshHandle* h = (MoshHandle*)(intptr_t)handle;
-    if (h && h->client) mosh_client_resize(h->client, cols, rows);
+    if (h && h->client) {
+        mosh_client_resize(h->client, cols, rows);
+        h->drainNow = 1;   // repaint at the new size immediately
+    }
 }
 
 // Poke the wake-pipe so a blocked nativeMoshService returns now (any thread).
