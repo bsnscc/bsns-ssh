@@ -4,6 +4,10 @@ import BsnsSSHCore
 /// Bootstraps a mosh session the way the `mosh` wrapper does: SSH in, run
 /// `mosh-server new`, and read the `MOSH CONNECT <port> <key>` line it prints.
 /// The UDP session then runs to the same host on that port (see `MoshSession`).
+/// The remote command (built in the core as `MoshServerCommand`, mirrored by the
+/// Android bootstrap) reaps the servers this device abandoned on that host, then
+/// starts a new one with an idle timeout so anything the reap misses still
+/// expires by itself.
 enum MoshBootstrap {
     enum Failure: Error, LocalizedError {
         case noConnectLine(String)
@@ -22,48 +26,44 @@ enum MoshBootstrap {
         }
     }
 
-    /// The command `mosh` runs on the server. `-s` binds to the SSH connection's
-    /// address; `-c 256` advertises 256-color support. Both `LANG` and `LC_ALL`
-    /// are forced to UTF-8: `LC_ALL` overrides any inherited/forwarded `LC_CTYPE`
-    /// (e.g. macOS's invalid `LC_CTYPE=UTF-8`), without which mosh-server drops to
-    /// non-UTF-8 mode and renders every multibyte char (smart quotes, dashes,
-    /// spinner glyphs) as `?`. Mirrors the Android bootstrap.
-    static let serverCommandBase = "mosh-server new -s -c 256 -l LANG=en_US.UTF-8 -l LC_ALL=en_US.UTF-8"
-
-    /// The remote command to launch. With a tmux session name we append a trailing
-    /// command so the user lands in (and every reconnect re-attaches) a persistent
-    /// `tmux new-session -A -s <name>`. If tmux isn't found it falls back to a normal
-    /// login shell, so a typo or a tmux-less host never yields a dead session. Uses
-    /// portable `sh -c` (no `-l`: /bin/sh is often dash, which lacks a login flag);
-    /// `-l` is applied only to the fallback `$SHELL` (bash/zsh, where it's supported).
-    /// The name is sanitized to a shell-safe charset, so the single-quoted command
-    /// needs no further escaping.
-    static func serverCommand(tmux: String?) -> String {
-        guard let name = sanitizedTmuxName(tmux) else { return serverCommandBase }
-        return serverCommandBase
-            + " -- sh -c 'tmux new-session -A -s \(name) || exec ${SHELL:-/bin/sh} -l'"
+    /// Re-exported for the connect form, which sanitizes the tmux name the same
+    /// way before saving it on the host.
+    static func sanitizedTmuxName(_ raw: String?) -> String? {
+        MoshServerCommand.sanitizedTmuxName(raw)
     }
 
-    /// tmux session names can't contain `.` or `:`; restrict to a conservative
-    /// shell-safe set so the command is injection-proof and tmux-legal. Empty after
-    /// filtering ⇒ no tmux.
-    static func sanitizedTmuxName(_ raw: String?) -> String? {
-        guard let raw else { return nil }
-        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
-        let cleaned = String(raw.filter { allowed.contains($0) })
-        return cleaned.isEmpty ? nil : cleaned
+    /// The user's `MOSH_SERVER_NETWORK_TMOUT`, in seconds (0 = never expire).
+    static var idleTimeoutSeconds: Int {
+        let hours = UserDefaults.standard.integer(forKey: SettingsKey.moshIdleTimeoutHours)
+        return max(0, hours) * 3600
     }
 
     /// SSH to `spec.host` and obtain the mosh connect parameters. `SSHShellError`
     /// (host-key, auth, …) is rethrown as-is so the caller's TOFU/auth handling
     /// applies; only the parse step gets a mosh-specific error.
-    static func connect(spec: TerminalSession.Spec) async throws -> MoshConnect {
+    ///
+    /// `sessionID` ties the server we're about to start to the session that owns
+    /// it. Re-bootstrapping the same session first abandons its previous server:
+    /// mosh state is server-side, but a *new* client can't resume an old server
+    /// (replay protection rejects a sequence that restarts at 0), so that one is
+    /// unreachable from here on and should be reaped rather than leaked.
+    static func connect(spec: TerminalSession.Spec, sessionID: UUID) async throws -> MoshConnect {
+        let registry = MoshServerRegistry.shared
+        let hostKey = MoshServerRegistry.hostKey(host: spec.host, port: spec.port, user: spec.user)
+        registry.abandon(sessionID: sessionID)
+        let reap = registry.reapablePIDs(hostKey: hostKey)
+        if !reap.isEmpty { DiagLog.log("mosh", "reaping abandoned mosh-server pids \(reap) on \(hostKey)") }
+        let command = MoshServerCommand.build(tmux: spec.tmuxSession,
+                                              idleTimeoutSeconds: idleTimeoutSeconds,
+                                              reapPIDs: reap)
         let output: String
         do {
             output = try await SSHShell.execCapturing(
                 host: spec.host, port: spec.port, user: spec.user,
                 agent: spec.agent, password: nil,
-                command: serverCommand(tmux: spec.tmuxSession), knownHosts: spec.knownHosts, keyBlob: spec.keyBlob)
+                command: command, knownHosts: spec.knownHosts, keyBlob: spec.keyBlob,
+                // The detached PID we need for the next reap is printed on stderr.
+                includeStderr: true)
         } catch let e as SSHShellError {
             throw e
         } catch {
@@ -71,6 +71,10 @@ enum MoshBootstrap {
         }
         guard let connect = MoshConnect.parse(output) else {
             throw Failure.noConnectLine(output)
+        }
+        if let pid = connect.pid {
+            registry.record(pid: pid, hostKey: hostKey, sessionID: sessionID)
+            DiagLog.log("mosh", "mosh-server pid \(pid) on \(hostKey)")
         }
         return connect
     }

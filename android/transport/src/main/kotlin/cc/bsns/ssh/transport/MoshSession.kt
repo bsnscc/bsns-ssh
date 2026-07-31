@@ -33,6 +33,13 @@ class MoshSession(
     /** Fires when an Android sleep/resume leaves mosh accepting local input but
      *  fresh remote state never returns. The holder re-bootstraps mosh. */
     var onRoamFailed: (() -> Unit)? = null
+    /** Fires once the transport is torn down, with whether the server acknowledged
+     *  our shutdown request (true = mosh-server is exiting and released its PTY;
+     *  false = it's still out there and someone has to reap it). */
+    var onFinished: ((Boolean) -> Unit)? = null
+    /** The PID the bootstrap captured from `[mosh-server detached, pid = …]`, for
+     *  the abandoned-server registry. 0 = the server didn't report one. */
+    var serverPid: Int = 0
     private var staleReported = false
 
     private val bridge = MoshBridge()
@@ -160,10 +167,30 @@ class MoshSession(
                 lastLoopFinishedAtMs = SystemClock.elapsedRealtime()
             }
         } finally {
+            // Still on the owner thread (mosh isn't thread-safe), so the shutdown
+            // handshake runs here, before the transport is freed.
+            val acknowledged = requestServerShutdown()
             val err = if (handle != 0L) bridge.nativeMoshLastError(handle) else null
             if (handle != 0L) { bridge.nativeMoshClose(handle); handle = 0L }
+            onFinished?.invoke(acknowledged)
             onClosed?.invoke(err)
         }
+    }
+
+    /** Ask the server to quit and pump until it acknowledges or the grace period
+     *  runs out. A mosh-server otherwise keeps running (holding a PTY) waiting
+     *  for a client that isn't coming back; an unacknowledged one is left for the
+     *  registry to reap on the next connect. */
+    private fun requestServerShutdown(): Boolean {
+        if (handle == 0L) return false
+        bridge.nativeMoshStartShutdown(handle)
+        val deadline = SystemClock.elapsedRealtime() + SHUTDOWN_GRACE_MS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            bridge.nativeMoshService(handle, SHUTDOWN_POLL_MS)
+            val state = bridge.nativeMoshShutdownState(handle)
+            if (state != 0) return state > 0
+        }
+        return false
     }
 
     private fun armRoamWatch() {
@@ -221,6 +248,12 @@ class MoshSession(
         // and the terminal still accepts input meanwhile, so a reconnect (fresh
         // mosh-server, tmux re-attach) is the last resort. Too-eager thresholds abandon
         // a slow-but-recovering resume before mosh gets there.
+        // How long a close waits for the server to acknowledge the shutdown before
+        // tearing down anyway. Short: the session is already gone from the UI's
+        // point of view, and an unacknowledged server is reaped by the next
+        // connect (and expires on its own via MOSH_SERVER_NETWORK_TMOUT).
+        const val SHUTDOWN_GRACE_MS = 1500L
+        const val SHUTDOWN_POLL_MS = 100
         const val ROAM_NO_PEER_RECONNECT_DELAY_MS = 8000L
         const val ROAM_FROZEN_STATE_RECONNECT_DELAY_MS = 12000L
     }

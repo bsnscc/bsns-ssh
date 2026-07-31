@@ -329,10 +329,17 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         Task {
             do {
                 if spec.useMosh {
-                    let connect = try await MoshBootstrap.connect(spec: spec)
+                    // Bootstrapping again means this session's previous mosh-server
+                    // can never be reached again (a new client can't resume it), so
+                    // the bootstrap reaps it along the way — see MoshBootstrap.
+                    let connect = try await MoshBootstrap.connect(spec: spec, sessionID: self.id)
                     let mosh = MoshSession()
+                    mosh.serverPID = connect.pid
                     self.wire(mosh)
                     if let err = mosh.open(host: spec.host, port: connect.port, key: connect.key, cols: cols, rows: rows) {
+                        // The server is up but we never reached it — reap it next time
+                        // rather than leaving it to sit out its idle timeout.
+                        if let pid = connect.pid { MoshServerRegistry.shared.abandon(pid: pid) }
                         throw MoshBootstrap.Failure.noConnectLine(err)
                     }
                     self.lock.withLock { self.transport = mosh }
@@ -368,6 +375,15 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             }
             mosh.onRoamFailed = { [weak self] in
                 DispatchQueue.main.async { self?.handleMoshRoamFailed() }
+            }
+            // The transport is gone: either the server acknowledged our shutdown
+            // (it's exiting, nothing to clean up) or it's still running on the
+            // host with nobody able to reach it — record that so the next connect
+            // reaps it instead of leaving it holding a PTY.
+            mosh.onFinished = { [weak mosh] acknowledged in
+                guard let pid = mosh?.serverPID else { return }
+                if acknowledged { MoshServerRegistry.shared.forget(pid: pid) }
+                else { MoshServerRegistry.shared.abandon(pid: pid) }
             }
         }
     }

@@ -55,6 +55,15 @@ void mosh_client_prime_active_retry(MoshClient* c);
 /// desynced display (wrong row count / gap) after the app was backgrounded.
 void mosh_client_force_repaint(MoshClient* c);
 
+/// Ask the server to shut down (what upstream mosh does when the user quits).
+/// mosh-server exits and releases its PTY as soon as it acknowledges; without
+/// this it keeps running, waiting for a client that will never return. Keep
+/// calling tick/recv afterwards until mosh_client_shutdown_state() is non-zero.
+void mosh_client_start_shutdown(MoshClient* c);
+/// 1 = the server acknowledged the shutdown (it is exiting), -1 = we gave up
+/// waiting for the acknowledgement, 0 = still in progress / never requested.
+int mosh_client_shutdown_state(MoshClient* c);
+
 /// Queue local input bytes / a terminal resize to send to the server.
 void mosh_client_push(MoshClient* c, const char* bytes, int len);
 void mosh_client_resize(MoshClient* c, int cols, int rows);

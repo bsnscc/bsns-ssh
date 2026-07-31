@@ -20,6 +20,7 @@ enum SettingsKey {
     static let screenScrollSequence = "input.screenScrollSequence"
     static let multiplexer = "input.multiplexer"           // which copy/scroll buttons to show
     static let keepAliveInterval = "session.keepAliveInterval"
+    static let moshIdleTimeoutHours = "session.moshIdleTimeoutHours"   // mosh-server self-expiry (0 = never)
     static let terminalType = "session.terminalType"
     static let appLock = "security.appLock"
     static let commandHistory = "privacy.commandHistory"   // record run commands locally
@@ -44,6 +45,7 @@ enum SettingsKey {
             screenScrollSequence: "C-a [",
             multiplexer: MultiplexerPref.both.rawValue,
             keepAliveInterval: 30,
+            moshIdleTimeoutHours: 24,
             terminalType: "xterm-256color",
             appLock: false,
             commandHistory: true,

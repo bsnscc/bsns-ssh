@@ -118,3 +118,43 @@ only the toolchain and `config.h` differ:
   input reaches the native push. Sustained live session is on-device-pending — the
   Docker-Desktop-Mac UDP-publish + emulator double-NAT collapses the return path
   after the handshake. Same on-device-only gate as iOS.
+
+## Server lifecycle: not leaking mosh-servers (2026-07-31)
+
+A `mosh-server` outlives its client on purpose — that's what lets a session
+resume after a network change or a day in your pocket. The cost is that a client
+which can never come back leaves it running forever, holding a PTY; enough of
+those and the host can't allocate one at all (`openpty: No such file or
+directory`). Nothing on the client can revive such a server: a fresh client
+starts its crypto sequence at 0 and the server's replay protection rejects it.
+Ours are made reapable three ways, all client-side:
+
+1. **A graceful shutdown on disconnect.** Closing a session asks the server to
+   quit over the mosh transport (`mosh_client_start_shutdown` →
+   `Transport::start_shutdown`, pumped until acknowledged or ~1.5 s), the way
+   upstream's frontend does on quit. The server exits and releases its PTY
+   immediately. Backgrounded clients skip this — the UDP transport is off-limits
+   there — and fall through to (2).
+2. **A targeted reap on the next connect.** Every server we start is recorded
+   with the PID it prints as it detaches (`[mosh-server detached, pid = …]`, on
+   *stderr* — hence both streams are captured). A server becomes *abandoned* when
+   nothing can reach it any more: the app relaunched, a resume failed and we
+   re-bootstrapped, or the transport tore down without an acknowledged shutdown.
+   The next bootstrap to that host prefixes its command with a reaper that checks
+   `ps -p <pid> -o comm=` and sends `SIGUSR1`. Because every server is launched
+   with `MOSH_SERVER_SIGNAL_TMOUT=60`, that signal is honoured only by a server
+   idle for at least a minute — it can never take down a session that is actually
+   in use, including one attached from another device. Reaps are retried across a
+   few connects, since a server abandoned seconds ago hasn't been idle long
+   enough to obey yet.
+3. **An idle timeout as the backstop.** `MOSH_SERVER_NETWORK_TMOUT` (Settings →
+   Sessions, default 24 h, `0` = never) makes a server exit on its own once no
+   client has been in touch for that long. Both variables are read by
+   *mosh-server itself*, so they go in an `env` prefix — mosh's `-l` flag only
+   populates the child shell's environment. With a tmux session set, expiry costs
+   nothing: the work lives in the tmux server and reconnecting re-attaches it.
+
+Command construction is pure and unit-tested (`MoshServerCommand` +
+`MoshServerCommandTests` in the core, `MoshBootstrap`/`MoshBootstrapTest` on
+Android); the registries (`MoshServerRegistry`, one per platform) only ever
+signal PIDs they recorded and have marked abandoned.

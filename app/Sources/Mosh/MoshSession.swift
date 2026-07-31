@@ -42,6 +42,21 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         get { lock.withLock { onRoamFailedHandler } }
         set { lock.withLock { onRoamFailedHandler = newValue } }
     }
+    /// Fires once the transport is torn down, with whether the server acknowledged
+    /// our shutdown request (`true` = mosh-server is exiting and released its PTY;
+    /// `false` = it is still out there and someone has to reap it).
+    var onFinished: (@Sendable (Bool) -> Void)? {
+        get { lock.withLock { onFinishedHandler } }
+        set { lock.withLock { onFinishedHandler = newValue } }
+    }
+    /// The PID the bootstrap captured from `[mosh-server detached, pid = …]`, so
+    /// the owner can tell `MoshServerRegistry` whether this server released its
+    /// PTY on the way out or still needs reaping. nil if the server didn't
+    /// report one.
+    var serverPID: Int32? {
+        get { lock.withLock { serverPIDValue } }
+        set { lock.withLock { serverPIDValue = newValue } }
+    }
     private static let staleThreshold: TimeInterval = 8
     private static let postResumeInputRecoveryWindow: TimeInterval = 120
     private static let inputRecoveryDelay: TimeInterval = 0.9
@@ -65,12 +80,19 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     // abandon a slow-but-recovering cellular resume before mosh gets there.
     private static let roamNoPeerReconnectDelay: TimeInterval = 8.0
     private static let roamFrozenStateReconnectDelay: TimeInterval = 12.0
+    // How long a user-initiated disconnect waits for the server to acknowledge the
+    // shutdown before giving up and tearing down anyway. Short: the session is
+    // already going away on screen, and an unacknowledged server is reaped by the
+    // next connect (and expires on its own via MOSH_SERVER_NETWORK_TMOUT).
+    private static let shutdownGrace: TimeInterval = 1.5
 
     private let queue = DispatchQueue(label: "cc.bsns.ssh.mosh")
     private var onOutputHandler: (@Sendable (ArraySlice<UInt8>) -> Void)?
     private var onClosedHandler: (@Sendable (String?) -> Void)?
     private var onLivenessHandler: (@Sendable (Bool) -> Void)?
     private var onRoamFailedHandler: (@Sendable () -> Void)?
+    private var onFinishedHandler: (@Sendable (Bool) -> Void)?
+    private var serverPIDValue: Int32?
     private var client: OpaquePointer?
     private var lastContactAt = Date()
     private var staleReported = false
@@ -96,6 +118,10 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var firstInputAfterResumeAt: Date?
     private var readableDatagramsSinceResume = 0
     private var acceptedPacketsSinceResume = 0
+    // Graceful-shutdown handshake state; touched only on the run-loop queue.
+    private var shutdownStarted = false
+    private var shutdownDeadline: Date?
+    private var shutdownAcked = false
 
     // Connection params, kept so we can re-create the client socket after iOS
     // suspends us in the background (the mosh-server keeps running, so a fresh
@@ -249,7 +275,11 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             }
             lock.unlock()
 
-            if stop { break }
+            // A disconnect asks the SERVER to shut down first (it would otherwise
+            // keep running and holding a PTY, waiting for a client that isn't
+            // coming back), then keeps pumping until it acknowledges or the grace
+            // period expires.
+            if stop, !advanceShutdown(c, transportAllowed: transportAllowed) { break }
             guard transportAllowed else {
                 waitForWakeOnly()
                 continue
@@ -358,6 +388,10 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             if mosh_client_state_num(c) != lastDrainedStateNum {
                 pollCeiling = min(pollCeiling, Int32(Self.drainMinInterval * 1000 / 2))
             }
+            // Mid-shutdown: check the acknowledgement (and the grace deadline)
+            // promptly rather than sleeping through it — the session is already
+            // gone from the UI's point of view.
+            if shutdownStarted { pollCeiling = min(pollCeiling, 100) }
             let timeout = max(1, min(mosh_client_wait_ms(c), pollCeiling))
             _ = fds.withUnsafeMutableBufferPointer { buf in
                 poll(buf.baseAddress, nfds_t(buf.count), Int32(timeout))
@@ -533,6 +567,38 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         teardown()
     }
 
+    /// Drive the shutdown handshake. Returns false when the run loop should stop:
+    /// the server acknowledged, we gave up waiting, or we're in the background
+    /// (where the UDP transport is off-limits — touching a suspended socket has
+    /// killed the process before; the abandoned server is reaped by the next
+    /// connect instead).
+    private func advanceShutdown(_ c: OpaquePointer, transportAllowed: Bool) -> Bool {
+        guard transportAllowed else {
+            if !shutdownStarted { moshLog("shutdown skipped (backgrounded)") }
+            return false
+        }
+        if !shutdownStarted {
+            shutdownStarted = true
+            shutdownDeadline = Date().addingTimeInterval(Self.shutdownGrace)
+            mosh_client_freeze_time()
+            mosh_client_start_shutdown(c)
+            mosh_client_tick(c)
+            moshLog("shutdown requested state=\(mosh_client_state_num(c))")
+            return true
+        }
+        let state = mosh_client_shutdown_state(c)
+        if state != 0 {
+            shutdownAcked = state > 0
+            moshLog("shutdown \(shutdownAcked ? "acknowledged — server exiting" : "unacknowledged")")
+            return false
+        }
+        if let deadline = shutdownDeadline, Date() >= deadline {
+            moshLog("shutdown timed out after \(Self.shutdownGrace)s")
+            return false
+        }
+        return true
+    }
+
     private func armRoamWatch(_ c: OpaquePointer) {
         resumeStateNum = mosh_client_state_num(c)
         resumeInputPushSeq = inputPushSeq
@@ -666,9 +732,11 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         let notify = !closeNotified
         closeNotified = true
         let closed = onClosedHandler
+        let finished = onFinishedHandler
         lock.unlock()
         if readFD >= 0 { close(readFD) }
         if writeFD >= 0 { close(writeFD) }
+        finished?(shutdownAcked)     // did the server release its PTY, or must it be reaped?
         if notify { closed?(nil) }   // user-initiated stop = clean
     }
 

@@ -14,6 +14,30 @@ final class MoshConnectTests: XCTestCase {
         XCTAssertEqual(c, MoshConnect(port: "60001", key: "iX0Cr6iwnGdazeAKfSEzQg"))
     }
 
+    func testCapturesTheDetachedServerPID() {
+        // The pid line goes to STDERR, so the bootstrap must capture both streams;
+        // it's how we later reap a server we can no longer reach.
+        let out = """
+        MOSH CONNECT 60001 iX0Cr6iwnGdazeAKfSEzQg
+
+        mosh-server (mosh 1.4.0) [build mosh 1.4.0]
+        [mosh-server detached, pid = 31337]
+        """
+        XCTAssertEqual(MoshConnect.parse(out)?.pid, 31337)
+        XCTAssertEqual(MoshConnect.parsePID("[mosh-server detached, pid=42]"), 42)
+    }
+
+    func testMissingPIDLineStillConnects() {
+        // No pid (stderr not captured, or a server that words the line
+        // differently) must never fail the connect — we just lose the targeted
+        // reap and fall back to the idle timeout.
+        let c = MoshConnect.parse("MOSH CONNECT 60001 iX0Cr6iwnGdazeAKfSEzQg\n")
+        XCTAssertEqual(c?.port, "60001")
+        XCTAssertNil(c?.pid)
+        XCTAssertNil(MoshConnect.parsePID("[mosh-server detached, pid = nope]"))
+        XCTAssertNil(MoshConnect.parsePID("[mosh-server detached, pid = 0]"))
+    }
+
     func testIgnoresLeadingNoise() {
         let out = "Warning: Permanently added host\nMOSH CONNECT 1234 abcdefghijklmnopqrstuv\n"
         XCTAssertEqual(MoshConnect.parse(out)?.port, "1234")

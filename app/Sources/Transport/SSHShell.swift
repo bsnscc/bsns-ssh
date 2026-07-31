@@ -539,20 +539,23 @@ public final class SSHShell: @unchecked Sendable {
         }
     }
 
-    /// Run a command over SSH (agent or password auth) and return its stdout.
-    /// Used to bootstrap mosh (`mosh-server new` prints `MOSH CONNECT ...`).
+    /// Run a command over SSH (agent or password auth) and return its output.
+    /// Used to bootstrap mosh (`mosh-server new` prints `MOSH CONNECT ...` on
+    /// stdout and its detached PID on stderr — pass `includeStderr` for both).
     public static func execCapturing(host: String, port: UInt16, user: String,
                                      agent: Agent?, password: String?,
                                      command: String, knownHosts: KnownHosts,
-                                     keyBlob: Data? = nil) async throws -> String {
+                                     keyBlob: Data? = nil,
+                                     includeStderr: Bool = false) async throws -> String {
         let identities = agent == nil ? [] : Self.restrict(await agent!.identities(), to: keyBlob)
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    cont.resume(returning: try execBlocking(host: host, port: port, user: user,
-                                                            agent: agent, identities: identities,
-                                                            password: password, command: command,
-                                                            knownHosts: knownHosts))
+                    let result = try runExec(host: host, port: port, user: user,
+                                             agent: agent, identities: identities,
+                                             password: password, command: command,
+                                             knownHosts: knownHosts)
+                    cont.resume(returning: includeStderr ? result.combinedString : result.stdoutString)
                 } catch { cont.resume(throwing: error) }
             }
         }
@@ -659,18 +662,16 @@ public final class SSHShell: @unchecked Sendable {
         var exitStatus: Int32 = -1
         var exitSignal: String?
         var stdoutString: String { String(decoding: stdout, as: UTF8.self) }
+        var stderrString: String { String(decoding: stderr, as: UTF8.self) }
+        /// Both streams, stdout first. `mosh-server` splits what we need across
+        /// them — `MOSH CONNECT` on stdout, `[mosh-server detached, pid = …]` on
+        /// stderr — and the parsers scan line-wise, so interleaving is harmless.
+        var combinedString: String { stdoutString + "\n" + stderrString }
     }
 
     /// Generous per-stream cap. mosh's `MOSH CONNECT` line is tiny, but a server
     /// MOTD/banner echoed before it can be sizeable — don't truncate it away.
     private static let execStreamCap = 256 * 1024
-
-    private static func execBlocking(host: String, port: UInt16, user: String,
-                                     agent: Agent?, identities: [SSHPublicKey], password: String?,
-                                     command: String, knownHosts: KnownHosts) throws -> String {
-        try runExec(host: host, port: port, user: user, agent: agent, identities: identities,
-                    password: password, command: command, knownHosts: knownHosts).stdoutString
-    }
 
     /// Run `command` to completion and return stdout, stderr, and exit status.
     /// Both streams are drained to channel EOF — reading only stdout (the old

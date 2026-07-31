@@ -116,6 +116,11 @@ class MainActivity : FragmentActivity() {
         // Set the secure flag up front so the very first recents snapshot is
         // protected — don't wait for a resume round-trip (a privacy guarantee).
         applySecureFlag(window, SettingsStore(this).appLock)
+        // Any mosh-server started by a previous run of the app is orphaned: its
+        // client's crypto state died with the process, so nothing here can reach
+        // it again. Mark them reapable by the next connect to that host, or they
+        // sit on the host holding a PTY until their idle timeout.
+        MoshServerRegistry(this).markAllAbandonedFromPreviousRun()
         // Brand-tinted dark scheme: the icon's #00C29C accent on the #0F0F0F near-black,
         // so buttons, switches, and selected states match the icon + the iOS app.
         setContent {
@@ -1229,14 +1234,25 @@ fun ConnectScreen(
         // Captures why a bootstrap attempt failed (set + read on the same worker
         // thread, where the native per-thread open-reason is valid).
         var bootstrapError: String? = null
+        // A mosh-server we abandon (app killed, or a resume that failed and
+        // re-bootstrapped) can never be reached again — a new client restarts the
+        // crypto sequence at 0 and the server rejects it — so it would keep
+        // running and holding a PTY. Tie each server we start to this session id
+        // so the next bootstrap can ask the abandoned ones to quit.
+        val sessionId = java.util.UUID.randomUUID().toString()
+        val registry = MoshServerRegistry(context)
+        val hostKey = MoshServerRegistry.hostKey(host, p, user)
+        val idleTimeoutSeconds = SettingsStore(context).moshIdleTimeoutHours * 3600
         val factory: () -> TerminalTransport? = {
             bootstrapError = null
+            registry.abandon(sessionId)   // re-bootstrapping ⇒ our previous server is orphaned
+            val cmd = MoshBootstrap.serverCommand(idleTimeoutSeconds, registry.reapablePids(hostKey))
             val bridge = SshBridge()
             val out = if (skPem != null)
                 bridge.nativeAuthAndExecSk(host, p, user, key.publicKeyBlob, skPem, key.signer,
-                    MoshBootstrap.SERVER_CMD, blob)
+                    cmd, blob)
             else bridge.nativeAuthAndExec(host, p, user, key.publicKeyBlob, key.signer,
-                MoshBootstrap.SERVER_CMD, blob)
+                cmd, blob)
             when {
                 // null = the SSH side failed (couldn't reach / wrong key / host-key
                 // mismatch). Report THAT, not a misleading "is mosh on the host?".
@@ -1253,8 +1269,21 @@ fun ConnectScreen(
                         }
                         else -> {
                             val m = MoshSession(host, conn.port, conn.key)
+                            m.serverPid = conn.pid
+                            registry.record(conn.pid, hostKey, sessionId)
+                            // On teardown the server either acknowledged our shutdown
+                            // (it's exiting) or it's still out there needing a reap.
+                            m.onFinished = { acknowledged ->
+                                if (m.serverPid > 0) {
+                                    if (acknowledged) registry.forget(m.serverPid) else registry.abandon(m.serverPid)
+                                }
+                            }
                             if (m.open(80, 24)) m
-                            else { bootstrapError = "reached the host, but couldn't open the mosh UDP session"; null }
+                            else {
+                                registry.abandon(conn.pid)   // started but unreachable — reap it next time
+                                bootstrapError = "reached the host, but couldn't open the mosh UDP session"
+                                null
+                            }
                         }
                     }
                 }

@@ -296,13 +296,36 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeInstallKey(
 //   - drain BOTH stdout (stream 0) and stderr (stream 1) until channel EOF — a
 //     single 0-read is NOT EOF, and a chatty stderr left unread can fill the
 //     window and stall the exec, so we read both each pass
-//   - stdout grows up to a generous cap (256 KiB) so a preamble before
-//     MOSH CONNECT isn't truncated; stderr is drained but discarded
+//   - output grows up to a generous cap (256 KiB) so a preamble before
+//     MOSH CONNECT isn't truncated; BOTH streams are captured — mosh-server
+//     splits what the bootstrap needs across them (MOSH CONNECT on stdout,
+//     `[mosh-server detached, pid = …]` on stderr, which is how an abandoned
+//     server is later reaped), and a stream switch starts a new line so a
+//     splice can never corrupt the line the caller parses
 //   - then wait_closed + read the remote exit status
-// Returns a malloc'd NUL-terminated stdout buffer the caller must free (NULL on
+// Returns a malloc'd NUL-terminated output buffer the caller must free (NULL on
 // channel_exec failure). g_open_reason is set to OPEN_OK when the SSH side
 // genuinely ran the command; OPEN_NO_SHELL if the exec request itself failed.
-#define EXEC_STDOUT_CAP (256 * 1024)
+#define EXEC_OUTPUT_CAP (256 * 1024)
+
+// Append captured bytes, growing the buffer up to the cap. Past the cap we keep
+// draining the channel but discard, so a window can't stall. Returns 0 only on
+// allocation failure (the caller then gives up on the capture).
+static int exec_append(char** out, size_t* cap, size_t* len, const char* src, size_t n) {
+    if (*len >= EXEC_OUTPUT_CAP) return 1;
+    size_t room = EXEC_OUTPUT_CAP - *len;
+    size_t take = n < room ? n : room;
+    if (*len + take + 1 > *cap) {
+        size_t want = *cap;
+        while (*len + take + 1 > want) want *= 2;
+        if (want > EXEC_OUTPUT_CAP + 1) want = EXEC_OUTPUT_CAP + 1;
+        char* nb = (char*)realloc(*out, want);
+        if (!nb) return 0;
+        *out = nb; *cap = want;
+    }
+    memcpy(*out + *len, src, take); *len += take;
+    return 1;
+}
 
 static char* exec_capture(LIBSSH2_CHANNEL* c, const char* cmd) {
     if (libssh2_channel_exec(c, cmd) != 0) {
@@ -313,6 +336,7 @@ static char* exec_capture(LIBSSH2_CHANNEL* c, const char* cmd) {
     char* out = (char*)malloc(cap);
     if (!out) { g_open_reason = OPEN_NO_SHELL; return NULL; }
     char buf[8192];
+    int last_stream = 0;   // which stream the tail of the buffer came from
     // Blocking session: read both streams until the channel reports EOF, draining
     // fairly so neither stream's window can wedge the other.
     while (!libssh2_channel_eof(c)) {
@@ -321,27 +345,25 @@ static char* exec_capture(LIBSSH2_CHANNEL* c, const char* cmd) {
         ssize_t n = libssh2_channel_read_ex(c, 0, buf, sizeof(buf));
         if (n > 0) {
             progress = 1;
-            if (len < EXEC_STDOUT_CAP) {
-                size_t room = EXEC_STDOUT_CAP - len;
-                size_t take = (size_t)n < room ? (size_t)n : room;
-                if (len + take + 1 > cap) {
-                    while (len + take + 1 > cap) cap *= 2;
-                    if (cap > EXEC_STDOUT_CAP + 1) cap = EXEC_STDOUT_CAP + 1;
-                    char* nb = (char*)realloc(out, cap);
-                    if (!nb) { free(out); g_open_reason = OPEN_NO_SHELL; return NULL; }
-                    out = nb;
-                }
-                memcpy(out + len, buf, take); len += take;
-            }
-            // beyond the cap we keep draining stdout but discard, so the window
-            // can't stall and stderr stays serviceable
+            if (last_stream != 0 && len > 0 && out[len - 1] != '\n' &&
+                !exec_append(&out, &cap, &len, "\n", 1)) { free(out); g_open_reason = OPEN_NO_SHELL; return NULL; }
+            last_stream = 0;
+            if (!exec_append(&out, &cap, &len, buf, (size_t)n)) { free(out); g_open_reason = OPEN_NO_SHELL; return NULL; }
         } else if (n < 0 && n != LIBSSH2_ERROR_EAGAIN) {
             break;   // hard read error
         }
-        // stderr (stream 1) → drained (discarded) so it can't fill the window and stall
+        // stderr (stream 1) → captured too: the `[mosh-server detached, pid = …]`
+        // line the bootstrap needs is printed there.
         ssize_t e = libssh2_channel_read_ex(c, SSH_EXTENDED_DATA_STDERR, buf, sizeof(buf));
-        if (e > 0) progress = 1;
-        else if (e < 0 && e != LIBSSH2_ERROR_EAGAIN) break;
+        if (e > 0) {
+            progress = 1;
+            if (last_stream != 1 && len > 0 && out[len - 1] != '\n' &&
+                !exec_append(&out, &cap, &len, "\n", 1)) { free(out); g_open_reason = OPEN_NO_SHELL; return NULL; }
+            last_stream = 1;
+            if (!exec_append(&out, &cap, &len, buf, (size_t)e)) { free(out); g_open_reason = OPEN_NO_SHELL; return NULL; }
+        } else if (e < 0 && e != LIBSSH2_ERROR_EAGAIN) {
+            break;
+        }
         if (!progress) {
             // Both streams returned EAGAIN/0 without EOF on a blocking session —
             // nothing to do but yield briefly rather than busy-spin.

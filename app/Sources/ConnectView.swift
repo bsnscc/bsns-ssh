@@ -477,16 +477,23 @@ struct ConnectView: View {
                                         knownHosts: knownHostsStore.knownHosts, useMosh: true,
                                         keyBlob: selectedKey?.blob, tmuxSession: tmuxName)
         let hostName = host, userName = user
+        // The session id is minted up front: the bootstrap records the server it
+        // starts against it, so a later reconnect knows which server it replaced
+        // and can reap it (see MoshServerRegistry).
+        let sessionID = UUID()
         Task {
             do {
-                let connect = try await MoshBootstrap.connect(spec: spec)
+                let connect = try await MoshBootstrap.connect(spec: spec, sessionID: sessionID)
                 let mosh = MoshSession()
+                mosh.serverPID = connect.pid
                 if let err = mosh.open(host: hostName, port: connect.port, key: connect.key, cols: 80, rows: 24) {
+                    // Started but unreachable — mark it for the next connect to reap.
+                    if let pid = connect.pid { MoshServerRegistry.shared.abandon(pid: pid) }
                     throw MoshBootstrap.Failure.noConnectLine(err)
                 }
                 await MainActor.run {
                     busy = false
-                    let s = TerminalSession(spec: spec, title: "\(userName)@\(hostName) · mosh")
+                    let s = TerminalSession(id: sessionID, spec: spec, title: "\(userName)@\(hostName) · mosh")
                     s.restorable = RestorableSession(id: s.id, title: s.title, host: hostName,
                                                      port: portValue, user: userName, useMosh: true,
                                                      keyBlob: spec.keyBlob, tmuxSession: spec.tmuxSession)

@@ -15,6 +15,11 @@ struct BsnsSSHApp: App {
         SettingsKey.registerDefaults()
         DiagLog.refreshEnabled()
         DiagLog.markLaunch()
+        // Any mosh-server started by a previous run of the app is orphaned: its
+        // client's crypto state died with the process, so nothing here can ever
+        // talk to it again. Mark them reapable by the next connect to that host,
+        // or they sit on the host holding a PTY until their idle timeout.
+        MoshServerRegistry.shared.markAllAbandonedFromPreviousRun()
     }
 
     var body: some Scene {

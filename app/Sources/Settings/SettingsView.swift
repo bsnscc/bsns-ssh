@@ -18,6 +18,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.multiplexer) private var multiplexer = MultiplexerPref.both.rawValue
     @AppStorage(SettingsKey.keepAliveInterval) private var keepAlive = 30
     @AppStorage(SettingsKey.terminalType) private var terminalType = "xterm-256color"
+    @AppStorage(SettingsKey.moshIdleTimeoutHours) private var moshIdleTimeoutHours = 24
     @AppStorage(SettingsKey.appLock) private var appLock = false
     @AppStorage(SettingsKey.commandHistory) private var commandHistory = true
     @AppStorage(SettingsKey.uploadDir) private var uploadDir = "~/.bsns-ssh-drops"
@@ -25,6 +26,7 @@ struct SettingsView: View {
     private let scrollbackOptions = [500, 1000, 2000, 5000, 10000]
     private let keepAliveOptions = [15, 30, 60, 120]
     private let termTypes = ["xterm-256color", "xterm", "vt100"]
+    private let moshIdleOptions = [0, 1, 4, 12, 24, 72]
 
     private var appVersion: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -88,13 +90,22 @@ struct SettingsView: View {
                 Text("Which copy/scrollback buttons appear on the terminal. Pick tmux or screen to hide the other; a session the app started as tmux always shows tmux only. The sequences below enter copy mode inside an already-running session — e.g. C-b [, C-a [, C-] [, Esc [. Tokens can be C-x, Ctrl-x, Esc, Tab, Enter, Space, 0x1b, or literal text.")
             }
 
-            Section("Sessions") {
+            Section {
                 Picker("Keep-alive", selection: $keepAlive) {
                     ForEach(keepAliveOptions, id: \.self) { Text("\($0) sec").tag($0) }
                 }
                 Picker("Terminal type", selection: $terminalType) {
                     ForEach(termTypes, id: \.self) { Text($0).tag($0) }
                 }
+                Picker("Expire idle mosh sessions", selection: $moshIdleTimeoutHours) {
+                    ForEach(moshIdleOptions, id: \.self) { hours in
+                        Text(hours == 0 ? "Never" : (hours < 24 ? "After \(hours) h" : "After \(hours / 24) d")).tag(hours)
+                    }
+                }
+            } header: {
+                Text("Sessions")
+            } footer: {
+                Text("A mosh session lives on the host and keeps running while you're away — that's what lets it resume. One the app can no longer reach (after a relaunch, or a resume that failed) is asked to quit on your next connect; this is the backstop for the ones that get missed, so they don't pile up holding terminals. With a tmux session set, expiring costs nothing — your work stays in tmux and reconnecting re-attaches it.")
             }
 
             Section {

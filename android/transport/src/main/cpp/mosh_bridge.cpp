@@ -235,6 +235,25 @@ Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshHop(
 }
 
 JNIEXPORT void JNICALL
+Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshStartShutdown(
+    JNIEnv* env, jobject thiz, jlong handle) {
+    (void)env; (void)thiz;
+    // Ask the server to quit. Without this a mosh-server keeps running (and
+    // holding its PTY) after we close, waiting for a client that isn't coming.
+    MoshHandle* h = (MoshHandle*)(intptr_t)handle;
+    if (h && h->client) mosh_client_start_shutdown(h->client);
+}
+
+JNIEXPORT jint JNICALL
+Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshShutdownState(
+    JNIEnv* env, jobject thiz, jlong handle) {
+    (void)env; (void)thiz;
+    MoshHandle* h = (MoshHandle*)(intptr_t)handle;
+    if (!h || !h->client) return -1;
+    return (jint)mosh_client_shutdown_state(h->client);
+}
+
+JNIEXPORT void JNICALL
 Java_cc_bsns_ssh_transport_MoshBridge_nativeMoshPrimeActiveRetry(
     JNIEnv* env, jobject thiz, jlong handle) {
     (void)env; (void)thiz;

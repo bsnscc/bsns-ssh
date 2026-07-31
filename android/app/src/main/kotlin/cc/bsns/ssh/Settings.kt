@@ -62,6 +62,12 @@ class SettingsStore(context: Context) {
     var screenScrollSequence: String
         get() = p.getString("screenScrollSequence", "C-a [") ?: "C-a ["
         set(v) { p.edit().putString("screenScrollSequence", v).apply() }
+    /** How long a mosh-server keeps running with no client before it exits on its
+     *  own (hours; 0 = never). The backstop for servers the reap-on-connect pass
+     *  misses — see MoshBootstrap. */
+    var moshIdleTimeoutHours: Int
+        get() = p.getInt("moshIdleTimeoutHours", MoshBootstrap.DEFAULT_IDLE_TIMEOUT_HOURS)
+        set(v) { p.edit().putInt("moshIdleTimeoutHours", v).apply() }
     /** Which copy/scroll buttons to show: "both", "tmux", or "screen". */
     var multiplexer: String
         get() = p.getString("multiplexer", "both") ?: "both"
@@ -117,7 +123,9 @@ fun SettingsScreen(
     var tmuxScrollSequence by remember { mutableStateOf(store.tmuxScrollSequence) }
     var screenScrollSequence by remember { mutableStateOf(store.screenScrollSequence) }
     var multiplexer by remember { mutableStateOf(store.multiplexer) }
+    var moshIdleHours by remember { mutableStateOf(store.moshIdleTimeoutHours) }
     val scrollbackOptions = listOf(500, 1000, 2000, 5000, 10000)
+    val moshIdleOptions = listOf(0, 1, 4, 12, 24, 72)
     val themeIds = Appearance.themes.map { it.id }
 
     Scaffold { pad ->
@@ -163,6 +171,21 @@ fun SettingsScreen(
                 SettingToggle("Keep screen awake while connected", keepAwake) { keepAwake = it; store.keepAwake = it }
                 RowDivider()
                 SettingToggle("Show terminal shortcut bar", showKeyBar) { showKeyBar = it; store.showKeyBar = it }
+            }
+
+            Section(
+                title = "Sessions",
+                footer = "A mosh session lives on the host and keeps running while you're away — that's what lets it resume. One the app can no longer reach (after a relaunch, or a resume that failed) is asked to quit on your next connect; this is the backstop for the ones that get missed, so they don't pile up holding terminals.",
+            ) {
+                PickerRow("Expire idle mosh sessions",
+                    when {
+                        moshIdleHours == 0 -> "never"
+                        moshIdleHours < 24 -> "${moshIdleHours}h"
+                        else -> "${moshIdleHours / 24}d"
+                    }) {
+                    val next = moshIdleOptions[(moshIdleOptions.indexOf(moshIdleHours).coerceAtLeast(0) + 1) % moshIdleOptions.size]
+                    moshIdleHours = next; store.moshIdleTimeoutHours = next
+                }
             }
 
             Section(

@@ -154,6 +154,33 @@ void mosh_client_prime_active_retry(MoshClient* c) {
   catch (...) { c->lastError = "mosh active retry prime failed"; }
 }
 
+void mosh_client_start_shutdown(MoshClient* c) {
+  if (!c || !c->transport) return;
+  // A mosh-server outlives its client on purpose (that is what makes roaming
+  // work), so a client that just closes its socket leaves the server running
+  // and holding a PTY. Upstream's frontend asks for a shutdown on quit; so do
+  // we, on a user-initiated disconnect.
+  try { if (!c->transport->shutdown_in_progress()) c->transport->start_shutdown(); }
+  catch (const std::exception& e) { c->lastError = e.what(); }
+  catch (...) { c->lastError = "mosh shutdown request failed"; }
+}
+
+int mosh_client_shutdown_state(MoshClient* c) {
+  if (!c || !c->transport) return -1;
+  try {
+    if (!c->transport->shutdown_in_progress()) return 0;
+    if (c->transport->shutdown_acknowledged()) return 1;
+    if (c->transport->shutdown_ack_timed_out()) return -1;
+    return 0;
+  } catch (const std::exception& e) {
+    c->lastError = e.what();
+    return -1;
+  } catch (...) {
+    c->lastError = "mosh shutdown state failed";
+    return -1;
+  }
+}
+
 void mosh_client_force_repaint(MoshClient* c) {
   // Drop the diff baseline so the next drain_ansi emits a FULL repaint (clear +
   // redraw of the entire framebuffer) instead of a delta — recovers a desynced

@@ -21,6 +21,10 @@ class MoshBridge {
     external fun nativeMoshLastAcceptedPackets(handle: Long): Int
     external fun nativeMoshStateNum(handle: Long): Long
     external fun nativeMoshHop(handle: Long)
+    /** Ask the server to shut down and release its PTY (user-initiated close). */
+    external fun nativeMoshStartShutdown(handle: Long)
+    /** 1 = the server acknowledged (it's exiting), -1 = gave up waiting, 0 = pending. */
+    external fun nativeMoshShutdownState(handle: Long): Int
     external fun nativeMoshPrimeActiveRetry(handle: Long)
     external fun nativeMoshLastError(handle: Long): String?
     external fun nativeMoshClose(handle: Long)
