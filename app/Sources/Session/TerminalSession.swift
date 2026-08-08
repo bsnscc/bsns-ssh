@@ -44,6 +44,10 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// The terminal screen shows it as a small overlay banner. Always mutated on
     /// the main queue (it drives UI), same discipline as `status` / `isStale`.
     private(set) var transferStatus: String?
+    /// SF Symbol shown alongside `transferStatus` — the banner carries more than
+    /// image transfers now, so the icon travels with the message.
+    private(set) var transferSymbol = TerminalSession.transferDefaultSymbol
+    static let transferDefaultSymbol = "photo.on.rectangle.angled"
     let spec: Spec
     let title: String
 
@@ -210,11 +214,17 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         }
     }
 
+    /// Show a transient message in the terminal's overlay banner. Used for events
+    /// the user didn't directly trigger (an OSC 52 clipboard write, say), so they
+    /// are never silent.
+    func flash(_ text: String, symbol: String = "info.circle") { setTransfer(text, symbol: symbol) }
+
     /// Set the transient transfer banner and auto-clear it after ~4s (the clear
     /// only fires if no newer status replaced it in the meantime).
-    private func setTransfer(_ text: String?) {
+    private func setTransfer(_ text: String?, symbol: String = TerminalSession.transferDefaultSymbol) {
         DispatchQueue.main.async {
             self.transferStatus = text
+            self.transferSymbol = symbol
             guard text != nil else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                 if self.transferStatus == text { self.transferStatus = nil }

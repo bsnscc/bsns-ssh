@@ -22,6 +22,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.appLock) private var appLock = false
     @AppStorage(SettingsKey.commandHistory) private var commandHistory = true
     @AppStorage(SettingsKey.uploadDir) private var uploadDir = "~/.bsns-ssh-drops"
+    @AppStorage(SettingsKey.remoteClipboard) private var remoteClipboard = false
 
     private let scrollbackOptions = [500, 1000, 2000, 5000, 10000]
     private let keepAliveOptions = [15, 30, 60, 120]
@@ -111,11 +112,12 @@ struct SettingsView: View {
             Section {
                 Toggle("Require Face ID / passcode to unlock", isOn: $appLock)
                 Toggle("Record command history (on device)", isOn: $commandHistory)
+                Toggle("Let the remote copy to this clipboard", isOn: $remoteClipboard)
                 NavigationLink { KnownHostsView() } label: { Label("Known Hosts", systemImage: "checkmark.shield") }
             } header: {
                 Text("Security")
             } footer: {
-                Text("Command history stays on this device and is never synced. Type a command with a leading space to keep that one out of history.")
+                Text("Command history stays on this device and is never synced. Type a command with a leading space to keep that one out of history.\n\nWith remote clipboard on, a command on the server can put text on this device's clipboard (OSC 52) — useful for grabbing a URL or a one-time code without selecting it by hand. Every write shows a banner, and nothing can read your clipboard back.")
             }
 
             Section {

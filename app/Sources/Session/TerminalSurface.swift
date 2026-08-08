@@ -15,6 +15,9 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
 
     private var appliedThemeId: String?
     var onZoomChange: ((CGFloat) -> Void)?
+    /// Set by the terminal screen; raises the confirm-before-opening prompt for a
+    /// tapped link. Unset (e.g. before the surface is embedded) the tap is dropped.
+    var onLinkTapped: ((URL) -> Void)?
     private var foregroundObservers: [NSObjectProtocol] = []
     private var foregroundRefreshWork: [DispatchWorkItem] = []
     private var lastForegroundResyncAt: CFTimeInterval = 0
@@ -205,6 +208,10 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         let d = UserDefaults.standard
         let shape = CursorShape(rawValue: d.string(forKey: SettingsKey.cursorStyle) ?? "block") ?? .block
         view.getTerminal().setCursorStyle(shape.swiftTerm(blink: d.bool(forKey: SettingsKey.cursorBlink)))
+        // `.hover` (SwiftTerm's iOS default) gates link activation on a hover
+        // highlight that only a trackpad or Pencil can produce — finger-only,
+        // no link is ever tappable. `.always` is the touch-correct mode.
+        view.linkHighlightMode = .always
         view.optionAsMetaKey = d.bool(forKey: SettingsKey.optionAsMeta)
         let predictive = d.bool(forKey: SettingsKey.predictiveText)
         let desiredAutocorrection: UITextAutocorrectionType = predictive ? .yes : .no
@@ -267,7 +274,10 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         guard let url = URL(string: link),
               let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               UIApplication.shared.canOpenURL(url) else { return }
-        UIApplication.shared.open(url)
+        // Ask before leaving the app. Two reasons: a tap meant for the keyboard
+        // shouldn't navigate away, and the URL is remote-controlled output — the
+        // prompt shows where it actually goes before Safari opens it.
+        onLinkTapped?(url)
     }
 
     func setTerminalTitle(source: TerminalView, title: String) {}
@@ -279,7 +289,28 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         default: break   // silent
         }
     }
-    func clipboardCopy(source: TerminalView, content: Data) {}
+    /// OSC 52 copy (`ESC ] 52 ; c ; <base64> BEL`) — lets a remote command put text
+    /// on the phone's pasteboard, which is the only way to get a value out of a
+    /// session without selecting it by hand. Off by default: writing the pasteboard
+    /// is an action the remote initiates, not the user, so it's opt-in, capped, and
+    /// always announced in the banner rather than happening silently. Only the copy
+    /// direction exists — SwiftTerm never answers the `?` (read) form, so a remote
+    /// can't exfiltrate what's already on the pasteboard.
+    func clipboardCopy(source: TerminalView, content: Data) {
+        guard UserDefaults.standard.bool(forKey: SettingsKey.remoteClipboard) else { return }
+        guard content.count <= Self.maxRemoteClipboardBytes else {
+            session.flash("Remote clipboard write ignored — too large", symbol: "exclamationmark.triangle")
+            return
+        }
+        guard let text = String(data: content, encoding: .utf8), !text.isEmpty else { return }
+        UIPasteboard.general.string = text
+        session.flash("Remote copied \(text.count) char\(text.count == 1 ? "" : "s") to the clipboard",
+                      symbol: "doc.on.clipboard")
+    }
+
+    /// Enough for a URL, a token, or a config block; small enough that a runaway
+    /// or hostile remote can't stuff the pasteboard with megabytes.
+    private static let maxRemoteClipboardBytes = 64 * 1024
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}

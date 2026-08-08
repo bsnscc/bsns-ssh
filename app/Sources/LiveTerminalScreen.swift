@@ -37,6 +37,7 @@ struct LiveTerminalScreen: View {
     @State private var showHistory = false
     @State private var showHelp = false
     @State private var muxScrollActive = false
+    @State private var tappedLink: URL?
     @FocusState private var findFocused: Bool
 
     private var theme: TerminalTheme { TerminalTheme.named(themeId) }
@@ -58,7 +59,8 @@ struct LiveTerminalScreen: View {
                                 tmuxSequence: tmuxScrollSequence,
                                 screenSequence: screenScrollSequence,
                                 prefs: "\(cursorStyle)\(cursorBlink)\(optionAsMeta)\(predictiveText)",
-                                muxScrollActive: $muxScrollActive)
+                                muxScrollActive: $muxScrollActive,
+                                tappedLink: $tappedLink)
                 .overlay(alignment: .top) { transferBanner }
             // Our key row is redundant with SwiftTerm's soft-keyboard accessory,
             // so only show it when the soft keyboard is down. With a physical
@@ -100,6 +102,19 @@ struct LiveTerminalScreen: View {
             }
             .sheet(isPresented: $showHelp) {
                 NavigationStack { TerminalHelpView(showsDoneButton: true) }
+            }
+            .confirmationDialog(tappedLink?.absoluteString ?? "",
+                                isPresented: Binding(get: { tappedLink != nil },
+                                                     set: { if !$0 { tappedLink = nil } }),
+                                titleVisibility: .visible) {
+                // The title is the full URL on purpose: this text came from the
+                // remote, and the destination is the one thing worth reading
+                // before handing the tap to Safari.
+                if let url = tappedLink {
+                    Button("Open in Safari") { UIApplication.shared.open(url) }
+                    Button("Copy Link") { UIPasteboard.general.string = url.absoluteString }
+                }
+                Button("Cancel", role: .cancel) { }
             }
     }
 
@@ -196,7 +211,7 @@ struct LiveTerminalScreen: View {
     @ViewBuilder private var transferBanner: some View {
         if let status = session.transferStatus {
             HStack(spacing: 8) {
-                Image(systemName: "photo.on.rectangle.angled").foregroundStyle(Brand.accent)
+                Image(systemName: session.transferSymbol).foregroundStyle(Brand.accent)
                 Text(status).font(.callout).lineLimit(2)
             }
             .padding(.horizontal, 14).padding(.vertical, 9)
@@ -886,9 +901,11 @@ struct TerminalSurfaceView: UIViewRepresentable {
     /// Bundles cursor/meta prefs so a change re-triggers updateUIView → applyPrefs.
     let prefs: String
     @Binding var muxScrollActive: Bool
+    @Binding var tappedLink: URL?
 
     func makeUIView(context: Context) -> ZoomableTerminalView {
         surface.onZoomChange = { fontSize = $0 }
+        surface.onLinkTapped = { tappedLink = $0 }
         surface.view.onRemoteScrollModeChanged = { muxScrollActive = $0 }
         surface.view.tmuxScrollSequence = tmuxSequence
         surface.view.screenScrollSequence = screenSequence
@@ -899,6 +916,7 @@ struct TerminalSurfaceView: UIViewRepresentable {
 
     func updateUIView(_ terminal: ZoomableTerminalView, context: Context) {
         surface.onZoomChange = { fontSize = $0 }
+        surface.onLinkTapped = { tappedLink = $0 }
         surface.view.onRemoteScrollModeChanged = { muxScrollActive = $0 }
         terminal.tmuxScrollSequence = tmuxSequence
         terminal.screenScrollSequence = screenSequence

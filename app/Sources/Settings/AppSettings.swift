@@ -25,6 +25,7 @@ enum SettingsKey {
     static let appLock = "security.appLock"
     static let commandHistory = "privacy.commandHistory"   // record run commands locally
     static let uploadDir = "transfer.uploadDir"             // remote drop dir for dropped/pasted images
+    static let remoteClipboard = "transfer.remoteClipboard" // honour OSC 52 copy from the remote
     static let diagnosticsEnabled = "diagnostics.enabled"  // record the on-device event log (off by default)
 
     static func registerDefaults() {
@@ -50,6 +51,7 @@ enum SettingsKey {
             appLock: false,
             commandHistory: true,
             uploadDir: "~/.bsns-ssh-drops",
+            remoteClipboard: false,
             diagnosticsEnabled: false,
         ])
     }

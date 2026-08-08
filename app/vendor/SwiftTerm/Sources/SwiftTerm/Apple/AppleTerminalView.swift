@@ -806,7 +806,17 @@ extension TerminalView {
     {
         switch linkHighlightMode {
         case .always:
+            // bsns fork: on touch there is no hover and no modifier key, so a
+            // plain tap is the only way to follow a link. Upstream restricts
+            // activation to OSC 8 payloads, which leaves the common case — a
+            // command printing a bare URL for you to open — untappable. The
+            // implicit matcher requires a scheme, so this does not turn ordinary
+            // words into tap targets.
+            #if os(iOS) || os(visionOS)
+            return true
+            #else
             return match.isExplicit
+            #endif
         case .alwaysWithModifier:
             return match.isExplicit && hasCommandModifier
         case .hover:

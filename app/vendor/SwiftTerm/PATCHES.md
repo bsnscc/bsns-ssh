@@ -20,6 +20,9 @@ Pinned upstream: **1.13.0**. Patches live in
 `Sources/SwiftTerm/Apple/AppleTerminalView.swift`, tagged with a `bsns fork`
 comment so they're greppable.
 
+Note that patches 1–4 are tagged in place; patch 5 is a one-case change in
+`linkVisibleForClick` and carries the same marker.
+
 ## Patches
 
 ### 1. Pointer (trackpad / mouse) click-drag selection
@@ -105,3 +108,29 @@ presentation is delegated to the host app through the new
 `selectionMenuRequested` callback (falling back to the legacy path when unset),
 so the app presents a `UIEditMenuInteraction` menu at the selection and no
 longer needs a competing recognizer.
+
+### 5. Tappable links on touch
+
+`AppleTerminalView.linkVisibleForClick` → the `.always` case.
+
+Upstream gates link *activation* on `match.isExplicit`, so only an OSC 8
+hyperlink can be followed; an implicitly-detected URL is matched by
+`linkMatch(mode: .explicitAndImplicit)` and then discarded. On a desktop that's a
+reasonable guard against stray cmd-clicks, but on iPhone it removes the feature
+outright — the common case is a command printing a bare URL and expecting you to
+open it, and a finger has no hover state and no modifier key to qualify the tap
+with. (The app compounded this by leaving `linkHighlightMode` at its `.hover`
+default, where the click gate compares against a highlight range only a trackpad
+or Pencil can populate — so no link, explicit or not, was tappable at all. The
+app now sets `.always`.)
+
+The patch returns `true` for `.always` under `os(iOS) || os(visionOS)`, leaving
+macOS on upstream behaviour. The implicit matcher requires a URL scheme
+(`https?://`, `mailto:`, `ssh:`, …), so this does not make ordinary words into
+tap targets, and the app filters what it will actually open down to http(s) and
+confirms the destination before leaving the app.
+
+Not patched: `shouldUnderlineLink`, which under `.always` returns
+`cell.hasPayload` — implicit links are tappable but not underlined. Underlining
+them means running the link matcher per row inside the draw path, which is the
+cost patch 3 exists to avoid. Worth revisiting only with a per-row match cache.
