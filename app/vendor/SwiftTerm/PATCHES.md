@@ -21,7 +21,7 @@ Pinned upstream: **1.13.0**. Patches live in
 comment so they're greppable.
 
 Note that patches 1–4 are tagged in place; patch 5 is a one-case change in
-`linkVisibleForClick` and carries the same marker. Patches 6–10 also touch
+`linkVisibleForClick` and carries the same marker. Patches 6–11 also touch
 `Sources/SwiftTerm/SelectionService.swift`, `Sources/SwiftTerm/Terminal.swift` and
 `Sources/SwiftTerm/EscapeSequenceParser.swift`.
 
@@ -178,7 +178,7 @@ selection behind (double-tap, triple-tap, the selection pan) now offers the edit
 menu through `selectionMenuRequested`, as patch 4 did for long-press — they
 were still calling the invisible legacy menu.
 
-The macOS view's own `linefeed` is untouched (the app does not build it).
+The macOS view's `linefeed` gets the same change (patch 11).
 
 ### 7. Scrollback that holds its place
 
@@ -261,3 +261,15 @@ again. Taps and scroll gestures then stayed local.
 
 The patch drops the `mouseMode = .off` from the four encoding cases; resetting
 the reporting modes themselves (`9`, `1000`, `1002`, `1003`) is unchanged.
+
+### 11. macOS view: selection across output, and the scroll wheel to the remote
+
+`Mac/MacTerminalView.swift` → `linefeed(source:)` and `scrollWheel(with:)`.
+
+The Mac app shares this fork. Its view had the same selection-dropping
+`linefeed` as iOS (patch 6), fixed the same way. And its scroll wheel only ever
+scrolled the local buffer: with a program that has asked for the mouse — a
+multiplexer in mouse mode, a pager — there is nothing local to scroll, and the
+program never heard the wheel. The wheel is now reported to the remote in that
+case (button 4/5 at the pointer's cell, trackpad deltas accumulated into whole
+steps), and scrolls locally otherwise or with Shift held.

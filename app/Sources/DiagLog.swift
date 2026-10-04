@@ -129,6 +129,7 @@ final class DiagLog {
     }
 }
 
+#if os(iOS)
 /// Settings → Diagnostics: the live in-app log with copy/share + clear.
 struct DiagnosticsView: View {
     @State private var log = DiagLog.shared
@@ -204,3 +205,4 @@ struct DiagnosticsView: View {
         savedLog = DiagLog.persistentPlainText()
     }
 }
+#endif

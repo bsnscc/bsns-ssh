@@ -46,6 +46,7 @@ enum KeyStore {
             comment: key.publicKey.comment, kind: "enclave"))
     }
 
+    #if os(iOS)
     static func saveYubiKey(_ key: YubiKeyPIVKey) throws {
         try persist(account: key.id.rawValue, Stored(
             algorithm: key.algorithm.rawValue,
@@ -68,6 +69,7 @@ enum KeyStore {
             comment: key.publicKey.comment, kind: "fido2",
             credentialID: key.credentialID, application: key.application))
     }
+    #endif
 
     /// Persist a record without ever destroying the existing one before the new
     /// write lands: UPDATE in place, and only ADD if there's nothing there yet.
@@ -113,6 +115,7 @@ enum KeyStore {
             if stored.kind == "enclave" {
                 return try? SecureEnclaveKey.from(keyData: stored.material, comment: stored.comment)
             }
+            #if os(iOS)
             if stored.kind == "yubikey" {
                 return YubiKeyPIVKey.make(publicBlob: stored.material, slot: stored.slot ?? 0x9a, comment: stored.comment)
             }
@@ -128,6 +131,11 @@ enum KeyStore {
                                              application: stored.application ?? Fido2Coordinator.application,
                                              comment: stored.comment)
             }
+            #else
+            // Hardware-token records belong to the iOS app; a software key is the
+            // only other kind this platform loads.
+            guard stored.kind == nil || stored.kind == "file" else { return nil }
+            #endif
             guard let algorithm = KeyAlgorithm(rawValue: stored.algorithm) else { return nil }
             return try? FileKey.from(algorithm: algorithm, privateKeyMaterial: stored.material, comment: stored.comment)
         }

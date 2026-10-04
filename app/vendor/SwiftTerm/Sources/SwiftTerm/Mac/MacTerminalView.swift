@@ -583,10 +583,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     open func linefeed(source: Terminal) {
-        // Preserve manual selection while output is streaming when mouse reporting is disabled.
-        if allowMouseReporting {
-            selection.selectNone()
-        }
+        // bsns fork: a line feed no longer drops the selection (see the iOS view
+        // and `settleSelection(after:)`).
     }
     
     /// This vaiable controls whether mouse events are sent to the application running under the
@@ -1945,6 +1943,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         terminal.sendEvent(buttonFlags: buttonFlags, x: hit.grid.col, y: screenRow, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
     }
     
+    private var wheelRemainder: CGFloat = 0   // bsns fork: fractional wheel travel not yet sent
     private var autoScrollDelta = 0
     // Callback from when the mouseDown autoscrolling timer goes off
     private func scrollingTimerElapsed (source: Timer)
@@ -2171,6 +2170,27 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     public override func scrollWheel(with event: NSEvent) {
         if event.deltaY == 0 {
+            return
+        }
+        // bsns fork: when the remote program has asked for the mouse, the wheel
+        // belongs to it (a multiplexer scrolls its own history, a pager its
+        // file) — upstream always scrolled the local buffer, which in a
+        // full-screen program has nothing to scroll. Shift keeps the wheel
+        // local, as it does in other terminals.
+        if allowMouseReporting && terminal.mouseMode != .off && !event.modifierFlags.contains(.shift) {
+            let hit = calculateMouseHit(with: event)
+            let displayBuffer = terminal.displayBuffer
+            let row = max (0, min (displayBuffer.rows - 1, hit.grid.row - displayBuffer.yDisp))
+            let flags = terminal.encodeButton (button: event.deltaY > 0 ? 4 : 5, release: false,
+                                               shift: false, meta: false, control: false)
+            // A trackpad reports many small deltas; a wheel, few large ones.
+            wheelRemainder += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / 12 : event.deltaY
+            let steps = min (8, Int (abs (wheelRemainder)))
+            guard steps > 0 else { return }
+            wheelRemainder -= CGFloat (steps) * (wheelRemainder > 0 ? 1 : -1)
+            for _ in 0..<steps {
+                terminal.sendEvent (buttonFlags: flags, x: min (hit.grid.col, 222), y: min (row, 222))
+            }
             return
         }
         let velocity = calcScrollingVelocity(delta: Int (abs (event.deltaY)))

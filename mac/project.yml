@@ -1,0 +1,83 @@
+name: BsnsSSHMac
+options:
+  bundleIdPrefix: cc.bsns
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  bsns-ssh:
+    path: ..
+  SwiftTerm:
+    # The same vendored fork the iOS app uses (see app/vendor/SwiftTerm/PATCHES.md).
+    path: ../app/vendor/SwiftTerm
+  CSSH:
+    # libssh2 + OpenSSL, built by app/vendor/build-cssh.sh (which includes the
+    # macOS slices).
+    path: ../app/vendor/CSSH
+  CMosh:
+    path: ../app/vendor/mosh
+targets:
+  BsnsSSHMac:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+      # Shared with the iOS app: the agent and key storage, the session layer and
+      # both transports. Listed file by file so that anything touch-specific
+      # stays out, and so that adding to this list is a deliberate act.
+      - path: ../app/Sources/AgentStore.swift
+        group: Shared
+      - path: ../app/Sources/DiagLog.swift
+        group: Shared
+      - path: ../app/Sources/PublicKeyText.swift
+        group: Shared
+      - path: ../app/Sources/TerminalTheme.swift
+        group: Shared
+      - path: ../app/Sources/Storage
+        group: Shared
+      - path: ../app/Sources/Session/TerminalSession.swift
+        group: Shared/Session
+      - path: ../app/Sources/Session/TerminalTransport.swift
+        group: Shared/Session
+      - path: ../app/Sources/Session/SessionStore.swift
+        group: Shared/Session
+      - path: ../app/Sources/Session/SessionRestoreStore.swift
+        group: Shared/Session
+      - path: ../app/Sources/Transport
+        group: Shared
+      - path: ../app/Sources/Mosh
+        group: Shared
+      - path: ../app/Sources/Settings/AppSettings.swift
+        group: Shared/Settings
+      - path: ../app/Sources/Settings/CommandHistory.swift
+        group: Shared/Settings
+    dependencies:
+      - package: bsns-ssh
+        product: BsnsSSHCore
+      - package: SwiftTerm
+        product: SwiftTerm
+      - package: CSSH
+        product: CSSH
+      - package: CMosh
+        product: CMosh
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: bsns.SSH
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NSLocalNetworkUsageDescription: "Connect to SSH servers on your local network."
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cc.bsns.ssh.mac
+        PRODUCT_NAME: bsns.SSH
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        # Signed to run locally for now. A distributable build needs the team
+        # identity, the hardened runtime and (for the App Store) the sandbox.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"

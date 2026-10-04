@@ -23,13 +23,16 @@ final class AgentStore {
             for key in KeyStore.loadAll() {
                 await agent.add(key)
                 if key.requiresUserPresence { hardwareKeyIDs.insert(key.id.rawValue) }
+                #if os(iOS)
                 if key is YubiKeyPIVKey { yubiKeyIDs.insert(key.id.rawValue) }
                 if key is WebAuthnSecurityKey || key is Fido2SecurityKey { securityKeyIDs.insert(key.id.rawValue) }
+                #endif
             }
             await refresh()
         }
     }
 
+    #if os(iOS)
     /// Enroll a YubiKey: read its PIV public key and add it as an identity.
     func enrollYubiKey(pin: String, managementKeyHex: String? = nil) async throws {
         let blob = try await YubiKeyCoordinator.shared.enroll(pin: pin, managementKeyHex: managementKeyHex)
@@ -40,6 +43,7 @@ final class AgentStore {
         yubiKeyIDs.insert(key.id.rawValue)
         await refresh()
     }
+    #endif
 
     func isYubiKey(_ identity: SSHPublicKey) -> Bool {
         yubiKeyIDs.contains(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
@@ -49,6 +53,7 @@ final class AgentStore {
         securityKeyIDs.contains(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
     }
 
+    #if os(iOS)
     /// Enroll a portable OpenSSH FIDO2 resident credential. The private key stays
     /// on the token; iOS stores only the public blob + credential id needed to ask
     /// that token for assertions later.
@@ -106,6 +111,7 @@ final class AgentStore {
         await refresh()
         return imported
     }
+    #endif
 
     func refresh() async {
         identities = await agent.identities()
@@ -139,6 +145,7 @@ final class AgentStore {
     /// Software keys currently held (for export).
     func exportableKeys() -> [FileKey] { KeyStore.loadFileKeys() }
 
+    #if os(iOS)
     /// Security-key metadata currently held. This contains no private key
     /// material; it is the public blob plus the credential handle needed to ask
     /// the same hardware key to sign on another iOS device.
@@ -161,6 +168,7 @@ final class AgentStore {
             return nil
         }
     }
+    #endif
 
     /// Import a software key from a config bundle, skipping duplicates.
     func importKey(_ key: FileKey) async {
@@ -174,6 +182,7 @@ final class AgentStore {
         await refresh()
     }
 
+    #if os(iOS)
     /// Import hardware security-key metadata from a config bundle, skipping
     /// duplicates. The physical key is still required for every signature.
     @discardableResult
@@ -211,6 +220,7 @@ final class AgentStore {
         await refresh()
         return true
     }
+    #endif
 
     func deleteKey(_ identity: SSHPublicKey) async {
         let id = KeyID(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
@@ -222,6 +232,7 @@ final class AgentStore {
         await refresh()
     }
 
+    #if os(iOS)
     private static func isPlausibleSecurityKeyBlob(_ blob: Data) -> Bool {
         guard blob.count >= 4 else { return false }
         let bytes = [UInt8](blob)
@@ -231,4 +242,5 @@ final class AgentStore {
         let algorithm = String(decoding: bytes[4 ..< 4 + Int(len)], as: UTF8.self)
         return algorithm == KeyAlgorithm.ecdsaSK.rawValue
     }
+    #endif
 }

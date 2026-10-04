@@ -33,6 +33,7 @@ app/vendor/mosh/protobuf/
 app/vendor/mosh/mosh-src/
 app/BsnsSSH.entitlements
 app/Info.plist
+mac/Info.plist
 
 # Internal review docs — never publish (history was scrubbed of these)
 docs/*review*

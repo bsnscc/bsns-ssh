@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build the CSSH xcframework (libssh2 + a SUPPORTED OpenSSL) from source for iOS
-# device + simulator, replacing the EOL-OpenSSL-1.1.1w prebuilt. Run once, then
-# build the app. Output: vendor/CSSH/CSSH.xcframework (gitignored).
+# device + simulator and for macOS (Apple silicon + Intel), replacing the
+# EOL-OpenSSL-1.1.1w prebuilt. Run once, then build the apps. Output:
+# vendor/CSSH/CSSH.xcframework (gitignored).
 #
 # Crypto is OpenSSL (not mbedTLS) because libssh2's mbedTLS backend lacks
 # ed25519/curve25519 — required to reach modern servers. These are plain C
@@ -39,6 +40,8 @@ SLICES=(
   "ios-arm64|ios64-xcrun|iphoneos|arm64-apple-darwin|arm64|-mios-version-min=17.0"
   "iossim-arm64|iossimulator-arm64-xcrun|iphonesimulator|arm64-apple-darwin|arm64|-mios-simulator-version-min=17.0"
   "iossim-x86_64|iossimulator-x86_64-xcrun|iphonesimulator|x86_64-apple-darwin|x86_64|-mios-simulator-version-min=17.0"
+  "macos-arm64|darwin64-arm64-cc|macosx|arm64-apple-darwin|arm64|-mmacosx-version-min=13.0"
+  "macos-x86_64|darwin64-x86_64-cc|macosx|x86_64-apple-darwin|x86_64|-mmacosx-version-min=13.0"
 )
 
 for slice in "${SLICES[@]}"; do
@@ -75,6 +78,8 @@ done
 echo "==> assembling xcframework"
 mkdir -p "$OUT/iossim-fat"
 lipo -create "$OUT/iossim-arm64/libssh2.a" "$OUT/iossim-x86_64/libssh2.a" -output "$OUT/iossim-fat/libssh2.a"
+mkdir -p "$OUT/macos-fat"
+lipo -create "$OUT/macos-arm64/libssh2.a" "$OUT/macos-x86_64/libssh2.a" -output "$OUT/macos-fat/libssh2.a"
 
 HDR="$W/Headers"; mkdir -p "$HDR"
 cp "$OUT/ios-arm64/ssh2/include/"libssh2*.h "$HDR/"
@@ -91,5 +96,6 @@ rm -rf "$HERE/CSSH.xcframework"
 xcodebuild -create-xcframework \
   -library "$OUT/ios-arm64/libssh2.a" -headers "$HDR" \
   -library "$OUT/iossim-fat/libssh2.a" -headers "$HDR" \
+  -library "$OUT/macos-fat/libssh2.a" -headers "$HDR" \
   -output "$HERE/CSSH.xcframework"
 echo "==> done: $HERE/CSSH.xcframework (libssh2 $SSH2_VER + OpenSSL $OSSL_VER)"

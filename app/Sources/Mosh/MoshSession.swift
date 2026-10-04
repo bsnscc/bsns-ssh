@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import CMosh
 
 /// Diagnostics for the mosh resume/size path — view in-app under
@@ -132,6 +136,9 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
     private var cols: Int32 = 80
     private var rows: Int32 = 24
     private var foregroundObservers: [NSObjectProtocol] = []
+    #if !canImport(UIKit)
+    private var sleepObservers: [NSObjectProtocol] = []
+    #endif
 
     private let lock = NSLock()
     private var pendingInput: [UInt8] = []
@@ -193,6 +200,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             moshLog("foreground note=\(note.name.rawValue) shouldResume=\(shouldResume)")
             self.wake()
         }
+        #if canImport(UIKit)
         foregroundObservers.append(
             NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil, using: willEnterForeground))
         foregroundObservers.append(
@@ -208,6 +216,22 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 moshLog("background note=\(note.name.rawValue)")
                 self.wake()
             })
+        #else
+        // A Mac app is not suspended in the background, so the transport runs
+        // whether or not the window is frontmost. What does interrupt it is
+        // sleep: the machine wakes on a different network moment with the old
+        // socket dead, which is the same recovery as an iOS resume.
+        _ = willEnterForeground
+        let workspace = NSWorkspace.shared.notificationCenter
+        sleepObservers.append(
+            workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] note in
+                guard let self else { return }
+                self.lock.withLock { self.pendingForegroundRecovery = true }
+                moshLog("sleep note=\(note.name.rawValue)")
+            })
+        sleepObservers.append(
+            workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil, using: didBecomeActive))
+        #endif
         queue.async { [weak self] in self?.runLoop() }
         return nil
     }
@@ -733,6 +757,10 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         moshLog("teardown")
         foregroundObservers.forEach { NotificationCenter.default.removeObserver($0) }
         foregroundObservers.removeAll()
+        #if !canImport(UIKit)
+        sleepObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        sleepObservers.removeAll()
+        #endif
         if let c = client { mosh_client_free(c); client = nil }
         lock.lock()
         let readFD = wakeRead

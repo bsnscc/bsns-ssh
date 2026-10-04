@@ -1,4 +1,12 @@
+#if canImport(UIKit)
 import UIKit
+typealias PlatformColor = UIColor
+typealias PlatformFont = UIFont
+#else
+import AppKit
+typealias PlatformColor = NSColor
+typealias PlatformFont = NSFont
+#endif
 import SwiftUI
 import SwiftTerm
 
@@ -8,7 +16,7 @@ import SwiftTerm
 /// match the icon. Kept identical (same hex) to the Android `Brand`.
 enum Brand {
     static let accent = SwiftUI.Color(red: 0x00 / 255, green: 0xC2 / 255, blue: 0x9C / 255)   // #00C29C
-    static let accentUI = UIColor(red: 0x00 / 255, green: 0xC2 / 255, blue: 0x9C / 255, alpha: 1)
+    static let accentUI = PlatformColor(red: 0x00 / 255, green: 0xC2 / 255, blue: 0x9C / 255, alpha: 1)
     static let background = SwiftUI.Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x0F / 255) // #0F0F0F
 }
 
@@ -23,8 +31,8 @@ struct TerminalTheme: Identifiable, Hashable {
 
     struct RGB: Hashable {
         let r: UInt8, g: UInt8, b: UInt8
-        var uiColor: UIColor {
-            UIColor(red: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: 1)
+        var uiColor: PlatformColor {
+            PlatformColor(red: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: 1)
         }
         var swiftTermColor: SwiftTerm.Color {
             SwiftTerm.Color(red: UInt16(r) * 257, green: UInt16(g) * 257, blue: UInt16(b) * 257)
@@ -79,10 +87,10 @@ struct TerminalTheme: Identifiable, Hashable {
 enum TerminalFont {
     static let families = ["SF Mono", "Menlo", "Courier New"]
 
-    static func font(family: String, size: CGFloat) -> UIFont {
+    static func font(family: String, size: CGFloat) -> PlatformFont {
         if family == "SF Mono" {
-            return UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+            return PlatformFont.monospacedSystemFont(ofSize: size, weight: .regular)
         }
-        return UIFont(name: family, size: size) ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        return PlatformFont(name: family, size: size) ?? PlatformFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 }
