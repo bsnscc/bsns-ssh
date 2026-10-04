@@ -34,6 +34,7 @@ connection ever sees a private key. The agent speaks the SSH-agent protocol
 in-process today; exposing it over the network later (using the phone as a
 hardware security key for other machines) is then a delta, not a new subsystem.
 
+
 Key backends share one interface (`KeyBackend`, `Sources/BsnsSSHCore/KeyBackend.swift`):
 
 - **`SecureEnclaveKey`** — non-extractable, biometric-gated, **ECDSA P-256**
@@ -50,6 +51,24 @@ libssh2's `sk` userauth), while iOS uses Apple's WebAuthn security-key API, whic
 produces the `webauthn-sk-ecdsa-...@openssh.com` signature variant — carried via
 a libssh2 patch (`libssh2_userauth_publickey_raw`). A single hardware key works
 on both platforms but needs a separate enrollment (key pair) per platform.
+
+## One machine, several addresses
+
+A saved host can list other addresses for the same machine — a LAN name at
+home, a tailnet name away. Wherever a socket is opened, the transport dials
+them together, a beat apart in order of preference, and keeps the first that
+answers (`RouteRace` in `Sources/BsnsSSHCore/HostRoutes.swift`); a route that
+hangs doesn't hold the others back. Every reconnect races again, so a session
+follows the machine from one network to another.
+
+The host keeps one name. Host-key trust, saved state and session identity all
+hang on the primary name, whichever address was dialed — the key check is what
+proves it is the same machine. mosh's UDP goes to the address the bootstrap
+connection used.
+
+Hosts with more than one address also show whether they are reachable right
+now. That check is a bare connection to the SSH port, closed at once; hosts
+with a single address are never checked unasked.
 
 ## Stack
 

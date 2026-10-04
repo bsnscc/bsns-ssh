@@ -25,6 +25,9 @@ struct ConnectView: View {
     @State private var user = ""
     @State private var group = ""
     @State private var jump = ""
+    /// Other addresses for the same machine, as typed (see `SavedHost.routes`).
+    @State private var routesText = ""
+    @State private var presence = HostPresence()
     @State private var password = ""
     /// Fingerprint of the key to authenticate with — auth offers only this one.
     @State private var selectedKeyFP = ""
@@ -49,6 +52,8 @@ struct ConnectView: View {
         paneLayout
         .navigationTitle("Connect")
         .onAppear { ensureKeySelection() }
+        .task { await presence.watch { hostStore.hosts } }
+        .onChange(of: hostStore.hosts) { _, hosts in presence.refresh(hosts) }
         .onChange(of: store.identities) { _, _ in ensureKeySelection() }
         .toolbar {
             if !hostStore.hosts.isEmpty { EditButton() }
@@ -206,6 +211,14 @@ struct ConnectView: View {
             FieldRow(label: "jump") {
                 TextField("optional · user@host[:port]", text: $jump).autocorrectionDisabled().textInputAutocapitalization(.never)
             }
+            FieldRow(label: "also at") {
+                TextField("optional · other addresses", text: $routesText)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never).disabled(hasJump)
+            }
+            if !routesText.trimmingCharacters(in: .whitespaces).isEmpty && !hasJump {
+                Text("The same machine under other names — a LAN name, a tailnet name. The connection goes to whichever answers first; the host key is checked the same either way.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Toggle("Use mosh (UDP · survives roaming)", isOn: $useMosh).disabled(hasJump)
             if hasJump {
                 Text("Via a jump host, only a shell tunnels through — mosh, SFTP, and key install go direct and are off. The bastion uses your key; any password is for the target only.")
@@ -329,12 +342,30 @@ struct ConnectView: View {
         let subtitle = "\(entry.user)@\(entry.host):\(entry.port)" + (entry.jump.map { " ⇢ \($0)" } ?? "")
         VStack(alignment: .leading) {
             HStack(spacing: 6) {
+                if let state = presence.states[entry.id] {
+                    Circle().fill(state == .unreachable ? Color.red : state == .checking ? Color.gray : Color.green)
+                        .frame(width: 7, height: 7)
+                        .accessibilityLabel(state == .unreachable ? "Unreachable" : state == .checking ? "Checking" : "Reachable")
+                }
                 Text(title).foregroundStyle(.primary)
                 if entry.useMosh == true { tag("mosh", .green) }
                 if entry.jump?.isEmpty == false { tag("via jump", .orange) }
             }
-            Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            Text(subtitle + presenceNote(for: entry)).font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private func presenceNote(for entry: SavedHost) -> String {
+        switch presence.states[entry.id] {
+        case .reachable(let route): return route == entry.host ? "" : " · via \(route)"
+        case .unreachable: return " · unreachable"
+        default: return ""
+        }
+    }
+
+    /// Tell the transport about addresses typed but not saved, before dialing.
+    private func registerRoutes() {
+        RouteBook.shared.set(hasJump ? [] : HostRoutes.parse(routesText, excluding: host), for: host)
     }
 
     private func tag(_ text: String, _ color: Color) -> some View {
@@ -377,6 +408,7 @@ struct ConnectView: View {
         useMosh = saved.useMosh ?? false
         group = saved.group ?? ""; jump = saved.jump ?? ""
         tmuxSession = saved.tmuxSession ?? ""
+        routesText = (saved.routes ?? []).joined(separator: ", ")
         // Restore the saved key if it still exists, else fall back to the default.
         if let kid = saved.keyID, store.identities.contains(where: { fp($0) == kid }) {
             selectedKeyFP = kid
@@ -400,7 +432,8 @@ struct ConnectView: View {
                                 jump: jump.trimmingCharacters(in: .whitespaces).isEmpty ? nil : jump.trimmingCharacters(in: .whitespaces),
                                 group: group.trimmingCharacters(in: .whitespaces).isEmpty ? nil : group.trimmingCharacters(in: .whitespaces),
                                 keyID: selectedKeyFP.isEmpty ? nil : selectedKeyFP,
-                                tmuxSession: tmuxName))
+                                tmuxSession: tmuxName,
+                                routes: { let r = HostRoutes.parse(routesText, excluding: host); return r.isEmpty || hasJump ? nil : r }()))
     }
 
     private enum JumpParseError: Error { case invalidPort }
@@ -429,6 +462,7 @@ struct ConnectView: View {
 
     private func attemptConnect() {
         guard let portValue = UInt16(port), portValue > 0 else { error = "Invalid port."; return }
+        registerRoutes()
         if useMosh && !hasJump { attemptConnectMosh(portValue); return }   // jump ⇒ shell only
         let hop: SSHShell.JumpHop?
         do { hop = try parsedJump() }
@@ -486,7 +520,7 @@ struct ConnectView: View {
                 let connect = try await MoshBootstrap.connect(spec: spec, sessionID: sessionID)
                 let mosh = MoshSession()
                 mosh.serverPID = connect.pid
-                if let err = mosh.open(host: hostName, port: connect.port, key: connect.key, cols: 80, rows: 24) {
+                if let err = mosh.open(host: RouteBook.shared.address(for: hostName), port: connect.port, key: connect.key, cols: 80, rows: 24) {
                     // Started but unreachable — mark it for the next connect to reap.
                     if let pid = connect.pid {
                         MoshServerRegistry.shared.abandon(
@@ -515,6 +549,7 @@ struct ConnectView: View {
 
     private func attemptInstall() {
         guard let portValue = UInt16(port), portValue > 0 else { error = "Invalid port."; return }
+        registerRoutes()
         error = nil; notice = nil; busy = true
         // Install just the chosen key (the one you'll authenticate with), not every key.
         let lines = (selectedKey.map { [$0] } ?? store.identities).map(authorizedKeysLine)

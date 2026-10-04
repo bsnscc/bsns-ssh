@@ -11,6 +11,9 @@ the exact steps to confirm it yourself.
 > 1. the host (and port) you type into the connect screen — over SSH (TCP) or, for
 >    a bastion, the jump host you configured; mosh additionally opens a UDP flow to
 >    that same host;
+>    If you gave a saved host more than one address, the app also checks which
+>    of those addresses answers — a connection to the SSH port, closed at once —
+>    while the host list is on screen;
 > 2. a ProxyJump bastion you configured, to reach the target through it; and
 > 3. the file/sync provider **you** chose for config sync — and only the encrypted
 >    bundle, which that provider handles as opaque ciphertext.
