@@ -488,7 +488,10 @@ struct ConnectView: View {
                 mosh.serverPID = connect.pid
                 if let err = mosh.open(host: hostName, port: connect.port, key: connect.key, cols: 80, rows: 24) {
                     // Started but unreachable — mark it for the next connect to reap.
-                    if let pid = connect.pid { MoshServerRegistry.shared.abandon(pid: pid) }
+                    if let pid = connect.pid {
+                        MoshServerRegistry.shared.abandon(
+                            pid: pid, hostKey: MoshServerRegistry.hostKey(host: hostName, port: portValue, user: userName))
+                    }
                     throw MoshBootstrap.Failure.noConnectLine(err)
                 }
                 await MainActor.run {

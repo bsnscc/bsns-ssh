@@ -497,7 +497,9 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
                     if let err = mosh.open(host: spec.host, port: connect.port, key: connect.key, cols: cols, rows: rows) {
                         // The server is up but we never reached it — reap it next time
                         // rather than leaving it to sit out its idle timeout.
-                        if let pid = connect.pid { MoshServerRegistry.shared.abandon(pid: pid) }
+                        if let pid = connect.pid {
+                            MoshServerRegistry.shared.abandon(pid: pid, hostKey: Self.moshHostKey(spec))
+                        }
                         throw MoshBootstrap.Failure.noConnectLine(err)
                     }
                     guard self.install(mosh, openedCols: cols, openedRows: rows) else { return }
@@ -559,10 +561,11 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             // (it's exiting, nothing to clean up) or it's still running on the
             // host with nobody able to reach it — record that so the next connect
             // reaps it instead of leaving it holding a PTY.
+            let hostKey = Self.moshHostKey(spec)
             mosh.onFinished = { [weak mosh] acknowledged in
                 guard let pid = mosh?.serverPID else { return }
-                if acknowledged { MoshServerRegistry.shared.forget(pid: pid) }
-                else { MoshServerRegistry.shared.abandon(pid: pid) }
+                if acknowledged { MoshServerRegistry.shared.forget(pid: pid, hostKey: hostKey) }
+                else { MoshServerRegistry.shared.abandon(pid: pid, hostKey: hostKey) }
             }
         }
     }
@@ -571,6 +574,11 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// Dev hook: reconnect exactly as a failed mosh resume does.
     func devForceReconnect() { performReconnect(reason: "dev") }
     #endif
+
+    /// The registry key for the host this session's mosh-servers run on.
+    private static func moshHostKey(_ spec: Spec) -> String {
+        MoshServerRegistry.hostKey(host: spec.host, port: spec.port, user: spec.user)
+    }
 
     /// A resumed mosh transport is still accepting local input, but fresh remote
     /// state never came back. Re-bootstrap mosh so the user gets a visible session

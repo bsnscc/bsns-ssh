@@ -27,6 +27,12 @@ class MoshServerRegistry(context: Context) {
     companion object {
         fun hostKey(host: String, port: Int, user: String) = "$user@$host:$port"
 
+        /** One lock for every instance. The registry is constructed wherever it
+         *  is needed, and each operation is a read-modify-write of the same
+         *  preference — per-instance synchronization would let two instances
+         *  interleave and drop each other's update. */
+        private val lock = Any()
+
         /** Records this old are dropped unreaped: the idle timeout every server is
          *  launched with has long since fired, and the PID has probably been
          *  recycled onto something else by now. */
@@ -38,33 +44,38 @@ class MoshServerRegistry(context: Context) {
     /** Every server recorded by a previous run of the app is orphaned by
      *  definition — its client's crypto state died with the process — so mark
      *  them all reapable. Call once at startup. */
-    @Synchronized
-    fun markAllAbandonedFromPreviousRun() =
+    fun markAllAbandonedFromPreviousRun() = synchronized(lock) {
         save(load().map { it.copy(sessionId = null) })
+    }
 
     /** This session is about to re-bootstrap: whatever server it held is now
      *  unreachable (a new client can't resume an old server). */
-    @Synchronized
-    fun abandon(sessionId: String) =
+    fun abandon(sessionId: String) = synchronized(lock) {
         save(load().map { if (it.sessionId == sessionId) it.copy(sessionId = null) else it })
+    }
 
     /** This particular server is unreachable (its client tore down without the
      *  server acknowledging a shutdown). Keyed by PID, not session, so it can't
      *  race a reconnect that has already recorded a *new* server for the same
      *  session — abandoning that one would have the next connect reap a live
-     *  session. */
-    @Synchronized
-    fun abandon(pid: Int) =
-        save(load().map { if (it.pid == pid) it.copy(sessionId = null) else it })
+     *  session.
+     *
+     *  A PID only identifies a process on ONE host: two hosts hand out the same
+     *  numbers independently, so the host is part of the key. Matching on the PID
+     *  alone let a disconnect from one host abandon another host's live server,
+     *  which the next connect there would then reap. */
+    fun abandon(pid: Int, hostKey: String) = synchronized(lock) {
+        save(load().map { if (it.pid == pid && it.hostKey == hostKey) it.copy(sessionId = null) else it })
+    }
 
     /** The server exited cleanly (we shut it down over the mosh transport), so
-     *  there's nothing left to reap. */
-    @Synchronized
-    fun forget(pid: Int) = save(load().filterNot { it.pid == pid })
+     *  there's nothing left to reap. Host-scoped for the same reason as [abandon]. */
+    fun forget(pid: Int, hostKey: String) = synchronized(lock) {
+        save(load().filterNot { it.pid == pid && it.hostKey == hostKey })
+    }
 
-    @Synchronized
-    fun record(pid: Int, hostKey: String, sessionId: String) {
-        if (pid <= 0) return
+    fun record(pid: Int, hostKey: String, sessionId: String) = synchronized(lock) {
+        if (pid <= 0) return@synchronized
         val kept = load().filterNot { it.pid == pid && it.hostKey == hostKey }
         save(kept + Record(pid, hostKey, sessionId, System.currentTimeMillis()))
     }
@@ -73,15 +84,14 @@ class MoshServerRegistry(context: Context) {
      *  (see [Record.reapAttempts]) and dropped once they've had their attempts —
      *  we don't signal a PID forever, since by then it may belong to something
      *  else and the idle timeout has it covered anyway. */
-    @Synchronized
-    fun reapablePids(hostKey: String): List<Int> {
+    fun reapablePids(hostKey: String): List<Int> = synchronized(lock) {
         val all = load()
         val due = all.filter { it.hostKey == hostKey && it.sessionId == null }
-        if (due.isEmpty()) return emptyList()
+        if (due.isEmpty()) return@synchronized emptyList()
         val bumped = due.map { it.copy(reapAttempts = it.reapAttempts + 1) }
             .filter { it.reapAttempts < MAX_REAP_ATTEMPTS }
         save((all - due.toSet()) + bumped)
-        return due.map { it.pid }
+        due.map { it.pid }
     }
 
     private fun load(): List<Record> {

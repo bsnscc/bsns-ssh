@@ -1275,12 +1275,12 @@ fun ConnectScreen(
                             // (it's exiting) or it's still out there needing a reap.
                             m.onFinished = { acknowledged ->
                                 if (m.serverPid > 0) {
-                                    if (acknowledged) registry.forget(m.serverPid) else registry.abandon(m.serverPid)
+                                    if (acknowledged) registry.forget(m.serverPid, hostKey) else registry.abandon(m.serverPid, hostKey)
                                 }
                             }
                             if (m.open(80, 24)) m
                             else {
-                                registry.abandon(conn.pid)   // started but unreachable — reap it next time
+                                registry.abandon(conn.pid, hostKey)   // started but unreachable — reap it next time
                                 bootstrapError = "reached the host, but couldn't open the mosh UDP session"
                                 null
                             }

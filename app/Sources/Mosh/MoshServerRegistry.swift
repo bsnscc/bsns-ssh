@@ -42,14 +42,17 @@ final class MoshServerRegistry: @unchecked Sendable {
 
     private let lock = NSLock()
     private var records: [Record] = []
-    private let url: URL = {
+    private let url: URL
+    private static var defaultURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("mosh-servers.json")
-    }()
+    }
 
-    init() {
-        if let data = try? Data(contentsOf: url),
+    /// `url` is injectable for tests; the app uses the shared instance.
+    init(url: URL? = nil) {
+        self.url = url ?? Self.defaultURL
+        if let data = try? Data(contentsOf: self.url),
            let decoded = try? JSONDecoder().decode([Record].self, from: data) {
             records = decoded
         }
@@ -83,18 +86,23 @@ final class MoshServerRegistry: @unchecked Sendable {
     /// it can't race a reconnect that has already recorded a *new* server under
     /// the same session id — abandoning that one would have the next connect
     /// reap a live session.
-    func abandon(pid: Int32) {
+    ///
+    /// A PID only identifies a process on ONE host: two hosts hand out the same
+    /// numbers independently, so the host is part of the key. Matching on the
+    /// PID alone let a disconnect from one host abandon another host's live
+    /// server, which the next connect there would then reap.
+    func abandon(pid: Int32, hostKey: String) {
         mutate { records in
-            for i in records.indices where records[i].pid == pid {
+            for i in records.indices where records[i].pid == pid && records[i].hostKey == hostKey {
                 records[i].sessionID = nil
             }
         }
     }
 
     /// The server exited cleanly (we shut it down over the mosh transport), so
-    /// there's nothing left to reap.
-    func forget(pid: Int32) {
-        mutate { records in records.removeAll { $0.pid == pid } }
+    /// there's nothing left to reap. Host-scoped for the same reason as `abandon`.
+    func forget(pid: Int32, hostKey: String) {
+        mutate { records in records.removeAll { $0.pid == pid && $0.hostKey == hostKey } }
     }
 
     func record(pid: Int32, hostKey: String, sessionID: UUID) {
@@ -131,8 +139,13 @@ final class MoshServerRegistry: @unchecked Sendable {
         if records.count > Self.maxRecords {
             records.removeFirst(records.count - Self.maxRecords)
         }
-        let snapshot = records
+        // Written while still holding the lock, so the file always ends up
+        // holding the newest state. Writing a snapshot after releasing it let
+        // two mutations race to the disk: the older snapshot could land last and
+        // erase a server recorded by the newer one — which, after a relaunch,
+        // could then never be reaped. The file is a few hundred bytes; the
+        // write is not worth a second ordering mechanism.
+        try? JSONEncoder().encode(records).write(to: url, options: .atomic)
         lock.unlock()
-        try? JSONEncoder().encode(snapshot).write(to: url, options: .atomic)
     }
 }
