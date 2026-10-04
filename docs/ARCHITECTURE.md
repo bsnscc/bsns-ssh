@@ -18,9 +18,12 @@ These constrain every decision — an implementation that would break one should
 stop and surface the conflict rather than quietly compromise.
 
 - **No account. No telemetry. No analytics. No crash reporting that phones home.**
-- **No network calls except (a) the user's own SSH connections and (b) the
-  user's own chosen sync storage.** This is a *verifiable* property — running a
-  proxy must show nothing else leaving the device.
+- **No network calls except (a) the user's own SSH connections, (b) the
+  user's own chosen sync storage, and (c) a direct link between the user's own
+  paired devices on the local network.** This is a *verifiable* property —
+  running a proxy must show nothing else leaving the device. (c) is off until
+  the user turns it on, never leaves the local network, and never passes
+  through a server.
 - **Private keys in hardware are non-extractable by construction** — the point,
   not a limitation to work around.
 - **The sync storage provider only ever sees ciphertext** — client-side
@@ -31,8 +34,32 @@ stop and surface the conflict rather than quietly compromise.
 Everything is a signing request to one **agent**; the agent does not care where
 a key lives. All SSH connections authenticate *through* the agent, so no
 connection ever sees a private key. The agent speaks the SSH-agent protocol
-in-process today; exposing it over the network later (using the phone as a
-hardware security key for other machines) is then a delta, not a new subsystem.
+in-process, over a local socket to other programs on a computer, and across the
+device link below — the same messages each time, so none of them is a separate
+subsystem.
+
+### Phone as a key (the device link)
+
+A phone can lend its hardware-backed keys to a computer the user has paired with
+it. The private key never leaves the phone: the computer sends a signing request,
+the phone asks its owner (the biometric prompt is the approval and names who is
+asking), and only the signature travels back.
+
+- **Finding each other:** the phone advertises `_bsns-key._tcp` on the local
+  network while the feature is on and the app is open. There is no relay and no
+  rendezvous server; off the same network, the key is simply unavailable.
+- **Pairing:** the computer commits to its keys before the phone reveals its
+  own, then both show a six-digit code derived from the whole exchange. The user
+  confirms it on both screens; a device in the middle would have had to guess
+  the code in one attempt. Each side stores the other's long-term public key.
+- **Sessions:** each request runs in a fresh mutually-authenticated session
+  (X25519 ephemeral and static agreements, HKDF-SHA256, ChaCha20-Poly1305 with
+  per-direction counters). An unpaired device gets no answer at all.
+- **What is lent:** only keys that require their owner's presence for every
+  signature. Software keys stay on the phone.
+
+The protocol lives in `Sources/BsnsSSHCore/DeviceLink.swift`; the computer sees
+each lent key as an ordinary backend (`RemoteAgentKey`).
 
 Key backends share one interface (`KeyBackend`, `Sources/BsnsSSHCore/KeyBackend.swift`):
 

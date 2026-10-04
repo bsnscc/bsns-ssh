@@ -60,7 +60,10 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         # Connecting to LAN / tailnet SSH hosts trips iOS's local-network gate.
-        NSLocalNetworkUsageDescription: "Connect to SSH servers on your local network."
+        NSLocalNetworkUsageDescription: "Connect to SSH servers on your local network, and lend this phone's keys to a computer you have paired."
+        # Advertised when "Phone as a Key" is on, so a paired computer can find this phone.
+        NSBonjourServices:
+          - _bsns-key._tcp
         # Required to evaluate Face ID for the optional app lock.
         NSFaceIDUsageDescription: "Unlock the app with Face ID."
         # Talk to a YubiKey over NFC.

@@ -29,7 +29,9 @@
   all work with **no third-party API tokens granted to the app**. The provider
   only ever sees ciphertext — no account, no server of ours.
 - **No telemetry, no analytics, no phone-home.** The only network traffic is
-  your own SSH/mosh connections and your own chosen sync storage — and you can
+  your own SSH/mosh connections, your own chosen sync storage, and — if you turn
+  it on — a direct, encrypted local-network link between your own paired devices
+  (phone as a key). You can
   confirm it yourself ([docs/no-telemetry-verification.md](docs/no-telemetry-verification.md)).
   We collect nothing: [Privacy Policy](PRIVACY.md).
 - **Migrate in seconds** — import your existing `~/.ssh/config`, `known_hosts`,

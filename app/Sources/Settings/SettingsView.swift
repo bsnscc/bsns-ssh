@@ -154,6 +154,7 @@ struct SettingsView: View {
                 Toggle("Set tmux up for it over mosh", isOn: $tmuxClipboard)
                     .disabled(!remoteClipboard)
                 NavigationLink { KnownHostsView() } label: { Label("Known Hosts", systemImage: "checkmark.shield") }
+                NavigationLink { PhoneKeyView() } label: { Label("Phone as a Key", systemImage: "iphone.radiowaves.left.and.right") }
             } header: {
                 Text("Security")
             } footer: {

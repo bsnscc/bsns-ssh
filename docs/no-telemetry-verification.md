@@ -1,7 +1,8 @@
 # Verifying "no telemetry, no phone-home"
 
 bsns.SSH claims it makes **no network connection except the ones you ask for** —
-your SSH/mosh sessions and the sync folder you choose. This document states that
+your SSH/mosh sessions, the sync folder you choose, and (if you enable it) the
+local-network link between your own paired devices. This document states that
 claim precisely, explains why you don't have to take our word for it, and gives
 the exact steps to confirm it yourself.
 
@@ -11,9 +12,13 @@ the exact steps to confirm it yourself.
 > 1. the host (and port) you type into the connect screen — over SSH (TCP) or, for
 >    a bastion, the jump host you configured; mosh additionally opens a UDP flow to
 >    that same host;
-> 2. a ProxyJump bastion you configured, to reach the target through it; and
+> 2. a ProxyJump bastion you configured, to reach the target through it;
 > 3. the file/sync provider **you** chose for config sync — and only the encrypted
->    bundle, which that provider handles as opaque ciphertext.
+>    bundle, which that provider handles as opaque ciphertext; and
+> 4. a device **you** paired for "phone as a key" — directly, on the local
+>    network only, encrypted end to end, and only while that feature is on. In a
+>    capture this appears as mDNS for `_bsns-key._tcp` and a TCP flow between
+>    your two devices' local addresses; nothing goes to the internet.
 >
 > It opens **no** connection to any analytics, crash-reporting, attribution, ad,
 > or "home" endpoint of ours. There is no account system and no server we operate.

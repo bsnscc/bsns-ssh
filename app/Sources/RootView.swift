@@ -34,7 +34,10 @@ struct RootView: View {
             }
         }
         .tint(Brand.accent)   // brand accent on every control, link, and selection
-        .task { await maybeDevAutoConnect() }
+        .task {
+            PhoneKeyServer.shared.configure(agent: store.agent)
+            await maybeDevAutoConnect()
+        }
         // Auto-sync: pull + merge the user's folder on launch; push when backgrounded.
         // Then auto-reconnect any sessions that were open when iOS killed the app —
         // after the pull so synced keys are available for the reconnect's auth.
@@ -85,6 +88,23 @@ struct RootView: View {
         // Headless integration hooks (env-triggered) — compiled into DEBUG only, so
         // none of this auto-trust / auto-connect code exists in a release build.
         let env = ProcessInfo.processInfo.environment
+        // Dev hook: BSNS_DEV_LINK=1 serves this device's keys to a computer and
+        // accepts a pairing without the confirmation step; =all also offers
+        // software keys (the simulator has no hardware-backed ones). The key in
+        // BSNS_DEV_KEY is added to the agent for the run.
+        if let mode = env["BSNS_DEV_LINK"], !mode.isEmpty {
+            if let seed = env["BSNS_DEV_KEY"].flatMap({ Data(base64Encoded: $0) }),
+               let key = try? FileKey.from(algorithm: .ed25519, privateKeyMaterial: seed, comment: "phone dev key") {
+                await store.agent.add(key)
+            }
+            let server = PhoneKeyServer.shared
+            server.devAutoConfirm = true
+            server.devOfferAllKeys = mode == "all"
+            server.acceptsPairing = true
+            server.refresh()
+            print("dev link: serving as \(LinkStore.shared.identity.deviceID)")
+            return
+        }
         // Dev hook: BSNS_DEV_ENCLAVE=1 generates a Secure Enclave key so its
         // creation, storage, and public-key format can be verified in the sim.
         if env["BSNS_DEV_ENCLAVE"] == "1" {

@@ -9,6 +9,7 @@ struct MacRootView: View {
     @Environment(MacSurfaceCache.self) private var surfaces
     @Environment(AgentStore.self) private var store
     @Environment(AgentSocketController.self) private var agentSocket
+    @Environment(PhoneKeyClient.self) private var phoneKeys
 
     private enum Place: Hashable { case connect, keys }
     @State private var place: Place = .connect
@@ -49,7 +50,7 @@ struct MacRootView: View {
             }
         }
         #if DEBUG
-        .task { await MacDevHooks.run(store: store, sessions: sessions, agentSocket: agentSocket) }
+        .task { await MacDevHooks.run(store: store, sessions: sessions, agentSocket: agentSocket, phoneKeys: phoneKeys) }
         #endif
     }
 

@@ -13,8 +13,29 @@ import BsnsSSHCore
 /// show that this Mac and this build can.
 @MainActor
 enum MacDevHooks {
-    static func run(store: AgentStore, sessions: SessionStore, agentSocket: AgentSocketController) async {
+    static func run(store: AgentStore, sessions: SessionStore, agentSocket: AgentSocketController,
+                    phoneKeys: PhoneKeyClient) async {
         let env = ProcessInfo.processInfo.environment
+        // BSNS_DEV_LINK_PAIR=1: pair with the first phone found on the network,
+        // accepting the code without asking, and report the keys it offers.
+        if env["BSNS_DEV_LINK_PAIR"] == "1" {
+            phoneKeys.startBrowsing()
+            for _ in 0..<80 where phoneKeys.found.isEmpty { try? await Task.sleep(nanoseconds: 100_000_000) }
+            if let phone = phoneKeys.found.first {
+                do {
+                    let pairing = try await phoneKeys.beginPairing(with: phone)
+                    print("dev link: code \(pairing.outcome.code) with \(pairing.outcome.peer.name) (\(pairing.outcome.peer.id))")
+                    try await phoneKeys.finish(pairing, accepted: true)
+                    let offered = LinkStore.shared.paired.first { $0.id == pairing.outcome.peer.id }?.identities.count ?? 0
+                    print("dev link: paired, phone offers \(offered) key(s)")
+                } catch {
+                    print("dev link: FAILED \(error)")
+                }
+            } else {
+                print("dev link: no phone found")
+            }
+            phoneKeys.stopBrowsing()
+        }
         // BSNS_DEV_AGENT_SOCKET=1 serves the agent socket for this run without
         // touching the saved settings; =all also offers software keys.
         if let mode = env["BSNS_DEV_AGENT_SOCKET"], !mode.isEmpty {

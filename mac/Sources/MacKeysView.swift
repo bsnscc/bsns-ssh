@@ -10,6 +10,9 @@ struct MacKeysView: View {
     @State private var deleting: SSHPublicKey?
     @State private var copied: Data?
     @State private var activity = KeyActivityLog.shared
+    @Environment(PhoneKeyClient.self) private var phoneKeys
+    @State private var links = LinkStore.shared
+    @State private var pairingPhone = false
 
     static func name(of identity: SSHPublicKey, hardware: Bool) -> String {
         let kind: String
@@ -52,6 +55,35 @@ struct MacKeysView: View {
                      : "This Mac has no Secure Enclave, so only software keys are available. An Ed25519 key is stored in your keychain.")
             }
 
+            Section {
+                if links.paired.isEmpty {
+                    Text("No iPhone paired.").foregroundStyle(.secondary)
+                }
+                ForEach(links.paired) { device in
+                    HStack {
+                        Image(systemName: "iphone").foregroundStyle(Brand.accent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(device.peer.name.isEmpty ? "iPhone" : device.peer.name)
+                            Text("\(device.identities.count) key\(device.identities.count == 1 ? "" : "s") · \(device.id)")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Refresh Keys") {
+                            Task {
+                                do { try await phoneKeys.refreshKeys(of: device.id) }
+                                catch { self.error = "Couldn't reach \(device.peer.name): \(error.localizedDescription)" }
+                            }
+                        }
+                        Button("Unpair", role: .destructive) { Task { await phoneKeys.unpair(device.id) } }
+                    }
+                }
+                Button("Pair iPhone…") { pairingPhone = true }
+            } header: {
+                Text("iPhone as a Key")
+            } footer: {
+                Text("Use the hardware-backed keys on your iPhone from this Mac. In bsns.SSH on the phone, turn on Settings → Phone as a Key and choose Pair a Computer. Each sign-in is then approved on the phone with Face ID. Both devices must be on the same local network, with the app open on the phone.")
+            }
+
             if let error {
                 Section { Text(error).foregroundStyle(.red) }
             }
@@ -74,6 +106,7 @@ struct MacKeysView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Keys")
+        .sheet(isPresented: $pairingPhone) { MacPairingSheet() }
         .confirmationDialog("Delete this key?", isPresented: Binding(get: { deleting != nil },
                                                                      set: { if !$0 { deleting = nil } }),
                             presenting: deleting) { identity in

@@ -9,6 +9,7 @@ struct BsnsSSHMacApp: App {
     @State private var sessions = SessionStore()
     @State private var surfaces = MacSurfaceCache()
     @State private var agentSocket = AgentSocketController()
+    @State private var phoneKeys = PhoneKeyClient()
     @State private var sync = SyncStore()
     @State private var snippets = SnippetStore()
     @State private var sessionRestore = SessionRestoreStore()
@@ -33,6 +34,7 @@ struct BsnsSSHMacApp: App {
                 .environment(sessions)
                 .environment(surfaces)
                 .environment(agentSocket)
+                .environment(phoneKeys)
                 .tint(Brand.accent)
                 .frame(minWidth: 760, minHeight: 460)
                 .environment(sync)
@@ -40,6 +42,7 @@ struct BsnsSSHMacApp: App {
                     // Every use of a key is recorded, whoever asked for it.
                     await store.agent.setAuditor { KeyActivityLog.shared.record($0) }
                     agentSocket.apply(agent: store.agent, knownHosts: knownHosts.knownHosts)
+                    await phoneKeys.attach(to: store)
                     sessions.restore = sessionRestore
                     // Pull before restoring, so a session saved on another
                     // device's key or host arrives first.

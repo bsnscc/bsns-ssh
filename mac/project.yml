@@ -49,6 +49,10 @@ targets:
         group: Shared
       - path: ../app/Sources/Mosh
         group: Shared
+      # The device link: transport and paired-device store. (The key server and
+      # its screen in the same folder are iOS-only and compile to nothing here.)
+      - path: ../app/Sources/Link
+        group: Shared
       - path: ../app/Sources/Settings/AppSettings.swift
         group: Shared/Settings
       - path: ../app/Sources/Settings/CommandHistory.swift
@@ -81,7 +85,9 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         LSApplicationCategoryType: public.app-category.developer-tools
-        NSLocalNetworkUsageDescription: "Connect to SSH servers on your local network."
+        NSLocalNetworkUsageDescription: "Connect to SSH servers on your local network, and use the keys on an iPhone you have paired."
+        NSBonjourServices:
+          - _bsns-key._tcp
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:

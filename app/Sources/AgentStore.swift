@@ -138,6 +138,21 @@ final class AgentStore {
         await refresh()
     }
 
+    /// Add a key that isn't stored here — one held by a paired device — to the
+    /// agent for this run.
+    func adopt(remote key: any KeyBackend) async {
+        await agent.add(key)
+        hardwareKeyIDs.insert(key.id.rawValue)
+        await refresh()
+    }
+
+    /// Take a key out of the agent without touching stored keys.
+    func release(_ id: KeyID) async {
+        await agent.remove(id)
+        hardwareKeyIDs.remove(id.rawValue)
+        await refresh()
+    }
+
     func isHardware(_ identity: SSHPublicKey) -> Bool {
         hardwareKeyIDs.contains(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
     }

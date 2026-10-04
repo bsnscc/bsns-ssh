@@ -36,10 +36,14 @@ The app opens a network connection **only** to destinations **you** specify:
 
 1. the SSH/mosh host (and port) you enter — over SSH (TCP), plus a mosh UDP flow
    if you enable mosh;
-2. a ProxyJump bastion you configure, to reach that host through it; and
+2. a ProxyJump bastion you configure, to reach that host through it;
 3. the file/sync storage **you** choose for optional config sync (e.g. iCloud
    Drive, Google Drive, Dropbox, or a file you move yourself) — and only the
-   encrypted bundle, which that provider handles as opaque ciphertext.
+   encrypted bundle, which that provider handles as opaque ciphertext; and
+4. another device of yours that **you** paired for the optional "phone as a key"
+   feature — directly over your local network, encrypted end to end, never
+   through a server. Only signing requests and signatures cross it; private keys
+   do not.
 
 It makes **no** connection to any analytics, crash-reporting, attribution, ad, or
 "home" endpoint of ours. We do not operate a server for these apps.
