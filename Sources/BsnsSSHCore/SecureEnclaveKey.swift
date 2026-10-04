@@ -54,7 +54,7 @@ public struct SecureEnclaveKey: KeyBackend {
     public func sign(_ data: Data, context: SignContext) async throws -> SSHSignature {
         #if canImport(LocalAuthentication)
         let authContext = LAContext()
-        authContext.localizedReason = context.host.map { "Sign in to \($0)" } ?? "Authorize SSH sign-in"
+        authContext.localizedReason = context.promptReason
         let key: SecureEnclave.P256.Signing.PrivateKey
         do {
             key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: keyData, authenticationContext: authContext)

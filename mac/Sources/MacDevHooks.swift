@@ -13,8 +13,19 @@ import BsnsSSHCore
 /// show that this Mac and this build can.
 @MainActor
 enum MacDevHooks {
-    static func run(store: AgentStore, sessions: SessionStore) async {
+    static func run(store: AgentStore, sessions: SessionStore, agentSocket: AgentSocketController) async {
         let env = ProcessInfo.processInfo.environment
+        // BSNS_DEV_AGENT_SOCKET=1 serves the agent socket for this run without
+        // touching the saved settings; =all also offers software keys.
+        if let mode = env["BSNS_DEV_AGENT_SOCKET"], !mode.isEmpty {
+            if let seed = env["BSNS_DEV_KEY"].flatMap({ Data(base64Encoded: $0) }),
+               let key = try? FileKey.from(algorithm: .ed25519, privateKeyMaterial: seed, comment: "dev key") {
+                await store.agent.add(key)
+            }
+            agentSocket.pinned = true
+            agentSocket.start(enabled: true, hardwareOnly: mode != "all", agent: store.agent, knownHosts: KnownHosts())
+            print("dev agent socket: \(agentSocket.state)")
+        }
         if env["BSNS_DEV_ENCLAVE"] == "1" {
             do {
                 let key = try SecureEnclaveKey.generate(comment: "dev probe")

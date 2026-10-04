@@ -82,11 +82,31 @@ public struct SignContext: Sendable {
     /// userauth callback path (and what legacy gear expects). The agent-protocol
     /// path overrides this from the request's rsa-sha2 flags.
     public let rsaAlgorithm: RSASignatureAlgorithm
+    /// The program that asked, when the request came from outside the app (the
+    /// agent socket) — "ssh", "git". Shown on the approval prompt and recorded
+    /// in the audit trail, so a signature is never requested anonymously.
+    public let requester: String?
+    /// The account being logged in to, when the request reveals it.
+    public let user: String?
 
-    public init(host: String? = nil, purpose: Purpose, rsaAlgorithm: RSASignatureAlgorithm = .sha1) {
+    public init(host: String? = nil, purpose: Purpose, rsaAlgorithm: RSASignatureAlgorithm = .sha1,
+                requester: String? = nil, user: String? = nil) {
         self.host = host
         self.purpose = purpose
         self.rsaAlgorithm = rsaAlgorithm
+        self.requester = requester
+        self.user = user
+    }
+
+    /// One line for an approval prompt: who is asking, and for what.
+    public var promptReason: String {
+        let target = host.map { h in user.map { "\($0)@\(h)" } ?? h }
+        switch (requester, target) {
+        case let (requester?, target?): return "\(requester) wants to sign in to \(target)"
+        case let (requester?, nil): return "\(requester) wants to use this key"
+        case let (nil, target?): return "Sign in to \(target)"
+        case (nil, nil): return "Authorize SSH sign-in"
+        }
     }
 }
 

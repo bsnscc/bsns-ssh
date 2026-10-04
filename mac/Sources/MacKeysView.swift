@@ -9,6 +9,7 @@ struct MacKeysView: View {
     @State private var error: String?
     @State private var deleting: SSHPublicKey?
     @State private var copied: Data?
+    @State private var activity = KeyActivityLog.shared
 
     static func name(of identity: SSHPublicKey, hardware: Bool) -> String {
         let kind: String
@@ -54,6 +55,22 @@ struct MacKeysView: View {
             if let error {
                 Section { Text(error).foregroundStyle(.red) }
             }
+
+            Section {
+                if activity.events.isEmpty {
+                    Text("Nothing yet. Each time a key signs, it is listed here.").foregroundStyle(.secondary)
+                }
+                ForEach(Array(activity.events.suffix(50).reversed().enumerated()), id: \.offset) { _, event in
+                    activityRow(event)
+                }
+                if !activity.events.isEmpty {
+                    Button("Clear Activity", role: .destructive) { activity.clear() }
+                }
+            } header: {
+                Text("Activity")
+            } footer: {
+                Text("Which key was used, by what, to sign in where. Stored on this Mac only; what was signed is never recorded.")
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Keys")
@@ -66,6 +83,27 @@ struct MacKeysView: View {
             Text(store.isHardware(identity)
                  ? "A Secure Enclave key can't be recovered once deleted. Servers that trust it will stop accepting this Mac."
                  : "Servers that trust this key will stop accepting this Mac unless you have exported it.")
+        }
+    }
+
+    private func activityRow(_ event: AgentAuditEvent) -> some View {
+        let target = event.host.map { host in event.user.map { "\($0)@\(host)" } ?? host } ?? "an unidentified host"
+        let symbol: String, tint: Color
+        switch event.outcome {
+        case .signed: (symbol, tint) = ("checkmark.circle", .green)
+        case .declined: (symbol, tint) = ("hand.raised", .orange)
+        case .failed: (symbol, tint) = ("xmark.circle", .red)
+        }
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: symbol).foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(event.requester ?? "bsns.SSH") → \(target)")
+                Text("\(event.keyComment.isEmpty ? event.keyFingerprint : event.keyComment) · \(event.outcome.rawValue)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(event.date.formatted(date: .abbreviated, time: .shortened))
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
