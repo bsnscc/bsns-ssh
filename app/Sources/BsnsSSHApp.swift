@@ -10,6 +10,7 @@ struct BsnsSSHApp: App {
     @State private var sync = SyncStore()
     @State private var snippets = SnippetStore()
     @State private var sessionRestore = SessionRestoreStore()
+    @State private var handoff = SessionHandoffStore()
 
     init() {
         SettingsKey.registerDefaults()
@@ -34,6 +35,7 @@ struct BsnsSSHApp: App {
                     .environment(sync)
                     .environment(snippets)
                     .environment(sessionRestore)
+                    .environment(handoff)
             }
         }
     }

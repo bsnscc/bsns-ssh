@@ -8,6 +8,7 @@ struct MacConnectView: View {
     @Environment(HostStore.self) private var hosts
     @Environment(KnownHostsStore.self) private var knownHosts
     @Environment(SessionStore.self) private var sessions
+    @Environment(SessionHandoffStore.self) private var handoff
 
     @State private var host = ""
     @State private var port = "22"
@@ -71,6 +72,29 @@ struct MacConnectView: View {
 
     private var form: some View {
         Form {
+            if !handoff.offers.isEmpty {
+                Section {
+                    ForEach(handoff.offers) { offer in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(offer.session.title)
+                                Text(SessionHandoffStore.caption(for: offer))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(offer.continuesWork ? "Continue Here" : "Open Here") {
+                                fill(offer)
+                                connect()
+                            }
+                            .disabled(busy)
+                        }
+                    }
+                } header: {
+                    Text("On Your Other Devices")
+                } footer: {
+                    Text("Sessions with a tmux session pick up where the other device left off. Others start a new shell on the same server.")
+                }
+            }
             Section("Server") {
                 TextField("Host", text: $host, prompt: Text("example.com"))
                 TextField("Port", text: $port)
@@ -122,6 +146,24 @@ struct MacConnectView: View {
         useMosh = saved.useMosh ?? false
         tmuxSession = saved.tmuxSession ?? ""
         keyID = saved.keyID
+        error = nil
+    }
+
+    /// Load a session that is open on another device. The key it used there is
+    /// chosen if this Mac has it too; a hardware key doesn't travel, so otherwise
+    /// the key saved for that host here, or the current choice, is used.
+    private func fill(_ offer: HandoffOffer) {
+        let s = offer.session
+        host = s.host
+        port = String(s.port)
+        user = s.user
+        useMosh = s.useMosh
+        tmuxSession = s.tmuxSession ?? ""
+        if let blob = s.keyBlob, store.identities.contains(where: { $0.blob == blob }) {
+            keyID = SSHKeyFormat.fingerprint(ofPublicKeyBlob: blob)
+        } else if let saved = hosts.hosts.first(where: { $0.host == s.host && $0.user == s.user }), let known = saved.keyID {
+            keyID = known
+        }
         error = nil
     }
 

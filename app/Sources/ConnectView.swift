@@ -8,6 +8,7 @@ struct ConnectView: View {
     @Environment(SessionStore.self) private var sessions
     @Environment(TerminalSurfaceCache.self) private var surfaces
     @Environment(SnippetStore.self) private var snippetStore
+    @Environment(SessionHandoffStore.self) private var handoff
     @Environment(\.horizontalSizeClass) private var hSize
 
     /// The home TabView's selection, so the no-keys empty state can switch the
@@ -109,7 +110,7 @@ struct ConnectView: View {
     @ViewBuilder private var paneLayout: some View {
         if hSize == .regular {
             HStack(spacing: 0) {
-                Form { activeSection; savedSections }
+                Form { activeSection; handoffSection; savedSections }
                     .frame(maxWidth: Layout.sidebarWidth)
                 Divider()
                 Form {
@@ -119,7 +120,7 @@ struct ConnectView: View {
             }
         } else {
             Form {
-                activeSection; savedSections; serverSection; keySection
+                activeSection; handoffSection; savedSections; serverSection; keySection
                 passwordSection; actionsSection; importSection; messagesSection
             }
         }
@@ -143,6 +144,33 @@ struct ConnectView: View {
                         surfaces.drop(s.id); sessions.close(s)
                     }
                 }
+            }
+        }
+    }
+
+    /// Sessions open on the user's other devices, one tap from open here.
+    @ViewBuilder private var handoffSection: some View {
+        if !handoff.offers.isEmpty {
+            Section {
+                ForEach(handoff.offers) { offer in
+                    Button { loadOffer(offer); attemptConnect() } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(offer.session.title).foregroundStyle(.primary)
+                                Text(SessionHandoffStore.caption(for: offer))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(offer.continuesWork ? "Continue" : "Open")
+                                .font(.callout.weight(.medium)).foregroundStyle(Brand.accent)
+                        }
+                    }
+                    .disabled(busy)
+                }
+            } header: {
+                Text("On Your Other Devices")
+            } footer: {
+                Text("Sessions with a tmux session pick up where the other device left off. Others start a new shell on the same server.")
             }
         }
     }
@@ -371,6 +399,25 @@ struct ConnectView: View {
     /// The tmux session to attach, sanitized to the bootstrap's shell-safe set
     /// (nil when blank). Persisted on the host and applied to mosh connections.
     private var tmuxName: String? { MoshBootstrap.sanitizedTmuxName(tmuxSession) }
+
+    /// Load a session that is open on another device. The key it used there is
+    /// chosen if this device has it too; a hardware key doesn't travel, so
+    /// otherwise the key saved for that host here, or the default, is used.
+    private func loadOffer(_ offer: HandoffOffer) {
+        let s = offer.session
+        host = s.host; port = String(s.port); user = s.user
+        useMosh = s.useMosh
+        group = ""; jump = ""
+        tmuxSession = s.tmuxSession ?? ""
+        let saved = hostStore.hosts.first { $0.host == s.host && $0.user == s.user }
+        if let blob = s.keyBlob, let mine = store.identities.first(where: { $0.blob == blob }) {
+            selectedKeyFP = fp(mine)
+        } else if let kid = saved?.keyID, store.identities.contains(where: { fp($0) == kid }) {
+            selectedKeyFP = kid
+        } else {
+            ensureKeySelection()
+        }
+    }
 
     private func loadHost(_ saved: SavedHost) {
         host = saved.host; port = String(saved.port); user = saved.user

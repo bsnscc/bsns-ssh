@@ -7,6 +7,7 @@ struct MacSettingsView: View {
     @Environment(AgentSocketController.self) private var agentSocket
     @Environment(HostStore.self) private var hosts
     @Environment(SyncStore.self) private var sync
+    @Environment(SessionHandoffStore.self) private var handoff
     @Environment(SnippetStore.self) private var snippets
     @State private var syncPassphrase = ""
     @State private var syncing = false
@@ -94,6 +95,10 @@ struct MacSettingsView: View {
                     }
                     .disabled(syncPassphrase.isEmpty)
                 }
+                Toggle("Show open sessions on my other devices", isOn: Binding(
+                    get: { handoff.enabled },
+                    set: { handoff.enabled = $0 }))
+                    .disabled(!sync.autoEnabled)
                 HStack {
                     Button("Sync Now") { syncNow() }.disabled(!sync.autoEnabled || syncing)
                     if syncing { ProgressView().controlSize(.small) }

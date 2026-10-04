@@ -25,7 +25,16 @@ final class LinkStore {
         }
     }
 
-    let identity: LinkIdentity
+    /// This device's long-term link key. Loaded on first use rather than at
+    /// launch: most launches never need it, and reading the keychain can stop
+    /// to ask the user.
+    var identity: LinkIdentity {
+        if let loadedIdentity { return loadedIdentity }
+        let identity = LinkStore.loadIdentity()
+        loadedIdentity = identity
+        return identity
+    }
+    @ObservationIgnored private var loadedIdentity: LinkIdentity?
     private(set) var paired: [Paired] = []
 
     @ObservationIgnored private let url = AppPaths.support.appendingPathComponent("paired-devices.json")
@@ -34,7 +43,6 @@ final class LinkStore {
     @ObservationIgnored nonisolated(unsafe) private var pairedKeys: [Data: String] = [:]
 
     private init() {
-        identity = LinkStore.loadIdentity()
         if let data = try? Data(contentsOf: url), let decoded = try? JSONDecoder().decode([Paired].self, from: data) {
             paired = decoded
         }

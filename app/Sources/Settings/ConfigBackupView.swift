@@ -9,6 +9,7 @@ struct ConfigBackupView: View {
     @Environment(KnownHostsStore.self) private var knownHosts
     @Environment(AgentStore.self) private var agent
     @Environment(SyncStore.self) private var sync
+    @Environment(SessionHandoffStore.self) private var handoff
     @Environment(SnippetStore.self) private var snippets
 
     @State private var passphrase = ""
@@ -62,6 +63,10 @@ struct ConfigBackupView: View {
                 SecureField("Sync passphrase", text: $syncPass)
                     .textContentType(.password).autocorrectionDisabled().textInputAutocapitalization(.never)
                 Toggle("Include private keys", isOn: $syncIncludeKeys).disabled(syncPass.isEmpty)
+                Toggle("Show open sessions on my other devices", isOn: Binding(
+                    get: { handoff.enabled },
+                    set: { handoff.enabled = $0 }))
+                    .disabled(!sync.autoEnabled)
                 Button("Push to sync") { pushSync() }
                     .disabled(!sync.isConfigured || syncPass.isEmpty)
                 Button("Pull & merge") { pullSync() }

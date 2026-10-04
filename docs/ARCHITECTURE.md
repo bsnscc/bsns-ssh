@@ -61,6 +61,24 @@ asking), and only the signature travels back.
 The protocol lives in `Sources/BsnsSSHCore/DeviceLink.swift`; the computer sees
 each lent key as an ordinary backend (`RemoteAgentKey`).
 
+## Sessions that move between devices
+
+With config sync set up, each device keeps one small file of its open sessions
+(`bsns-ssh-sessions-<device id>.json`) beside the sync bundle, sealed with the
+same passphrase — so the storage provider sees ciphertext, as with the bundle.
+One file per device means two devices never write the same file, and the
+bundle's own format is untouched. The device id is random and local.
+
+Other devices list those sessions under "On Your Other Devices". Opening one
+goes through the ordinary connect path (host-key trust and key choice apply as
+usual) and attaches the same tmux session, so it is the work that carries over,
+not the connection; a session without tmux opens a new shell on the same
+server. A hardware key does not travel: the opening device uses the same key if
+it holds it, and otherwise its own key for that host. Work already open on this
+device is not offered again, and a device that has published nothing for 30
+days drops out of the list. The model is in
+`Sources/BsnsSSHCore/SessionHandoff.swift`.
+
 Key backends share one interface (`KeyBackend`, `Sources/BsnsSSHCore/KeyBackend.swift`):
 
 - **`SecureEnclaveKey`** — non-extractable, biometric-gated, **ECDSA P-256**

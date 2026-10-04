@@ -14,8 +14,32 @@ import BsnsSSHCore
 @MainActor
 enum MacDevHooks {
     static func run(store: AgentStore, sessions: SessionStore, agentSocket: AgentSocketController,
-                    phoneKeys: PhoneKeyClient) async {
+                    phoneKeys: PhoneKeyClient, sync: SyncStore, handoff: SessionHandoffStore) async {
         let env = ProcessInfo.processInfo.environment
+        // BSNS_DEV_HANDOFF=<folder> with BSNS_DEV_HANDOFF_PHRASE: use that folder
+        // for sync, publish the session named by BSNS_DEV_HANDOFF_PUBLISH
+        // ("host|user|tmux", tmux optional) as open here, and report what the
+        // other devices in the folder offer. Run with `-handoff.deviceID <id>`
+        // to stand in for a second device.
+        if let folder = env["BSNS_DEV_HANDOFF"], let phrase = env["BSNS_DEV_HANDOFF_PHRASE"] {
+            sync.setFolder(URL(fileURLWithPath: folder))
+            sync.savePassphrase(phrase)
+            var open: [RestorableSession] = []
+            if let fields = env["BSNS_DEV_HANDOFF_PUBLISH"]?.split(separator: "|", omittingEmptySubsequences: false), fields.count >= 2 {
+                open.append(RestorableSession(id: UUID(), title: "\(fields[1])@\(fields[0])", host: String(fields[0]), port: 22,
+                                              user: String(fields[1]), useMosh: true, keyBlob: nil,
+                                              tmuxSession: fields.count > 2 && !fields[2].isEmpty ? String(fields[2]) : nil))
+            }
+            // After the app's own launch-time publish (of its real, empty set).
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            handoff.publish(open, sync: sync)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await handoff.refresh(sync: sync)
+            print("dev handoff: device \(handoff.deviceID) published \(open.count), offered \(handoff.offers.count)")
+            for offer in handoff.offers {
+                print("dev handoff: offer [\(offer.continuesWork ? "continue" : "open")] \(SessionHandoffStore.caption(for: offer))")
+            }
+        }
         // BSNS_DEV_LINK_PAIR=1: pair with the first phone found on the network,
         // accepting the code without asking, and report the keys it offers.
         if env["BSNS_DEV_LINK_PAIR"] == "1" {

@@ -9,6 +9,7 @@ struct RootView: View {
     @Environment(SyncStore.self) private var sync
     @Environment(SnippetStore.self) private var snippets
     @Environment(SessionRestoreStore.self) private var sessionRestore
+    @Environment(SessionHandoffStore.self) private var handoff
     @Environment(\.scenePhase) private var scenePhase
     @State private var homeTab = ProcessInfo.processInfo.environment["BSNS_DEV_TAB"] ?? "connect"
     @State private var didRestore = false
@@ -45,8 +46,18 @@ struct RootView: View {
             sessions.restore = sessionRestore
             await ConfigSync.autoPull(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets)
             restoreSessions()
+            handoff.publish(sessionRestore.sessions, sync: sync)
+            await handoff.refresh(sync: sync)
+        }
+        .onChange(of: sessionRestore.sessions) { _, open in
+            handoff.publish(open, sync: sync)
         }
         .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                // Picking the phone up is when a session left open elsewhere matters.
+                handoff.publish(sessionRestore.sessions, sync: sync)
+                Task { await handoff.refresh(sync: sync) }
+            }
             DiagLog.log("app", "scenePhase=\(String(describing: phase)) activeSessions=\(sessions.sessions.count)")
             if phase == .background {
                 DiagLog.log("sync", "autoPush requested on background")

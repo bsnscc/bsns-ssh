@@ -82,24 +82,54 @@ final class SyncStore {
 
     // MARK: push / pull
 
-    func push(_ bundle: Data) throws {
+    func push(_ bundle: Data) throws { try write(bundle, named: Self.fileName) }
+
+    func pull() throws -> Data { try read(named: Self.fileName) }
+
+    // MARK: other files in the same folder (already encrypted by the caller)
+
+    func write(_ data: Data, named name: String) throws {
         guard let folder = resolvedFolder() else { throw SyncError.notConfigured }
         let scoped = folder.startAccessingSecurityScopedResource()
         defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
-        let file = folder.appendingPathComponent(Self.fileName)
+        let file = folder.appendingPathComponent(name)
         var coordErr: NSError?
         var writeErr: Error?
         NSFileCoordinator().coordinate(writingItemAt: file, options: .forReplacing, error: &coordErr) { url in
-            do { try bundle.write(to: url, options: .atomic) } catch { writeErr = error }
+            do { try data.write(to: url, options: .atomic) } catch { writeErr = error }
         }
         if let e = writeErr ?? coordErr { throw e }
     }
 
-    func pull() throws -> Data {
+    func remove(named name: String) {
+        guard let folder = resolvedFolder() else { return }
+        let scoped = folder.startAccessingSecurityScopedResource()
+        defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+        let file = folder.appendingPathComponent(name)
+        var coordErr: NSError?
+        NSFileCoordinator().coordinate(writingItemAt: file, options: .forDeleting, error: &coordErr) { url in
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    /// Names of the files in the sync folder. A file the provider hasn't
+    /// downloaded yet shows up as a hidden placeholder; it is listed under its
+    /// real name and `read` fetches it.
+    func fileNames() -> [String] {
+        guard let folder = resolvedFolder() else { return [] }
+        let scoped = folder.startAccessingSecurityScopedResource()
+        defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return names.map { name in
+            name.hasPrefix(".") && name.hasSuffix(".icloud") ? String(name.dropFirst().dropLast(7)) : name
+        }
+    }
+
+    func read(named name: String) throws -> Data {
         guard let folder = resolvedFolder() else { throw SyncError.notConfigured }
         let scoped = folder.startAccessingSecurityScopedResource()
         defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
-        let file = folder.appendingPathComponent(Self.fileName)
+        let file = folder.appendingPathComponent(name)
         // Pull the file down if it lives in the cloud and isn't materialized yet.
         try? FileManager.default.startDownloadingUbiquitousItem(at: file)
         var coordErr: NSError?

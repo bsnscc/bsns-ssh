@@ -8,8 +8,10 @@ struct BsnsSSHMacApp: App {
     @State private var knownHosts = KnownHostsStore()
     @State private var sessions = SessionStore()
     @State private var surfaces = MacSurfaceCache()
+    @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
     @State private var agentSocket = AgentSocketController()
     @State private var phoneKeys = PhoneKeyClient()
+    @State private var handoff = SessionHandoffStore()
     @State private var sync = SyncStore()
     @State private var snippets = SnippetStore()
     @State private var sessionRestore = SessionRestoreStore()
@@ -35,6 +37,7 @@ struct BsnsSSHMacApp: App {
                 .environment(surfaces)
                 .environment(agentSocket)
                 .environment(phoneKeys)
+                .environment(handoff)
                 .tint(Brand.accent)
                 .frame(minWidth: 760, minHeight: 460)
                 .environment(sync)
@@ -48,6 +51,16 @@ struct BsnsSSHMacApp: App {
                     // device's key or host arrives first.
                     await ConfigSync.autoPull(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets)
                     restoreSessions()
+                    handoff.publish(sessionRestore.sessions, sync: sync)
+                    await handoff.refresh(sync: sync)
+                }
+                .onChange(of: sessionRestore.sessions) { _, open in
+                    handoff.publish(open, sync: sync)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    // Coming back to the Mac is when a session left open elsewhere matters.
+                    handoff.publish(sessionRestore.sessions, sync: sync)
+                    Task { await handoff.refresh(sync: sync) }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
                     ConfigSync.autoPush(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets)
@@ -74,6 +87,7 @@ struct BsnsSSHMacApp: App {
                 .environment(agentSocket)
                 .environment(sync)
                 .environment(snippets)
+                .environment(handoff)
         }
     }
 
@@ -113,6 +127,21 @@ struct BsnsSSHMacApp: App {
                     session.reconnect()
                 }
             }
+        }
+    }
+}
+
+/// Guarantees the app comes up with its window. The system's saved window state
+/// can record "none open" (a quit with the window closed), and the next launch
+/// then shows nothing at all; the app reopens its own sessions, so it always
+/// wants a window.
+final class MacAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let hasWindow = NSApp.windows.contains { $0.isVisible && $0.canBecomeMain }
+            guard !hasWindow, let delegate = NSApp.delegate else { return }
+            // The same path as clicking the Dock icon with no window open.
+            _ = delegate.applicationOpenUntitledFile?(NSApp)
         }
     }
 }
