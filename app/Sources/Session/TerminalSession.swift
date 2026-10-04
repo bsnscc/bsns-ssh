@@ -494,7 +494,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
                     // Read the size now, not before the bootstrap — the terminal
                     // may have been re-laid-out while it ran.
                     let (cols, rows) = self.lock.withLock { (self.cols, self.rows) }
-                    if let err = mosh.open(host: spec.host, port: connect.port, key: connect.key, cols: cols, rows: rows) {
+                    if let err = mosh.open(host: RouteBook.shared.address(for: spec.host), port: connect.port, key: connect.key, cols: cols, rows: rows) {
                         // The server is up but we never reached it — reap it next time
                         // rather than leaving it to sit out its idle timeout.
                         if let pid = connect.pid {

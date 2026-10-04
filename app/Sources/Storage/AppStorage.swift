@@ -23,6 +23,10 @@ struct SavedHost: Codable, Identifiable, Hashable {
     /// same window instead of spawning a fresh shell. Decodes as nil from older
     /// saved hosts.
     var tmuxSession: String?
+    /// Other addresses for the same machine (a LAN name, a tailnet name). The
+    /// connection goes to whichever answers; `host` stays its name. Decodes as
+    /// nil from older saved hosts.
+    var routes: [String]?
 }
 
 private func appSupportURL(_ name: String) -> URL {
@@ -43,6 +47,11 @@ final class HostStore {
            let decoded = try? JSONDecoder().decode([SavedHost].self, from: data) {
             hosts = decoded
         }
+        publishRoutes()
+    }
+
+    private func publishRoutes() {
+        for host in hosts { RouteBook.shared.set(host.routes ?? [], for: host.host) }
     }
 
     /// Identity of a saved host: the same `user@host:port` triple is the "same"
@@ -93,7 +102,10 @@ final class HostStore {
         return hosts.count - before
     }
 
-    private func save() { try? JSONEncoder().encode(hosts).write(to: url) }
+    private func save() {
+        try? JSONEncoder().encode(hosts).write(to: url)
+        publishRoutes()
+    }
 }
 
 /// Persisted known_hosts (the stored host keys are public, so a plain file is

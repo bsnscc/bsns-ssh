@@ -15,6 +15,9 @@ struct MacConnectView: View {
     @State private var user = NSUserName()
     @State private var useMosh = false
     @State private var tmuxSession = ""
+    /// Other addresses for the same machine, as typed (see `SavedHost.routes`).
+    @State private var routesText = ""
+    @State private var presence = HostPresence()
     @State private var keyID: String?
     @State private var busy = false
     @State private var error: String?
@@ -38,6 +41,8 @@ struct MacConnectView: View {
             form
         }
         .navigationTitle("Connect")
+        .task { await presence.watch { hosts.hosts } }
+        .onChange(of: hosts.hosts) { _, saved in presence.refresh(saved) }
         .alert("Trust this host?", isPresented: Binding(get: { pendingHostKey != nil },
                                                         set: { if !$0 { pendingHostKey = nil } }),
                presenting: pendingHostKey) { key in
@@ -55,8 +60,15 @@ struct MacConnectView: View {
         List(hosts.hosts) { saved in
             Button { fill(saved) } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(saved.label.isEmpty ? saved.host : saved.label)
-                    Text("\(saved.user)@\(saved.host)\(saved.port == 22 ? "" : ":\(saved.port)")\(saved.useMosh == true ? " · mosh" : "")")
+                    HStack(spacing: 6) {
+                        if let state = presence.states[saved.id] {
+                            Circle().fill(state == .unreachable ? Color.red : state == .checking ? Color.gray : Color.green)
+                                .frame(width: 7, height: 7)
+                                .help(state == .unreachable ? "Unreachable" : state == .checking ? "Checking…" : "Reachable")
+                        }
+                        Text(saved.label.isEmpty ? saved.host : saved.label)
+                    }
+                    Text("\(saved.user)@\(saved.host)\(saved.port == 22 ? "" : ":\(saved.port)")\(saved.useMosh == true ? " · mosh" : "")\(presenceNote(for: saved))")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -99,6 +111,7 @@ struct MacConnectView: View {
                 TextField("Host", text: $host, prompt: Text("example.com"))
                 TextField("Port", text: $port)
                 TextField("User", text: $user)
+                TextField("Also at", text: $routesText, prompt: Text("Other addresses for this machine — LAN name, tailnet name"))
             }
             Section("Key") {
                 if store.identities.isEmpty {
@@ -145,8 +158,17 @@ struct MacConnectView: View {
         user = saved.user
         useMosh = saved.useMosh ?? false
         tmuxSession = saved.tmuxSession ?? ""
+        routesText = (saved.routes ?? []).joined(separator: ", ")
         keyID = saved.keyID
         error = nil
+    }
+
+    private func presenceNote(for saved: SavedHost) -> String {
+        switch presence.states[saved.id] {
+        case .reachable(let route): return route == saved.host ? "" : " · via \(route)"
+        case .unreachable: return " · unreachable"
+        default: return ""
+        }
     }
 
     /// Load a session that is open on another device. The key it used there is
@@ -159,6 +181,7 @@ struct MacConnectView: View {
         user = s.user
         useMosh = s.useMosh
         tmuxSession = s.tmuxSession ?? ""
+        routesText = (hosts.hosts.first { $0.host == s.host && $0.user == s.user }?.routes ?? []).joined(separator: ", ")
         if let blob = s.keyBlob, store.identities.contains(where: { $0.blob == blob }) {
             keyID = SSHKeyFormat.fingerprint(ofPublicKeyBlob: blob)
         } else if let saved = hosts.hosts.first(where: { $0.host == s.host && $0.user == s.user }), let known = saved.keyID {
@@ -171,13 +194,16 @@ struct MacConnectView: View {
         guard let portValue else { return }
         hosts.add(SavedHost(label: host, host: host, port: Int(portValue), user: user,
                             useMosh: useMosh, keyID: selectedKey.map { SSHKeyFormat.fingerprint(ofPublicKeyBlob: $0.blob) },
-                            tmuxSession: MoshBootstrap.sanitizedTmuxName(tmuxSession)))
+                            tmuxSession: MoshBootstrap.sanitizedTmuxName(tmuxSession),
+                            routes: { let r = HostRoutes.parse(routesText, excluding: host); return r.isEmpty ? nil : r }()))
     }
 
     private func connect() {
         guard let portValue, let key = selectedKey else { return }
         let host = host.trimmingCharacters(in: .whitespaces)
         let user = user
+        // Addresses typed but not saved still count for this connection.
+        RouteBook.shared.set(HostRoutes.parse(routesText, excluding: host), for: host)
         error = nil
         busy = true
         let known = knownHosts.knownHosts
@@ -196,7 +222,7 @@ struct MacConnectView: View {
                     let connect = try await MoshBootstrap.connect(spec: spec, sessionID: id)
                     let mosh = MoshSession()
                     mosh.serverPID = connect.pid
-                    if let failure = mosh.open(host: host, port: connect.port, key: connect.key, cols: 80, rows: 24) {
+                    if let failure = mosh.open(host: RouteBook.shared.address(for: host), port: connect.port, key: connect.key, cols: 80, rows: 24) {
                         if let pid = connect.pid {
                             MoshServerRegistry.shared.abandon(
                                 pid: pid, hostKey: MoshServerRegistry.hostKey(host: host, port: portValue, user: user))

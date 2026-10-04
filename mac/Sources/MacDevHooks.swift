@@ -101,6 +101,13 @@ enum MacDevHooks {
               let key = try? FileKey.from(algorithm: .ed25519, privateKeyMaterial: seed) else { return }
         let port = UInt16(env["BSNS_DEV_PORT"] ?? "22") ?? 22
         await store.agent.add(key)
+        // BSNS_DEV_ROUTES: other addresses for BSNS_DEV_HOST, as typed in the form.
+        if let routes = env["BSNS_DEV_ROUTES"] {
+            RouteBook.shared.set(HostRoutes.parse(routes, excluding: host), for: host)
+            let started = Date()
+            let route = await Task.detached { SSHShell.reachableRoute(host: host, port: port) }.value
+            print("dev routes: \(host) answers via \(route ?? "nothing") after \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
+        }
         var known = KnownHosts()
         let useMosh = env["BSNS_DEV_MOSH"] == "1"
         do {

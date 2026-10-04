@@ -61,6 +61,24 @@ asking), and only the signature travels back.
 The protocol lives in `Sources/BsnsSSHCore/DeviceLink.swift`; the computer sees
 each lent key as an ordinary backend (`RemoteAgentKey`).
 
+## One machine, several addresses
+
+A saved host can list other addresses for the same machine — a LAN name at
+home, a tailnet name away. Wherever a socket is opened, the transport dials
+them together, a beat apart in order of preference, and keeps the first that
+answers (`RouteRace` in `Sources/BsnsSSHCore/HostRoutes.swift`); a route that
+hangs doesn't hold the others back. Every reconnect races again, so a session
+follows the machine from one network to another.
+
+The host keeps one name. Host-key trust, saved state and session identity all
+hang on the primary name, whichever address was dialed — the key check is what
+proves it is the same machine. mosh's UDP goes to the address the bootstrap
+connection used.
+
+Hosts with more than one address also show whether they are reachable right
+now. That check is a bare connection to the SSH port, closed at once; hosts
+with a single address are never checked unasked.
+
 ## Sessions that move between devices
 
 With config sync set up, each device keeps one small file of its open sessions

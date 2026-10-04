@@ -1086,11 +1086,37 @@ public final class SSHShell: @unchecked Sendable {
     /// this fails it in seconds so the caller surfaces `connectFailed` promptly.
     private static let connectTimeoutMs: Int32 = 10_000
 
+    /// Connect to `host` over whichever of its routes answers first (see
+    /// `RouteBook`); a host with one address is dialed directly.
+    private static func tcpConnect(host: String, port: UInt16, timeoutMs: Int32 = connectTimeoutMs) -> Int32? {
+        let candidates = RouteBook.shared.candidates(for: host)
+        let won = RouteRace.first(candidates,
+                                  connect: { route -> Int32? in tcpConnectOne(host: route, port: port, timeoutMs: timeoutMs) },
+                                  discard: { fd in close(fd) })
+        guard let won else { return nil }
+        RouteBook.shared.noteAnswer(from: won.route, for: host)
+        return won.value
+    }
+
+    /// The route `host` answers on right now, or nil — a bare connection to its
+    /// SSH port, closed at once. Blocking; call off the main thread.
+    public static func reachableRoute(host: String, port: UInt16) -> String? {
+        let candidates = RouteBook.shared.candidates(for: host)
+        let won = RouteRace.first(candidates,
+                                  connect: { route -> String? in
+                                      guard let fd = tcpConnectOne(host: route, port: port, timeoutMs: 3_000) else { return nil }
+                                      close(fd)
+                                      return route
+                                  },
+                                  discard: { _ in })
+        return won?.route
+    }
+
     /// Resolve `host` (DNS name, IPv4, or IPv6) and connect, trying each returned
     /// address in turn with a bounded, non-blocking connect so an unreachable
     /// address can't black-hole the worker. The returned socket is left in
     /// blocking mode (libssh2 toggles it as needed).
-    private static func tcpConnect(host: String, port: UInt16) -> Int32? {
+    private static func tcpConnectOne(host: String, port: UInt16, timeoutMs: Int32) -> Int32? {
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC          // IPv4 or IPv6
         hints.ai_socktype = SOCK_STREAM
@@ -1100,7 +1126,7 @@ public final class SSHShell: @unchecked Sendable {
         defer { freeaddrinfo(res) }
         var ai = res
         while let info = ai {
-            if let fd = connectWithTimeout(info.pointee, timeoutMs: connectTimeoutMs) { return fd }
+            if let fd = connectWithTimeout(info.pointee, timeoutMs: timeoutMs) { return fd }
             ai = info.pointee.ai_next
         }
         return nil
