@@ -92,9 +92,9 @@ struct MacConnectView: View {
             }
             Section {
                 Toggle("Use mosh (UDP · survives sleep and network changes)", isOn: $useMosh)
-                if useMosh {
-                    TextField("tmux session", text: $tmuxSession, prompt: Text("optional — attach or create"))
-                }
+                TextField("tmux session", text: $tmuxSession, prompt: Text("optional — attach or create"))
+            } footer: {
+                Text("With a tmux session named, the connection attaches to it (creating it the first time), so reconnecting — after sleep, a network change or relaunching the app — returns to the same work.")
             }
             if let error {
                 Section { Text(error).foregroundStyle(.red) }
@@ -140,7 +140,8 @@ struct MacConnectView: View {
         busy = true
         let known = knownHosts.knownHosts
         let agent = store.agent
-        let tmux = useMosh ? MoshBootstrap.sanitizedTmuxName(tmuxSession) : nil
+        let tmux = MoshBootstrap.sanitizedTmuxName(tmuxSession)
+        let useMosh = useMosh
         let spec = TerminalSession.Spec(host: host, port: portValue, user: user, agent: agent,
                                         knownHosts: known, useMosh: useMosh, keyBlob: key.blob, tmuxSession: tmux)
         Task {
@@ -168,7 +169,11 @@ struct MacConnectView: View {
                                             knownHosts: known, keyBlob: key.blob)
                     session = TerminalSession(spec: spec, title: "\(user)@\(host)")
                     session.adopt(shell)
+                    session.attachTmuxIfConfigured(shell)
                 }
+                // Remembered so the session is reopened on the next launch.
+                session.restorable = RestorableSession(id: session.id, title: session.title, host: host, port: portValue,
+                                                       user: user, useMosh: useMosh, keyBlob: key.blob, tmuxSession: tmux)
                 busy = false
                 sessions.add(session)
             } catch SSHShellError.unknownHostKey(let hostKey) {

@@ -34,6 +34,22 @@ enum MacDevHooks {
                 print("dev enclave: FAILED \(error)")
             }
         }
+        // BSNS_DEV_SYNC_ROUNDTRIP=1: encrypt this device's config as sync would,
+        // decrypt it again, and report what survived. Nothing is written.
+        if env["BSNS_DEV_SYNC_ROUNDTRIP"] == "1" {
+            let hosts = HostStore(), known = KnownHostsStore(), snippets = SnippetStore()
+            let phrase = "dev-roundtrip-" + UUID().uuidString
+            do {
+                let sealed = try ConfigService.export(hosts: hosts, knownHosts: known, agent: store, snippets: snippets,
+                                                      includeKeys: true, passphrase: phrase)
+                let bundle = try ConfigService.decode(sealed, passphrase: phrase)
+                let wrong = (try? ConfigService.decode(sealed, passphrase: phrase + "x")) != nil
+                let plaintextVisible = String(decoding: sealed, as: UTF8.self).contains("ssh-ed25519")
+                print("dev sync: sealed \(sealed.count) bytes, hosts=\(bundle.hosts.count), opens with the wrong phrase=\(wrong), key type visible in the file=\(plaintextVisible)")
+            } catch {
+                print("dev sync: FAILED \(error)")
+            }
+        }
         guard env["BSNS_DEV_AUTOCONNECT"] == "1",
               let seed = env["BSNS_DEV_KEY"].flatMap({ Data(base64Encoded: $0) }),
               let host = env["BSNS_DEV_HOST"], let user = env["BSNS_DEV_USER"],
@@ -62,6 +78,7 @@ enum MacDevHooks {
                 session.start()
             } else {
                 session.adopt(probe)
+                session.attachTmuxIfConfigured(probe)
                 sessions.add(session)
             }
             for _ in 0..<150 where session.status != .connected {
@@ -71,6 +88,14 @@ enum MacDevHooks {
             if let command = env["BSNS_DEV_RUN"], !command.isEmpty {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 session.runCommand(command)
+            }
+            // BSNS_DEV_FORWARD_URL: forward the server-side port a loopback URL
+            // points at, as clicking the link would, and report the local address.
+            if let link = env["BSNS_DEV_FORWARD_URL"].flatMap(URL.init(string:)), let loopback = LoopbackURL(link) {
+                switch await session.forwardLoopback(loopback) {
+                case .success(let url): print("dev forward: \(url.absoluteString)")
+                case .failure(let failure): print("dev forward: FAILED \(failure.message)")
+                }
             }
         } catch {
             print("dev autoconnect failed: \(error)")

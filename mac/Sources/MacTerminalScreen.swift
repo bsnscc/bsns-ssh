@@ -10,14 +10,52 @@ struct MacTerminalScreen: View {
     @AppStorage(SettingsKey.theme) private var themeId = TerminalTheme.bsnsDark.id
     @AppStorage(SettingsKey.fontFamily) private var fontFamily = TerminalFont.families[0]
     @AppStorage(SettingsKey.fontSize) private var fontSize = 13.0
+    @State private var showForwards = false
+    @State private var tmuxPanel: TmuxPanelChoice?
+
+    private enum TmuxPanelChoice: Identifiable {
+        case windows, history
+        var id: Self { self }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             statusBanner
             MacTerminalHost(surface: surfaces.surface(for: session),
                             themeId: themeId, fontFamily: fontFamily, fontSize: fontSize)
+                .overlay(alignment: .top) { notice }
         }
         .navigationTitle(session.title)
+        .toolbar {
+            ToolbarItemGroup {
+                // tmux beside the terminal needs a second connection, which a
+                // jump host has no tunnel for yet.
+                if session.spec.jump == nil {
+                    Button { tmuxPanel = .windows } label: { Label("tmux Windows", systemImage: "rectangle.stack") }
+                        .help("tmux windows")
+                    Button { tmuxPanel = .history } label: { Label("tmux History", systemImage: "text.justify.left") }
+                        .help("The current tmux pane's history as text")
+                }
+                Button { showForwards = true } label: {
+                    Label(session.forwards.isEmpty ? "Port Forwarding" : "Port Forwarding (\(session.forwards.count))",
+                          systemImage: "arrow.left.arrow.right")
+                }
+                .help("Port forwarding")
+            }
+        }
+        .sheet(isPresented: $showForwards) { MacForwardsView(session: session) }
+        .sheet(item: $tmuxPanel) { choice in MacTmuxPanel(session: session, showHistory: choice == .history) }
+    }
+
+    /// Transient notices from the session (a forward opened, a remote clipboard write).
+    @ViewBuilder private var notice: some View {
+        if let status = session.transferStatus {
+            Label(status, systemImage: session.transferSymbol)
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(.bar, in: Capsule())
+                .overlay(Capsule().strokeBorder(.separator))
+                .padding(.top, 8)
+        }
     }
 
     @ViewBuilder private var statusBanner: some View {
@@ -129,6 +167,23 @@ final class MacTerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         // launch arbitrary URL schemes on this Mac.
         guard let url = URL(string: link), let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else { return }
+        // "localhost" printed by the server means the server's loopback; this
+        // Mac's browser would look here instead. Forward the port, then open that.
+        if let loopback = LoopbackURL(url) {
+            let session = session
+            Task { @MainActor in
+                switch await session.forwardLoopback(loopback) {
+                case .success(let local):
+                    session.flash("Forwarding port \(loopback.remotePort) → \(local.port.map(String.init) ?? "")",
+                                  symbol: "arrow.left.arrow.right")
+                    NSWorkspace.shared.open(local)
+                case .failure(let failure):
+                    session.flash("Couldn't forward port \(loopback.remotePort): \(failure.message)",
+                                  symbol: "exclamationmark.triangle")
+                }
+            }
+            return
+        }
         NSWorkspace.shared.open(url)
     }
 
@@ -144,6 +199,8 @@ final class MacTerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
               let text = String(data: content, encoding: .utf8), !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+        session.flash("Remote copied \(text.count) character\(text.count == 1 ? "" : "s") to the clipboard",
+                      symbol: "doc.on.clipboard")
     }
 
     func setTerminalTitle(source: TerminalView, title: String) {}

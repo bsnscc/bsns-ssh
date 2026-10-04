@@ -44,7 +44,7 @@ final class MoshServerRegistry: @unchecked Sendable {
     private var records: [Record] = []
     private let url: URL
     private static var defaultURL: URL {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dir = AppPaths.support
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("mosh-servers.json")
     }

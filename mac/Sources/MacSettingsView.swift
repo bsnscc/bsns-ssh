@@ -5,6 +5,11 @@ struct MacSettingsView: View {
     @Environment(AgentStore.self) private var store
     @Environment(KnownHostsStore.self) private var knownHosts
     @Environment(AgentSocketController.self) private var agentSocket
+    @Environment(HostStore.self) private var hosts
+    @Environment(SyncStore.self) private var sync
+    @Environment(SnippetStore.self) private var snippets
+    @State private var syncPassphrase = ""
+    @State private var syncing = false
     @AppStorage(AgentSocketController.enabledKey) private var socketEnabled = false
     @AppStorage(AgentSocketController.hardwareOnlyKey) private var socketHardwareOnly = true
     @AppStorage(SettingsKey.theme) private var themeId = TerminalTheme.bsnsDark.id
@@ -72,6 +77,33 @@ struct MacSettingsView: View {
             }
             .onChange(of: socketEnabled) { _, _ in applyAgentSocket() }
             .onChange(of: socketHardwareOnly) { _, _ in applyAgentSocket() }
+
+            Section {
+                LabeledContent("Folder") {
+                    HStack {
+                        Text(sync.folderName ?? "Not set").foregroundStyle(sync.folderName == nil ? .secondary : .primary)
+                        Button("Choose…") { chooseSyncFolder() }
+                    }
+                }
+                HStack {
+                    SecureField("Passphrase", text: $syncPassphrase,
+                                prompt: Text(sync.hasPassphrase ? "Saved — type to change" : "Required"))
+                    Button("Save") {
+                        sync.savePassphrase(syncPassphrase)
+                        syncPassphrase = ""
+                    }
+                    .disabled(syncPassphrase.isEmpty)
+                }
+                HStack {
+                    Button("Sync Now") { syncNow() }.disabled(!sync.autoEnabled || syncing)
+                    if syncing { ProgressView().controlSize(.small) }
+                    if let status = sync.lastStatus { Text(status).font(.callout).foregroundStyle(.secondary) }
+                }
+            } header: {
+                Text("Sync")
+            } footer: {
+                Text("Hosts, known hosts, snippets, settings and software keys are kept in one encrypted file in a folder you choose — iCloud Drive, a shared drive, anything that syncs — and merged on every device that uses the same folder and passphrase. The file is encrypted before it is written, so the storage only ever sees ciphertext. Secure Enclave keys never leave this Mac. Once set, it pulls on launch and pushes when you switch away.")
+            }
         }
         .formStyle(.grouped)
         .frame(width: 480)
@@ -80,6 +112,25 @@ struct MacSettingsView: View {
 
     private var socketPath: String {
         AgentSocketServer.socketURL.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    }
+
+    private func chooseSyncFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Use Folder"
+        if panel.runModal() == .OK, let url = panel.url { sync.setFolder(url) }
+    }
+
+    private func syncNow() {
+        syncing = true
+        Task {
+            await ConfigSync.autoPull(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets)
+            ConfigSync.autoPush(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets)
+            sync.lastStatus = "Synced \(Date().formatted(date: .omitted, time: .shortened))"
+            syncing = false
+        }
     }
 
     private func applyAgentSocket() {

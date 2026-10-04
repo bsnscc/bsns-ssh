@@ -71,6 +71,37 @@ enum KeyStore {
     }
     #endif
 
+    #if !os(iOS)
+    /// Hardware security-key records can't be used on this platform, but they
+    /// arrive through config sync and must leave through it again intact —
+    /// otherwise syncing from here would drop them from the shared bundle.
+    static func saveSecurityKeyMetadata(_ metadata: ExportedSecurityKey) throws {
+        try persist(account: SSHKeyFormat.fingerprint(ofPublicKeyBlob: metadata.publicBlob), Stored(
+            algorithm: KeyAlgorithm.ecdsaSK.rawValue, material: metadata.publicBlob, comment: metadata.comment,
+            kind: metadata.kind, credentialID: metadata.credentialID, application: metadata.application))
+    }
+
+    static func loadSecurityKeyMetadata() -> [ExportedSecurityKey] {
+        let query: [String: Any] = [
+            kSecAttrService as String: service,
+            kSecReturnData as String: true,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let items = result as? [[String: Any]] else { return [] }
+        return items.compactMap { item in
+            guard let data = item[kSecValueData as String] as? Data,
+                  let stored = try? JSONDecoder().decode(Stored.self, from: data),
+                  let kind = stored.kind, kind == "fido2" || kind == "webauthn",
+                  let credentialID = stored.credentialID else { return nil }
+            return ExportedSecurityKey(kind: kind, publicBlob: stored.material, credentialID: credentialID,
+                                       application: stored.application, comment: stored.comment)
+        }
+    }
+    #endif
+
     /// Persist a record without ever destroying the existing one before the new
     /// write lands: UPDATE in place, and only ADD if there's nothing there yet.
     /// A failed encode or any non-success OSStatus throws, so a caller can never

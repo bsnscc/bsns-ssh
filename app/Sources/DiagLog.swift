@@ -108,7 +108,7 @@ final class DiagLog {
     }
 
     nonisolated private static func persistentURL() -> URL? {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+        AppPaths.caches
             .appendingPathComponent("Diagnostics", isDirectory: true)
             .appendingPathComponent("events.log")
     }

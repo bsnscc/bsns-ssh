@@ -16,7 +16,7 @@ struct Snippet: Codable, Identifiable, Hashable {
 final class SnippetStore {
     private(set) var snippets: [Snippet] = []
     private let url: URL = {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dir = AppPaths.support
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("snippets.json")
     }()
@@ -38,6 +38,7 @@ final class SnippetStore {
     private func save() { try? JSONEncoder().encode(snippets).write(to: url) }
 }
 
+#if os(iOS)
 /// Manage snippets: add / edit / delete, and flag which run automatically on connect.
 struct SnippetsView: View {
     @Environment(SnippetStore.self) private var store
@@ -137,3 +138,4 @@ struct SnippetPicker: View {
         }
     }
 }
+#endif

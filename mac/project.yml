@@ -43,6 +43,8 @@ targets:
         group: Shared/Session
       - path: ../app/Sources/Session/SessionRestoreStore.swift
         group: Shared/Session
+      - path: ../app/Sources/Session/TmuxPanelModel.swift
+        group: Shared/Session
       - path: ../app/Sources/Transport
         group: Shared
       - path: ../app/Sources/Mosh
@@ -50,6 +52,17 @@ targets:
       - path: ../app/Sources/Settings/AppSettings.swift
         group: Shared/Settings
       - path: ../app/Sources/Settings/CommandHistory.swift
+        group: Shared/Settings
+      # Encrypted config sync: the bundle format, its crypto and the folder store.
+      - path: ../app/Sources/Settings/ConfigBundle.swift
+        group: Shared/Settings
+      - path: ../app/Sources/Settings/ConfigService.swift
+        group: Shared/Settings
+      - path: ../app/Sources/Settings/ConfigSync.swift
+        group: Shared/Settings
+      - path: ../app/Sources/Settings/SyncStore.swift
+        group: Shared/Settings
+      - path: ../app/Sources/Settings/Snippets.swift
         group: Shared/Settings
     dependencies:
       - package: bsns-ssh

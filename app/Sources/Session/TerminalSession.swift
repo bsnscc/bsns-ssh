@@ -512,6 +512,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
                                             agent: spec.agent, cols: cols, rows: rows,
                                             knownHosts: spec.knownHosts, password: nil, jump: spec.jump,
                                             keyBlob: spec.keyBlob)
+                    self.attachTmuxIfConfigured(shell)
                     DispatchQueue.main.async { self.reapplyForwards() }
                 }
                 self.setStatus(.connected)
@@ -574,6 +575,16 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// Dev hook: reconnect exactly as a failed mosh resume does.
     func devForceReconnect() { performReconnect(reason: "dev") }
     #endif
+
+    /// With a tmux session configured, a plain SSH connection attaches to it as
+    /// soon as the shell is up — the SSH counterpart of what the mosh bootstrap
+    /// does on the server — so a reconnect lands back in the same work instead
+    /// of a fresh shell. `exec` replaces the login shell, so leaving tmux ends
+    /// the connection as it would under mosh; if tmux is missing the shell stays.
+    func attachTmuxIfConfigured(_ shell: SSHShell) {
+        guard !spec.useMosh, let name = MoshServerCommand.sanitizedTmuxName(spec.tmuxSession) else { return }
+        shell.write(Array("command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s \(name)\n".utf8)[...])
+    }
 
     /// The registry key for the host this session's mosh-servers run on.
     private static func moshHostKey(_ spec: Spec) -> String {

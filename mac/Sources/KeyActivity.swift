@@ -14,7 +14,7 @@ final class KeyActivityLog {
 
     private(set) var events: [AgentAuditEvent] = []
     @ObservationIgnored private let url: URL = {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dir = AppPaths.support
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("key-activity.json")
     }()

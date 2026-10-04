@@ -170,6 +170,20 @@ final class AgentStore {
     }
     #endif
 
+    #if !os(iOS)
+    /// Security keys aren't usable here; their records are carried so that
+    /// config sync passes them on unchanged (see `KeyStore`).
+    func exportableSecurityKeyMetadata() -> [ExportedSecurityKey] { KeyStore.loadSecurityKeyMetadata() }
+
+    @discardableResult
+    func importSecurityKeyMetadata(_ metadata: ExportedSecurityKey) async -> Bool {
+        guard !metadata.credentialID.isEmpty, !metadata.publicBlob.isEmpty else { return false }
+        let known = Set(KeyStore.loadSecurityKeyMetadata().map(\.publicBlob))
+        guard !known.contains(metadata.publicBlob) else { return false }
+        return (try? KeyStore.saveSecurityKeyMetadata(metadata)) != nil
+    }
+    #endif
+
     /// Import a software key from a config bundle, skipping duplicates.
     func importKey(_ key: FileKey) async {
         let existing = Set(identities.map { SSHKeyFormat.fingerprint(ofPublicKeyBlob: $0.blob) })
