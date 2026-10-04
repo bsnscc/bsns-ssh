@@ -1,8 +1,11 @@
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 import SwiftTerm
 import UniformTypeIdentifiers
 import QuartzCore
+import SafariServices
+import BsnsSSHCore
 
 private let minFontSize: CGFloat = 8
 private let maxFontSize: CGFloat = 30
@@ -27,8 +30,14 @@ struct LiveTerminalScreen: View {
     @AppStorage(SettingsKey.tmuxScrollSequence) private var tmuxScrollSequence = "C-b ["
     @AppStorage(SettingsKey.screenScrollSequence) private var screenScrollSequence = "C-a ["
     @AppStorage(SettingsKey.multiplexer) private var multiplexer = MultiplexerPref.both.rawValue
+    @AppStorage(SettingsKey.scrollGesture) private var scrollGesture = ScrollGesturePref.automatic.rawValue
 
-    @State private var keyboardUp = false
+    @State private var scrolledBack = false
+    @State private var pendingPaste: PendingPaste?
+    @State private var tmuxPanel: TmuxPanelView.Tab?
+    @State private var forwarding = false
+    @State private var forwardError: String?
+    @State private var browsing: BrowserPage?
     @State private var hwKeyboard = HardwareKeyboardMonitor()
     @State private var showFind = false
     @State private var findQuery = ""
@@ -55,17 +64,21 @@ struct LiveTerminalScreen: View {
                                 fontSize: Binding(get: { CGFloat(fontSize) }, set: { fontSize = Double($0) }),
                                 themeId: themeId,
                                 fontFamily: fontFamily,
-                                hardwareKeyboard: hwKeyboard.isConnected,
+                                suppressAccessory: hwKeyboard.isConnected || showKeyBar,
                                 tmuxSequence: tmuxScrollSequence,
                                 screenSequence: screenScrollSequence,
-                                prefs: "\(cursorStyle)\(cursorBlink)\(optionAsMeta)\(predictiveText)",
+                                prefs: "\(cursorStyle)\(cursorBlink)\(optionAsMeta)\(predictiveText)\(scrollGesture)",
                                 muxScrollActive: $muxScrollActive,
-                                tappedLink: $tappedLink)
+                                scrolledBack: $scrolledBack,
+                                tappedLink: $tappedLink,
+                                pendingPaste: $pendingPaste)
                 .overlay(alignment: .top) { transferBanner }
-            // Our key row is redundant with SwiftTerm's soft-keyboard accessory,
-            // so only show it when the soft keyboard is down. With a physical
-            // keyboard it collapses to Esc plus multiplexer scroll mode.
-            if !keyboardUp && showKeyBar {
+                .overlay(alignment: .bottomTrailing) { jumpToLatestButton }
+            // The shortcut bar stays put whether the soft keyboard is up or down
+            // (it replaces the keyboard's built-in accessory row, which is
+            // suppressed while the bar is on). With a physical keyboard it
+            // collapses to Esc plus multiplexer scroll mode.
+            if showKeyBar {
                 Divider().overlay(Color(theme.ansi[8].uiColor).opacity(0.5))
                 TerminalKeyBar(session: session, handle: handle, theme: theme,
                                tmuxSequence: tmuxScrollSequence,
@@ -87,12 +100,6 @@ struct LiveTerminalScreen: View {
             }
             .onChange(of: keepAwake) { _, v in UIApplication.shared.isIdleTimerDisabled = v }
             .onChange(of: muxScrollActive) { _, active in handle.setRemoteScrollMode(active) }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                keyboardUp = true
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                keyboardUp = false
-            }
             .sheet(isPresented: $showForwards) { PortForwardsView(session: session) }
             .sheet(isPresented: $showSnippets) {
                 SnippetPicker { snip in session.runCommand(snip.command) }
@@ -103,6 +110,10 @@ struct LiveTerminalScreen: View {
             .sheet(isPresented: $showHelp) {
                 NavigationStack { TerminalHelpView(showsDoneButton: true) }
             }
+            .sheet(item: $tmuxPanel) { tab in TmuxPanelView(session: session, tab: tab) }
+            .sheet(item: $browsing) { page in
+                BrowserSheet(url: page.url).ignoresSafeArea()
+            }
             .confirmationDialog(tappedLink?.absoluteString ?? "",
                                 isPresented: Binding(get: { tappedLink != nil },
                                                      set: { if !$0 { tappedLink = nil } }),
@@ -111,10 +122,31 @@ struct LiveTerminalScreen: View {
                 // remote, and the destination is the one thing worth reading
                 // before handing the tap to Safari.
                 if let url = tappedLink {
-                    Button("Open in Safari") { UIApplication.shared.open(url) }
+                    if let loopback = LoopbackURL(url) {
+                        // "localhost" printed by the server means the SERVER's
+                        // loopback. Safari would look on this device instead, so
+                        // the useful action is to forward the port and open that.
+                        Button("Forward Port \(String(loopback.remotePort)) and Open") { openForwarded(loopback) }
+                    } else {
+                        Button("Open in Safari") { UIApplication.shared.open(url) }
+                    }
                     Button("Copy Link") { UIPasteboard.general.string = url.absoluteString }
                 }
                 Button("Cancel", role: .cancel) { }
+            }
+            .alert("Couldn't forward the port", isPresented: Binding(get: { forwardError != nil },
+                                                                    set: { if !$0 { forwardError = nil } })) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(forwardError ?? "")
+            }
+            .alert(pendingPaste.map { "Paste \($0.lineCount) lines?" } ?? "",
+                   isPresented: Binding(get: { pendingPaste != nil }, set: { if !$0 { pendingPaste = nil } }),
+                   presenting: pendingPaste) { paste in
+                Button("Paste") { paste.proceed() }
+                Button("Cancel", role: .cancel) { }
+            } message: { paste in
+                Text("If the program isn't taking pastes as a block, each line runs as soon as it arrives.\n\n\(paste.preview)")
             }
     }
 
@@ -224,6 +256,24 @@ struct LiveTerminalScreen: View {
         }
     }
 
+    /// Shown while the terminal is scrolled back into this device's scrollback:
+    /// the view holds its place there while output keeps arriving, so there has
+    /// to be an obvious way back to it.
+    @ViewBuilder private var jumpToLatestButton: some View {
+        if scrolledBack {
+            Button { handle.scrollToLatest() } label: {
+                Image(systemName: "arrow.down.to.line")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 40, height: 40)
+                    .background(.bar, in: Circle())
+                    .overlay(Circle().strokeBorder(.separator))
+            }
+            .padding(12)
+            .shadow(radius: 4, y: 1)
+            .accessibilityLabel("Jump to latest output")
+        }
+    }
+
     private var findBar: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -263,6 +313,22 @@ struct LiveTerminalScreen: View {
         handle.clearFind()
     }
 
+    /// Forward the server-side port a link points at, then show it in an in-app
+    /// browser sheet. In-app on purpose: the forward lives in this process, and
+    /// switching to Safari would background the app and suspend the tunnel
+    /// before the page finished loading.
+    private func openForwarded(_ loopback: LoopbackURL) {
+        guard !forwarding else { return }
+        forwarding = true
+        Task {
+            switch await session.forwardLoopback(loopback) {
+            case .success(let url): browsing = BrowserPage(url: url)
+            case .failure(let failure): forwardError = failure.message
+            }
+            forwarding = false
+        }
+    }
+
     private func startMuxScroll(sequence: String, fallback: [UInt8]) {
         let bytes = KeySequence.bytes(for: sequence, fallback: fallback)
         session.write(bytes[...])
@@ -281,6 +347,22 @@ struct LiveTerminalScreen: View {
             Button { handle.paste() } label: { Label("Paste", systemImage: "doc.on.clipboard") }
             Button { handle.selectAll() } label: { Label("Select All", systemImage: "selection.pin.in.out") }
 
+            // tmux beside the terminal (over a second SSH connection). Not through
+            // a jump host: that connection has no tunnel to ride.
+            if muxButtons.tmux, session.spec.jump == nil {
+                Section("tmux") {
+                    Button { tmuxPanel = .windows } label: { Label("Windows…", systemImage: "rectangle.stack") }
+                    Button { tmuxPanel = .history } label: { Label("History…", systemImage: "text.justify.left") }
+                }
+            }
+            if handle.hasPromptMarks {
+                Section("Prompts") {
+                    Button { handle.jumpToPrompt(previous: true) } label: { Label("Previous Prompt", systemImage: "chevron.up") }
+                    Button { handle.jumpToPrompt(previous: false) } label: { Label("Next Prompt", systemImage: "chevron.down") }
+                    Button { copyLastCommandOutput() } label: { Label("Copy Last Output", systemImage: "doc.on.doc") }
+                }
+            }
+
             let count = session.forwards.count
             Button { showForwards = true } label: {
                 Label(count == 0 ? "Port Forwarding…" : "Port Forwarding (\(count))…",
@@ -291,6 +373,9 @@ struct LiveTerminalScreen: View {
             Button { showHelp = true } label: { Label("Terminal Help…", systemImage: "questionmark.circle") }
             Toggle(isOn: $predictiveText) {
                 Label("Predictive text", systemImage: "textformat.abc")
+            }
+            Toggle(isOn: Binding(get: { handle.mouseReporting }, set: { handle.mouseReporting = $0 })) {
+                Label("Send taps and swipes to the remote", systemImage: "hand.tap")
             }
 
             Picker("Theme", selection: $themeId) {
@@ -303,6 +388,16 @@ struct LiveTerminalScreen: View {
             Image(systemName: "ellipsis.circle")
                 .accessibilityLabel("More actions")
         }
+    }
+
+    private func copyLastCommandOutput() {
+        guard let output = handle.lastCommandOutput(), !output.isEmpty else {
+            session.flash("No command output to copy", symbol: "exclamationmark.triangle")
+            return
+        }
+        UIPasteboard.general.string = output
+        let lines = output.split(whereSeparator: \.isNewline).count
+        session.flash("Copied \(lines) line\(lines == 1 ? "" : "s") of output", symbol: "doc.on.doc")
     }
 
     private func setZoom(_ size: CGFloat) {
@@ -328,6 +423,28 @@ struct LiveTerminalScreen: View {
     }
 }
 
+/// A multi-line paste waiting for the user's go-ahead.
+struct PendingPaste: Identifiable {
+    let id = UUID()
+    let lineCount: Int
+    let preview: String
+    let proceed: () -> Void
+}
+
+/// A forwarded page being shown in the in-app browser sheet.
+struct BrowserPage: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// The system's in-app browser. It runs the page in the browser's own process,
+/// not this app's — the app itself still opens no connections beyond SSH.
+struct BrowserSheet: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
+    func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
+}
+
 /// Lets the SwiftUI toolbar reach into the live `TerminalView` for paste/select,
 /// and toggle SwiftTerm's built-in keyboard accessory (its F-key row), which we
 /// suppress when a physical keyboard is attached.
@@ -348,6 +465,23 @@ final class TerminalHandle {
 
     func paste() { terminal?.paste(nil) }
     func selectAll() { terminal?.selectAll(nil) }
+    func scrollToLatest() { terminal?.scrollToLiveTail(animated: true) }
+
+    /// Whether taps and swipes may be reported to a remote that asked for the mouse.
+    var mouseReporting = true {
+        didSet { terminal?.allowMouseReporting = mouseReporting }
+    }
+
+    /// Whether the shell has marked any prompts (OSC 133). Kept here, updated
+    /// after each feed, so the menu can show its prompt actions only when they
+    /// would do something.
+    private(set) var hasPromptMarks = false
+    func notePromptMarks() {
+        let marked = terminal?.getTerminal().hasPromptMarks ?? false
+        if marked != hasPromptMarks { hasPromptMarks = marked }
+    }
+    func jumpToPrompt(previous: Bool) { terminal?.scrollToPrompt(previous: previous) }
+    func lastCommandOutput() -> String? { terminal?.getTerminal().lastCommandOutput() }
     func setRemoteScrollMode(_ active: Bool) { (terminal as? ZoomableTerminalView)?.setRemoteScrollMode(active) }
     func sendRemoteScrollPage(up: Bool) { (terminal as? ZoomableTerminalView)?.sendRemoteScrollPage(up: up) }
 
@@ -479,14 +613,45 @@ final class ZoomableTerminalView: TerminalView {
     /// An image was dropped or pasted onto the terminal — (PNG/JPEG data, ext).
     /// Set by the surface → session.uploadImage.
     var onImageDropped: ((Data, String) -> Void)?
+    /// A paste that should be confirmed first. The receiver shows the prompt and
+    /// calls `proceed` if the user agrees.
+    var onConfirmPaste: ((PendingPaste) -> Void)?
     var tmuxScrollSequence = "C-b ["
     var screenScrollSequence = "C-a ["
+    /// What a scroll gesture moves — see `ScrollGesturePref`.
+    var scrollGesture: ScrollGesturePref = .automatic {
+        didSet { if scrollGesture != oldValue { applyScrollRoute() } }
+    }
     private var dropInteractionInstalled = false
     private var remoteScrollPanGesture: UIPanGestureRecognizer?
     private var remoteScrollMode = false
     private var remoteScrollAccumulator: CGFloat = 0
-    private var scrollEnabledBeforeRemoteScroll = true
     private var autoMuxScrollArmed = false
+    /// Where a one-finger scroll goes.
+    private enum ScrollRoute {
+        case local   // this device's scrollback
+        case wheel   // mouse-wheel events to a remote that asked for the mouse
+        case keys    // navigation keys, in multiplexer scroll mode
+    }
+    /// The route the pan in progress was started on.
+    private var panRoute: ScrollRoute = .local
+    // A flick keeps scrolling the remote after the finger lifts, decaying the
+    // way a scroll view does, until it runs out or the screen is touched again.
+    private var momentumLink: CADisplayLink?
+    private var momentumVelocity: CGFloat = 0     // points per second, + = finger moving down
+    private var momentumPoint: CGPoint = .zero
+    private var touchDownGesture: TouchDownRecognizer?
+    private var lastLoggedMouseReporting = false
+    /// Below this a lift is a stop, not a flick.
+    private static let momentumMinVelocity: CGFloat = 250
+    /// A scroll view's own deceleration: the velocity kept after each millisecond.
+    private static let momentumDecayPerMs: CGFloat = 0.998
+    /// Finger travel per wheel event, in rows. A wheel notch moves most
+    /// programs about three lines (a multiplexer's copy mode, five), so one
+    /// event per three rows of travel keeps the content roughly under the
+    /// finger — exactly so for a three-line program, a little ahead of it in
+    /// copy mode.
+    private static let wheelRowsPerEvent: CGFloat = 3
     private var editMenu: UIEditMenuInteraction?
     private var currentSize: CGFloat = defaultFontSize
     private var pinchStart: CGFloat = defaultFontSize
@@ -505,7 +670,10 @@ final class ZoomableTerminalView: TerminalView {
     /// mosh, being idle, does not — which is why this read as a mosh bug.)
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        guard window != nil else { return }
+        guard window != nil else {
+            stopMomentum()   // the display link retains this view until invalidated
+            return
+        }
         onBecameVisible?()
         DispatchQueue.main.async { [weak self] in
             guard let self, self.window != nil else { return }
@@ -567,6 +735,9 @@ final class ZoomableTerminalView: TerminalView {
 
     func snapToLiveTail(reason: String) {
         guard bounds.width > 1, bounds.height > 1 else { return }
+        // Reading scrollback is not a layout glitch to repair: leave the view
+        // where the user put it.
+        guard followsLiveTail else { return }
         let targetY = max(0, contentSize.height - bounds.height)
         let oldY = contentOffset.y
         if abs(oldY - targetY) > 0.5 {
@@ -614,15 +785,66 @@ final class ZoomableTerminalView: TerminalView {
         remoteScrollAccumulator = 0
         autoMuxScrollArmed = false
         installRemoteScrollGesture()
-
-        if active {
-            scrollEnabledBeforeRemoteScroll = isScrollEnabled
-            isScrollEnabled = false
-            _ = becomeFirstResponder()
-        } else {
-            isScrollEnabled = scrollEnabledBeforeRemoteScroll
-        }
+        applyScrollRoute()
+        if active { _ = becomeFirstResponder() }
         onRemoteScrollModeChanged?(active)
+    }
+
+    /// Where a one-finger scroll goes right now.
+    ///
+    /// A remote that has asked for mouse events (a multiplexer in mouse mode, a
+    /// full-screen program) keeps its own history, and often it is the only
+    /// complete one: mosh syncs the visible screen, not the stream, so output
+    /// that passed between two frames never reaches this device. Wheel events
+    /// let that program scroll itself — the same thing a desktop terminal's
+    /// scroll wheel does. Everything else scrolls this device's own scrollback.
+    ///
+    /// The "in-app" preference only changes the answer where there is a local
+    /// scrollback to prefer: the alternate screen (a full-screen program over
+    /// plain SSH) saves none, so there the swipe goes to the program regardless.
+    private func scrollRoute(for terminal: Terminal) -> ScrollRoute {
+        if remoteScrollMode { return .keys }
+        let remoteWantsMouse = allowMouseReporting && terminal.mouseMode != .off
+        if remoteWantsMouse, scrollGesture == .automatic || terminal.isCurrentBufferAlternate { return .wheel }
+        return .local
+    }
+
+    /// Point the scroll view's own pan at the right job for the current route.
+    /// The local scrollback stays reachable on every route but `keys`: when one
+    /// finger belongs to the remote, two fingers scroll locally.
+    private func applyScrollRoute() { applyScrollRoute(for: getTerminal()) }
+
+    private func applyScrollRoute(for terminal: Terminal) {
+        let pan = panGestureRecognizer
+        switch scrollRoute(for: terminal) {
+        case .local:
+            isScrollEnabled = true
+            pan.minimumNumberOfTouches = 1
+            pan.allowedScrollTypesMask = .all
+        case .wheel:
+            isScrollEnabled = true
+            pan.minimumNumberOfTouches = 2
+            pan.allowedScrollTypesMask = []   // a trackpad scroll is a wheel, too
+        case .keys:
+            isScrollEnabled = false
+        }
+    }
+
+    /// The remote turned mouse reporting on or off. Upstream answers by turning
+    /// every finger drag into a held-button drag for the remote — which starts a
+    /// selection there, when what a drag on a touch screen means is "scroll" —
+    /// and that recognizer raced the scroll view's own pan, so the same swipe
+    /// did one or the other at random. Finger drags are routed here instead
+    /// (taps still reach the remote as clicks).
+    override func mouseModeChanged(source: Terminal) {
+        // `source`, not `getTerminal()`: the emulator reports its initial mode
+        // while it is still being constructed, before the view holds it.
+        let reporting = source.mouseMode != .off
+        if reporting != lastLoggedMouseReporting {
+            lastLoggedMouseReporting = reporting
+            DiagLog.log("terminal", "mouse reporting \(reporting ? "on" : "off") (\(source.mouseMode))")
+        }
+        applyScrollRoute(for: source)
     }
 
     private func installRemoteScrollGesture() {
@@ -630,33 +852,133 @@ final class ZoomableTerminalView: TerminalView {
         let gesture = UIPanGestureRecognizer(target: self, action: #selector(handleRemoteScrollPan(_:)))
         gesture.cancelsTouchesInView = false
         gesture.delegate = self
+        // One finger only: two fingers are the local-scrollback gesture and the
+        // pinch, neither of which should also drive the remote.
+        gesture.maximumNumberOfTouches = 1
         if #available(iOS 13.4, *) {
             gesture.allowedScrollTypesMask = [.continuous, .discrete]
         }
         addGestureRecognizer(gesture)
         remoteScrollPanGesture = gesture
+
+        // A finger landing anywhere stops a glide at once, as it does in any
+        // scroll view — without waiting for a pan to be recognised.
+        let touchDown = TouchDownRecognizer { [weak self] in self?.stopMomentum() }
+        touchDown.cancelsTouchesInView = false
+        touchDown.delaysTouchesBegan = false
+        touchDown.delegate = self
+        addGestureRecognizer(touchDown)
+        touchDownGesture = touchDown
     }
 
     @objc private func handleRemoteScrollPan(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
         case .began:
+            stopMomentum()
             remoteScrollAccumulator = 0
-            autoMuxScrollArmed = !remoteScrollMode && getTerminal().isCurrentBufferAlternate
+            DiagLog.log("terminal", "scroll pan began mouse=\(getTerminal().mouseMode != .off) alt=\(getTerminal().isCurrentBufferAlternate)")
+            // Re-read the route: the keyboard accessory can switch mouse
+            // reporting off without telling anyone.
+            applyScrollRoute()
+            panRoute = scrollRoute(for: getTerminal())
+            autoMuxScrollArmed = panRoute == .local && getTerminal().isCurrentBufferAlternate
+            // The remote scrolls relative to its live screen, so show that.
+            if panRoute == .wheel, !isAtLiveTail { scrollToLiveTail() }
             gesture.setTranslation(.zero, in: self)
         case .changed:
             let deltaY = gesture.translation(in: self).y
             gesture.setTranslation(.zero, in: self)
-            if !remoteScrollMode {
+            switch panRoute {
+            case .wheel:
+                remoteScrollAccumulator += deltaY
+                sendWheelSteps(at: gesture.location(in: self))
+            case .keys:
+                remoteScrollAccumulator += deltaY
+                sendRemoteScrollSteps()
+            case .local:
                 guard autoMuxScrollArmed, shouldEnterMuxScroll(deltaY: deltaY) else { return }
                 enterMuxScrollModeFromGesture()
+                panRoute = .keys
+                remoteScrollAccumulator += deltaY
+                sendRemoteScrollSteps()
             }
-            remoteScrollAccumulator += deltaY
-            sendRemoteScrollSteps()
-        case .ended, .cancelled, .failed:
+        case .ended:
+            autoMuxScrollArmed = false
+            if panRoute == .wheel {
+                DiagLog.log("terminal", "wheel pan ended velocity=\(Int(gesture.velocity(in: self).y))")
+                startMomentum(velocity: gesture.velocity(in: self).y, at: gesture.location(in: self))
+            } else {
+                remoteScrollAccumulator = 0
+            }
+        case .cancelled, .failed:
             remoteScrollAccumulator = 0
             autoMuxScrollArmed = false
         default:
             break
+        }
+    }
+
+    private func startMomentum(velocity: CGFloat, at point: CGPoint) {
+        stopMomentum()
+        guard abs(velocity) >= Self.momentumMinVelocity else {
+            remoteScrollAccumulator = 0
+            return
+        }
+        momentumVelocity = velocity
+        // Kept relative to the visible screen: the content offset moves as
+        // output arrives, and the glide belongs to where the finger left.
+        momentumPoint = CGPoint(x: point.x, y: point.y - contentOffset.y)
+        let link = CADisplayLink(target: self, selector: #selector(momentumTick(_:)))
+        link.add(to: .main, forMode: .common)
+        momentumLink = link
+    }
+
+    /// Any new touch, a route change, or leaving the screen ends the glide.
+    private func stopMomentum() {
+        guard let link = momentumLink else { return }
+        link.invalidate()
+        momentumLink = nil
+        momentumVelocity = 0
+        remoteScrollAccumulator = 0
+    }
+
+    @objc private func momentumTick(_ link: CADisplayLink) {
+        // The remote may have dropped mouse mode mid-glide (the program exited).
+        guard window != nil, scrollRoute(for: getTerminal()) == .wheel else {
+            stopMomentum()
+            return
+        }
+        let dt = CGFloat(min(0.05, max(0, link.targetTimestamp - link.timestamp)))
+        remoteScrollAccumulator += momentumVelocity * dt
+        sendWheelSteps(at: CGPoint(x: momentumPoint.x, y: momentumPoint.y + contentOffset.y))
+        momentumVelocity *= pow(Self.momentumDecayPerMs, dt * 1000)
+        if abs(momentumVelocity) < 40 { stopMomentum() }
+    }
+
+    /// Turn accumulated finger travel into wheel events at the cell under the
+    /// finger (programs route the wheel by position — a multiplexer picks the
+    /// pane under it).
+    private func sendWheelSteps(at point: CGPoint) {
+        let terminal = getTerminal()
+        let rows = max(1, terminal.rows)
+        let cols = max(1, terminal.cols)
+        let rowHeight = max(12, bounds.height / CGFloat(rows))
+        let stepHeight = rowHeight * Self.wheelRowsPerEvent
+        var steps = Int(remoteScrollAccumulator / stepHeight)
+        guard steps != 0 else { return }
+        steps = min(12, max(-12, steps))
+        remoteScrollAccumulator -= CGFloat(steps) * stepHeight
+
+        // `point` is in content space (this is a scroll view); the remote wants
+        // the cell on its screen. Capped at 222 — the legacy one-byte mouse
+        // encoding cannot express a larger coordinate.
+        let col = min(222, min(cols - 1, max(0, Int(point.x / max(1, bounds.width / CGFloat(cols))))))
+        let row = min(222, min(rows - 1, max(0, Int((point.y - contentOffset.y) / rowHeight))))
+        // Finger down = content down = earlier output = wheel up.
+        let flags = terminal.encodeButton(button: steps > 0 ? 4 : 5, release: false,
+                                          shift: false, meta: false, control: false)
+        for _ in 0..<abs(steps) {
+            terminal.sendEvent(buttonFlags: flags, x: col, y: row)
         }
     }
 
@@ -669,7 +991,7 @@ final class ZoomableTerminalView: TerminalView {
 
     private func enterMuxScrollModeFromGesture() {
         DiagLog.log("terminal", "auto mux scroll enter terminal=\(getTerminal().cols)x\(getTerminal().rows)")
-        onSendBytes?([0x02, 0x5b])
+        onSendBytes?(KeySequence.bytes(for: tmuxScrollSequence, fallback: [0x02, 0x5b]))
         setRemoteScrollMode(true)
     }
 
@@ -813,8 +1135,21 @@ final class ZoomableTerminalView: TerminalView {
             onImageDropped?(data, ext)
             return   // consume — don't fall through to text paste
         }
-        super.paste(sender)
+        // Several lines into a program that isn't taking pastes as a block: each
+        // line break would run as Enter the moment it lands. Ask first.
+        let policy = PasteGuard.Policy(rawValue: UserDefaults.standard.string(forKey: SettingsKey.confirmPaste) ?? "")
+            ?? .whenRisky
+        if policy != .never, let confirm = onConfirmPaste, let text = UIPasteboard.general.string,
+           PasteGuard.needsConfirmation(text, bracketedPaste: getTerminal().bracketedPasteMode, policy: policy) {
+            confirm(PendingPaste(lineCount: PasteGuard.lineCount(text), preview: PasteGuard.preview(text)) { [weak self] in
+                self?.pasteText()
+            })
+            return
+        }
+        pasteText()
     }
+
+    private func pasteText() { super.paste(nil) }
 
     // Note: no canPerformAction override is needed — SwiftTerm's TerminalView
     // already returns true for paste(_:) unconditionally (it's `public override`,
@@ -895,21 +1230,31 @@ struct TerminalSurfaceView: UIViewRepresentable {
     @Binding var fontSize: CGFloat
     let themeId: String
     let fontFamily: String
-    let hardwareKeyboard: Bool
+    /// Hide the keyboard's built-in accessory row: a hardware keyboard is
+    /// attached, or the app's own shortcut bar is standing in for it.
+    let suppressAccessory: Bool
     let tmuxSequence: String
     let screenSequence: String
     /// Bundles cursor/meta prefs so a change re-triggers updateUIView → applyPrefs.
     let prefs: String
     @Binding var muxScrollActive: Bool
+    @Binding var scrolledBack: Bool
     @Binding var tappedLink: URL?
+    @Binding var pendingPaste: PendingPaste?
 
     func makeUIView(context: Context) -> ZoomableTerminalView {
         surface.onZoomChange = { fontSize = $0 }
         surface.onLinkTapped = { tappedLink = $0 }
         surface.view.onRemoteScrollModeChanged = { muxScrollActive = $0 }
+        surface.view.liveTailChanged = { scrolledBack = !$0 }
+        surface.view.onConfirmPaste = { pendingPaste = $0 }
+        // A cached surface comes back wherever it was left; the button has to
+        // match it (deferred — this runs inside a view update).
+        let following = surface.view.followsLiveTail
+        DispatchQueue.main.async { scrolledBack = !following }
         surface.view.tmuxScrollSequence = tmuxSequence
         surface.view.screenScrollSequence = screenSequence
-        surface.apply(themeId: themeId, fontFamily: fontFamily, fontSize: fontSize, hardwareKeyboard: hardwareKeyboard)
+        surface.apply(themeId: themeId, fontFamily: fontFamily, fontSize: fontSize, suppressAccessory: suppressAccessory)
         surface.refresh()   // re-embed after a tab switch: redraw the kept buffer
         return surface.view
     }
@@ -918,15 +1263,41 @@ struct TerminalSurfaceView: UIViewRepresentable {
         surface.onZoomChange = { fontSize = $0 }
         surface.onLinkTapped = { tappedLink = $0 }
         surface.view.onRemoteScrollModeChanged = { muxScrollActive = $0 }
+        surface.view.liveTailChanged = { scrolledBack = !$0 }
+        surface.view.onConfirmPaste = { pendingPaste = $0 }
         terminal.tmuxScrollSequence = tmuxSequence
         terminal.screenScrollSequence = screenSequence
-        surface.apply(themeId: themeId, fontFamily: fontFamily, fontSize: fontSize, hardwareKeyboard: hardwareKeyboard)
+        surface.apply(themeId: themeId, fontFamily: fontFamily, fontSize: fontSize, suppressAccessory: suppressAccessory)
+    }
+}
+
+/// Reports a finger touching down and then gets out of the way: it never
+/// recognises, so it can't delay or cancel any other gesture.
+final class TouchDownRecognizer: UIGestureRecognizer {
+    private let onTouchDown: () -> Void
+
+    init(onTouchDown: @escaping () -> Void) {
+        self.onTouchDown = onTouchDown
+        super.init(target: nil, action: nil)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        onTouchDown()
+        state = .failed
     }
 }
 
 extension ZoomableTerminalView: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        gestureRecognizer === remoteScrollPanGesture || otherGestureRecognizer === remoteScrollPanGesture
+        // The touch-down observer never competes with anything.
+        if gestureRecognizer === touchDownGesture || otherGestureRecognizer === touchDownGesture { return true }
+        guard gestureRecognizer === remoteScrollPanGesture || otherGestureRecognizer === remoteScrollPanGesture
+        else { return false }
+        // Not alongside a long-press: that is a selection being dragged out, and
+        // scrolling the remote underneath it (or dropping into multiplexer scroll
+        // mode) is how a selection used to get destroyed mid-drag.
+        return !(gestureRecognizer is UILongPressGestureRecognizer
+                 || otherGestureRecognizer is UILongPressGestureRecognizer)
     }
 }

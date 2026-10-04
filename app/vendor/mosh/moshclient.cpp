@@ -191,6 +191,10 @@ void mosh_client_force_repaint(MoshClient* c) {
 void mosh_client_push(MoshClient* c, const char* bytes, int len) {
   if (!c || !c->transport || !bytes) return;
   try {
+    // After start_shutdown mosh freezes the outgoing state: get_current_state()
+    // assert()s, which aborts the process rather than throwing. Input that
+    // arrives while the server is being asked to exit has nowhere to go.
+    if (c->transport->shutdown_in_progress()) return;
     Network::UserStream& s = c->transport->get_current_state();
     for (int i = 0; i < len; i++) {
       s.push_back(Parser::UserByte(static_cast<unsigned char>(bytes[i])));
@@ -205,6 +209,9 @@ void mosh_client_push(MoshClient* c, const char* bytes, int len) {
 void mosh_client_resize(MoshClient* c, int cols, int rows) {
   if (!c || !c->transport) return;
   try {
+    // Same frozen-state rule as mosh_client_push: a resize during shutdown
+    // would abort, so it is ignored.
+    if (c->transport->shutdown_in_progress()) return;
     c->transport->get_current_state().push_back(Parser::Resize(cols, rows));
   } catch (const std::exception& e) {
     c->lastError = e.what();

@@ -48,13 +48,17 @@ public enum MoshServerCommand {
     ///   - idleTimeoutSeconds: `MOSH_SERVER_NETWORK_TMOUT`; 0 or less omits it
     ///     (upstream behaviour — the server never expires on its own).
     ///   - reapPIDs: servers we started earlier and can no longer reach.
+    ///   - tmuxClipboard: also make tmux's copies reach the client (see
+    ///     `tmuxSuffix`). Off by default — it changes an option on the user's
+    ///     tmux server.
     public static func build(tmux: String?,
                              idleTimeoutSeconds: Int = defaultIdleTimeoutSeconds,
-                             reapPIDs: [Int32] = []) -> String {
+                             reapPIDs: [Int32] = [],
+                             tmuxClipboard: Bool = false) -> String {
         var env = "env"
         if idleTimeoutSeconds > 0 { env += " MOSH_SERVER_NETWORK_TMOUT=\(idleTimeoutSeconds)" }
         env += " MOSH_SERVER_SIGNAL_TMOUT=\(signalTimeoutSeconds)"
-        return reapPrefix(pids: reapPIDs) + env + " " + base + tmuxSuffix(tmux)
+        return reapPrefix(pids: reapPIDs) + env + " " + base + tmuxSuffix(tmux, clipboard: tmuxClipboard)
     }
 
     /// `for`/`case` are POSIX-shell syntax and the remote login shell might be
@@ -77,10 +81,35 @@ public enum MoshServerCommand {
     /// typo or a tmux-less host never yields a dead session. Uses portable
     /// `sh -c` (no `-l`: /bin/sh is often dash, which lacks a login flag); `-l`
     /// is applied only to the fallback `$SHELL` (bash/zsh, where it's supported).
-    public static func tmuxSuffix(_ tmux: String?) -> String {
+    ///
+    /// With `clipboard`, tmux is also told how to address the clipboard. When
+    /// tmux copies, it writes to the terminal's clipboard with the target field
+    /// left empty (`OSC 52 ; ; <data>`), and mosh-server only relays a write that
+    /// names the clipboard (`OSC 52 ; c ; <data>`) — so over mosh a tmux copy
+    /// never arrives. The fix is a `terminal-overrides` entry that makes tmux emit
+    /// the `c`. It has to be in place before this client attaches (overrides are
+    /// read when a client's terminal is opened), hence `start-server` and the
+    /// `set` in the same command as `new-session`; and it is skipped when an
+    /// entry is already there, so reconnecting doesn't pile up duplicates.
+    public static func tmuxSuffix(_ tmux: String?, clipboard: Bool = false) -> String {
         guard let name = sanitizedTmuxName(tmux) else { return "" }
-        return " -- sh -c 'tmux new-session -A -s \(name) || exec ${SHELL:-/bin/sh} -l'"
+        let attach = "tmux new-session -A -s \(name)"
+        guard clipboard else { return " -- sh -c '\(attach) || exec ${SHELL:-/bin/sh} -l'" }
+        return " -- sh -c 'if tmux show -s terminal-overrides 2>/dev/null | grep -q \"\(clipboardOverrideMarker)\"; "
+            + "then \(attach); "
+            + "else tmux start-server \\; set -as terminal-overrides \"\(clipboardOverride)\" \\; "
+            + "new-session -A -s \(name); fi || exec ${SHELL:-/bin/sh} -l'"
     }
+
+    /// The `terminal-overrides` entry, as it must appear inside double quotes in
+    /// a POSIX script (hence the doubled backslashes: tmux has to receive `\E`
+    /// and `\007` literally and decode them itself). The capability consumes its
+    /// first parameter with a zero-width format (`%p1%.0s`) on purpose — current
+    /// tmux refuses a clipboard capability that ignores a parameter and then
+    /// emits nothing at all.
+    static let clipboardOverride = ",xterm*:Ms=\\\\E]52;c%p1%.0s;%p2%s\\\\007"
+    /// Enough of the entry to recognise it in `tmux show` output.
+    static let clipboardOverrideMarker = "52;c%p1"
 
     /// tmux session names can't contain `.` or `:`; restrict to a conservative
     /// shell-safe set so the command is injection-proof and tmux-legal. Empty

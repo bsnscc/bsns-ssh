@@ -597,6 +597,18 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// deprecated UIMenuController (which no longer appears on iOS 16+).
     public var selectionMenuRequested: ((CGRect) -> Void)?
 
+    /// bsns fork: every gesture that leaves a selection behind offers the edit
+    /// menu the same way — through the host's menu when it has one.
+    func presentSelectionMenu (pos: Position)
+    {
+        let region = makeContextMenuRegionForSelection ()
+        if let requestMenu = selectionMenuRequested {
+            requestMenu (region)
+        } else {
+            showContextMenu (forRegion: region, pos: pos)
+        }
+    }
+
     // bsns fork: native-feeling touch selection. Upstream's long-press only
     // popped a (deprecated, empty) UIMenuController, and no finger gesture
     // could start or extend a selection at all — drag-to-select was wired to
@@ -613,7 +625,11 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         let hit = calculateTapHit (gesture: gestureRecognizer).grid
         switch gestureRecognizer.state {
         case .began:
-            let _ = self.becomeFirstResponder()
+            // Deliberately NOT becoming first responder here (upstream did): with
+            // the software keyboard down, that slides the keyboard up, the
+            // terminal resizes to make room, and a resize drops the selection —
+            // selecting text destroyed its own selection. The edit menu doesn't
+            // need it; its actions resolve from this view either way.
             if selection.active, near (hit, selection.start) {
                 selection.pivot = selection.end
                 selection.pivotExtend (bufferPosition: hit)
@@ -642,12 +658,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         case .ended:
             stopSelectionTimer ()
             if selection.active {
-                let region = makeContextMenuRegionForSelection ()
-                if let requestMenu = selectionMenuRequested {
-                    requestMenu (region)
-                } else {
-                    showContextMenu (forRegion: region, pos: hit)
-                }
+                presentSelectionMenu (pos: hit)
             }
         case .cancelled, .failed:
             stopSelectionTimer ()
@@ -744,19 +755,31 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     
     @objc func singleTap (_ gestureRecognizer: UITapGestureRecognizer)
     {
+        guard gestureRecognizer.view != nil, gestureRecognizer.state == .ended else { return }
+
+        // bsns fork: with a selection up, a tap dismisses it and does nothing
+        // else. Upstream only reached its selection-clearing branch when the
+        // remote had NOT asked for mouse events; with mouse reporting on (any
+        // multiplexer in mouse mode) the tap went to the remote as a click and
+        // the selection could not be dismissed at all.
+        if selection.active {
+            selection.selectNone()
+            disableSelectionPanGesture()
+            queuePendingDisplay()
+            return
+        }
+
+        // bsns fork: a link is tappable whether or not the view has the keyboard.
+        // Upstream only looked for one once the view was first responder, so
+        // with the keyboard down a tap on a link raised the keyboard instead of
+        // following the link (and a selection, above, couldn't be dismissed).
+        let tapHit = calculateTapHit(gesture: gestureRecognizer).grid
+        if let result = linkForClick(at: tapHit, hasCommandModifier: commandActive) {
+            terminalDelegate?.requestOpenLink(source: self, link: result.link, params: result.params)
+            return
+        }
+
         if isFirstResponder {
-            guard gestureRecognizer.view != nil else { return }
-                 
-            if gestureRecognizer.state != .ended {
-                return
-            }
-
-            let tapHit = calculateTapHit(gesture: gestureRecognizer).grid
-            if let result = linkForClick(at: tapHit, hasCommandModifier: commandActive) {
-                terminalDelegate?.requestOpenLink(source: self, link: result.link, params: result.params)
-                return
-            }
-
             if allowMouseReporting && terminal.mouseMode.sendButtonPress() {
                 sharedMouseEvent(gestureRecognizer: gestureRecognizer, release: false)
 
@@ -806,7 +829,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             selection.selectWordOrExpression(at: hit, in: terminal.displayBuffer)
             selection.selectionMode = .character
             enableSelectionPanGesture()
-            showContextMenu (forRegion: makeContextMenuRegionForSelection(), pos: hit)
+            presentSelectionMenu (pos: hit)
             queuePendingDisplay()
         }
     }
@@ -830,7 +853,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             let hit = calculateTapHit(gesture: gestureRecognizer).grid
             selection.select(row: hit.row)
             enableSelectionPanGesture()
-            showContextMenu (forRegion: makeContextMenuRegionForSelection(), pos: hit)
+            presentSelectionMenu (pos: hit)
             queuePendingDisplay()
         }
     }
@@ -1012,7 +1035,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         case .ended:
             stopSelectionTimer()
             if selection.active {
-                showContextMenu (forRegion: makeContextMenuRegionForSelection(), pos: calculateTapHit(gesture: gestureRecognizer).grid)
+                presentSelectionMenu (pos: calculateTapHit(gesture: gestureRecognizer).grid)
             }
             break
         case .cancelled:
@@ -1118,12 +1141,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             requestDisplay()
         case .ended:
             if selection.active {
-                let region = makeContextMenuRegionForSelection()
-                if let requestMenu = selectionMenuRequested {
-                    requestMenu(region)
-                } else {
-                    showContextMenu(forRegion: region, pos: hit)
-                }
+                presentSelectionMenu(pos: hit)
             }
         case .cancelled:
             selection.selectNone()
@@ -1460,20 +1478,120 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
     
     open func linefeed(source: Terminal) {
-        // Preserve manual selection while output is streaming when mouse reporting is disabled.
-        if allowMouseReporting {
-            selection.selectNone()
-            disableSelectionPanGesture()
+        // bsns fork: a line feed no longer drops the selection (upstream did,
+        // whenever mouse reporting was allowed). See `settleSelection(after:)`.
+    }
+
+    // bsns fork: scrollback you can actually read. Upstream snapped the scroll
+    // view to the bottom on every scrolled line, so the view could not stay on
+    // earlier output while anything was still printing. The view now follows
+    // the live tail only while it is AT the tail; scrolled back, it holds its
+    // place until the user returns (or types).
+
+    /// Called when the view arrives at, or leaves, the live tail — so the host
+    /// can offer a way back down.
+    public var liveTailChanged: ((Bool) -> Void)?
+    /// Whether the view is following new output. Recorded when the user (or an
+    /// explicit scroll call) moves the position, rather than derived on demand:
+    /// the next thing to happen may be a resize (the keyboard appearing) that
+    /// changes the geometry the answer would be derived from.
+    public private(set) var followsLiveTail = true
+    /// `linesTop` as of the last scroller update; a difference means that many
+    /// lines were trimmed off a full scrollback and the content moved up.
+    private var scrollerLinesTop = 0
+
+    private var liveTailOffset: CGFloat {
+        let displayBuffer = terminal.displayBuffer
+        return max (0, CGFloat (displayBuffer.lines.count - displayBuffer.rows) * cellDimension.height)
+    }
+
+    /// True when the newest output is on screen (within half a row of the bottom).
+    public var isAtLiveTail: Bool {
+        contentOffset.y >= liveTailOffset - cellDimension.height / 2
+    }
+
+    /// Returns to the newest output.
+    public func scrollToLiveTail (animated: Bool = false)
+    {
+        // Follow from this moment, not from when the scroll lands: an animated
+        // scroll is still short of the tail when this returns, and output that
+        // arrives meanwhile must carry the view down with it.
+        if !followsLiveTail {
+            followsLiveTail = true
+            liveTailChanged? (true)
+        }
+        setContentOffset (CGPoint (x: 0, y: liveTailOffset), animated: animated)
+    }
+
+    /// Scrolls so that buffer row `row` is the top visible row. On iOS the scroll
+    /// view's offset *is* the scroll position (drawing reads `contentOffset`, not
+    /// `yDisp`), so this is what `scrollTo(row:)` has to move.
+    func scrollContent (toRow row: Int)
+    {
+        let displayBuffer = terminal.displayBuffer
+        let maxRow = max (0, displayBuffer.lines.count - displayBuffer.rows)
+        let clamped = min (max (0, row), maxRow)
+        setContentOffset (CGPoint (x: 0, y: CGFloat (clamped) * cellDimension.height), animated: false)
+        setNeedsDisplay (bounds)
+        terminalDelegate?.scrolled (source: self, position: scrollPosition)
+        noteLiveTailState ()
+    }
+
+    /// bsns fork: scroll to the shell prompt before (or after) the one at the
+    /// top of the view, using the marks the shell emitted (OSC 133). Stepping
+    /// forward past the last prompt returns to the live tail.
+    public func scrollToPrompt (previous: Bool)
+    {
+        guard !terminal.isDisplayBufferAlternate else { return }
+        let rows = terminal.promptRows ()
+        let top = topVisibleRow
+        if previous {
+            if let row = rows.last (where: { $0 < top }) { scrollContent (toRow: row) }
+        } else if let row = rows.first (where: { $0 > top }),
+                  row < terminal.displayBuffer.lines.count - terminal.displayBuffer.rows {
+            scrollContent (toRow: row)
+        } else {
+            scrollToLiveTail ()
         }
     }
-    
+
+    /// The buffer row currently at the top of the view.
+    var topVisibleRow: Int {
+        cellDimension.height > 0 ? Int ((max (0, contentOffset.y) / cellDimension.height).rounded ()) : 0
+    }
+
+    func noteLiveTailState ()
+    {
+        let atTail = isAtLiveTail
+        guard atTail != followsLiveTail else { return }
+        followsLiveTail = atTail
+        liveTailChanged? (atTail)
+    }
+
     func updateScroller ()
     {
         let displayBuffer = terminal.displayBuffer
+        // Was the user at the bottom before this output (or resize) arrived?
+        let follow = followsLiveTail
+        let trimmed = displayBuffer.linesTop - scrollerLinesTop
+        scrollerLinesTop = displayBuffer.linesTop
         contentSize = CGSize (width: CGFloat (displayBuffer.cols) * cellDimension.width,
                               height: CGFloat (displayBuffer.lines.count) * cellDimension.height)
-        //contentOffset = CGPoint (x: 0, y: CGFloat (displayBuffer.lines.count-displayBuffer.rows)*cellDimension.height)
-        contentOffset = CGPoint (x: 0, y: CGFloat (displayBuffer.lines.count-displayBuffer.rows)*cellDimension.height)
+        let tail = liveTailOffset
+        if follow {
+            contentOffset = CGPoint (x: 0, y: tail)
+        } else {
+            // Hold the same text in view. New lines are appended below, so the
+            // offset is already right — unless the scrollback is full, where
+            // each new line trims one off the top and everything moves up a row.
+            var y = contentOffset.y
+            if trimmed > 0 {
+                y -= CGFloat (trimmed) * cellDimension.height
+                setNeedsDisplay (bounds)
+            }
+            contentOffset = CGPoint (x: 0, y: min (max (0, y), tail))
+        }
+        noteLiveTailState ()
         //Xscroller.doubleValue = scrollPosition
         //Xscroller.knobProportion = scrollThumbsize
     }
@@ -1556,6 +1674,15 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         if sizeChanged {
             processSizeChange(newSize: currentBounds.size)
             updateCursorPosition()
+        }
+        // bsns fork: a scroll moves the bounds origin; note arriving at or leaving
+        // the live tail. Only for a scroll the user is driving — UIKit also moves
+        // the origin on its own (keyboard, rotation), and mistaking that for
+        // "scrolled back" would stop the view following output. And not on a
+        // resize: the scroller update that follows one needs the answer from
+        // before the geometry changed.
+        if originChanged && !sizeChanged && (isTracking || isDragging || isDecelerating) {
+            noteLiveTailState ()
         }
 
 #if canImport(MetalKit)
@@ -2189,8 +2316,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     func ensureCaretIsVisible ()
     {
-        let displayBuffer = terminal.displayBuffer
-        contentOffset = CGPoint (x: 0, y: CGFloat (displayBuffer.lines.count-displayBuffer.rows)*cellDimension.height)
+        scrollToLiveTail ()
     }
     
     public func deleteBackward() {

@@ -38,6 +38,14 @@ enum MoshBootstrap {
         return max(0, hours) * 3600
     }
 
+    /// Whether to set tmux up so its copies reach this device (see
+    /// `MoshServerCommand.tmuxSuffix`). Pointless unless the app also honours
+    /// remote clipboard writes, so it follows that switch as well as its own.
+    static var tmuxClipboardSetup: Bool {
+        let d = UserDefaults.standard
+        return d.bool(forKey: SettingsKey.remoteClipboard) && d.bool(forKey: SettingsKey.tmuxClipboard)
+    }
+
     /// SSH to `spec.host` and obtain the mosh connect parameters. `SSHShellError`
     /// (host-key, auth, …) is rethrown as-is so the caller's TOFU/auth handling
     /// applies; only the parse step gets a mosh-specific error.
@@ -55,7 +63,8 @@ enum MoshBootstrap {
         if !reap.isEmpty { DiagLog.log("mosh", "reaping abandoned mosh-server pids \(reap) on \(hostKey)") }
         let command = MoshServerCommand.build(tmux: spec.tmuxSession,
                                               idleTimeoutSeconds: idleTimeoutSeconds,
-                                              reapPIDs: reap)
+                                              reapPIDs: reap,
+                                              tmuxClipboard: tmuxClipboardSetup)
         let output: String
         do {
             output = try await SSHShell.execCapturing(

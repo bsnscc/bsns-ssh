@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftTerm
+import BsnsSSHCore
 
 /// UserDefaults keys + defaults for app-wide preferences. Views bind with
 /// @AppStorage(SettingsKey.x); the terminal layer reads the same keys.
@@ -19,6 +20,10 @@ enum SettingsKey {
     static let tmuxScrollSequence = "input.tmuxScrollSequence"
     static let screenScrollSequence = "input.screenScrollSequence"
     static let multiplexer = "input.multiplexer"           // which copy/scroll buttons to show
+    static let scrollGesture = "input.scrollGesture"       // automatic | local (ScrollGesturePref)
+    static let keyBar = "input.keyBar"                     // JSON [KeyBarItem]; absent = the default set
+    static let confirmPaste = "input.confirmPaste"         // never | whenRisky | always (PasteGuard.Policy)
+    static let promptPattern = "terminal.promptPattern"    // regex that finds shell prompts in captured text
     static let keepAliveInterval = "session.keepAliveInterval"
     static let moshIdleTimeoutHours = "session.moshIdleTimeoutHours"   // mosh-server self-expiry (0 = never)
     static let terminalType = "session.terminalType"
@@ -26,6 +31,7 @@ enum SettingsKey {
     static let commandHistory = "privacy.commandHistory"   // record run commands locally
     static let uploadDir = "transfer.uploadDir"             // remote drop dir for dropped/pasted images
     static let remoteClipboard = "transfer.remoteClipboard" // honour OSC 52 copy from the remote
+    static let tmuxClipboard = "transfer.tmuxClipboard"     // set tmux up so its copies survive mosh
     static let diagnosticsEnabled = "diagnostics.enabled"  // record the on-device event log (off by default)
 
     static func registerDefaults() {
@@ -45,6 +51,9 @@ enum SettingsKey {
             tmuxScrollSequence: "C-b [",
             screenScrollSequence: "C-a [",
             multiplexer: MultiplexerPref.both.rawValue,
+            scrollGesture: ScrollGesturePref.automatic.rawValue,
+            confirmPaste: PasteGuard.Policy.whenRisky.rawValue,
+            promptPattern: PromptScan.defaultPattern,
             keepAliveInterval: 30,
             moshIdleTimeoutHours: 24,
             terminalType: "xterm-256color",
@@ -52,6 +61,7 @@ enum SettingsKey {
             commandHistory: true,
             uploadDir: "~/.bsns-ssh-drops",
             remoteClipboard: false,
+            tmuxClipboard: false,
             diagnosticsEnabled: false,
         ])
     }
@@ -117,6 +127,20 @@ enum BellMode: String, CaseIterable, Identifiable {
     case silent, haptic, sound
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
+}
+
+/// What a one-finger scroll on the terminal moves.
+enum ScrollGesturePref: String, CaseIterable, Identifiable {
+    /// The remote program when it has asked for the mouse (it then scrolls its
+    /// own, complete history), this device's scrollback otherwise. Two fingers
+    /// always scroll this device's scrollback.
+    case automatic
+    /// This device's scrollback wherever it has one, even when the remote has
+    /// asked for the mouse. (The alternate screen saves no scrollback, so a
+    /// full-screen program over plain SSH still gets the swipe.)
+    case local
+    var id: String { rawValue }
+    var label: String { self == .automatic ? "Automatic" : "In-app scrollback" }
 }
 
 /// Which multiplexer copy/scroll buttons to surface. Most people use one of tmux

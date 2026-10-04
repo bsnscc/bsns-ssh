@@ -1,4 +1,5 @@
 import SwiftUI
+import BsnsSSHCore
 
 struct SettingsView: View {
     @AppStorage(SettingsKey.theme) private var themeId = TerminalTheme.bsnsDark.id
@@ -16,6 +17,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.tmuxScrollSequence) private var tmuxScrollSequence = "C-b ["
     @AppStorage(SettingsKey.screenScrollSequence) private var screenScrollSequence = "C-a ["
     @AppStorage(SettingsKey.multiplexer) private var multiplexer = MultiplexerPref.both.rawValue
+    @AppStorage(SettingsKey.scrollGesture) private var scrollGesture = ScrollGesturePref.automatic.rawValue
     @AppStorage(SettingsKey.keepAliveInterval) private var keepAlive = 30
     @AppStorage(SettingsKey.terminalType) private var terminalType = "xterm-256color"
     @AppStorage(SettingsKey.moshIdleTimeoutHours) private var moshIdleTimeoutHours = 24
@@ -23,6 +25,9 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.commandHistory) private var commandHistory = true
     @AppStorage(SettingsKey.uploadDir) private var uploadDir = "~/.bsns-ssh-drops"
     @AppStorage(SettingsKey.remoteClipboard) private var remoteClipboard = false
+    @AppStorage(SettingsKey.tmuxClipboard) private var tmuxClipboard = false
+    @AppStorage(SettingsKey.confirmPaste) private var confirmPaste = PasteGuard.Policy.whenRisky.rawValue
+    @AppStorage(SettingsKey.promptPattern) private var promptPattern = PromptScan.defaultPattern
 
     private let scrollbackOptions = [500, 1000, 2000, 5000, 10000]
     private let keepAliveOptions = [15, 30, 60, 120]
@@ -66,13 +71,46 @@ struct SettingsView: View {
 
             Section {
                 Toggle("Show terminal shortcut bar", isOn: $showKeyBar)
+                NavigationLink { KeyBarSettingsView() } label: { Text("Customize Shortcut Bar") }
+                    .disabled(!showKeyBar)
+                Picker("Confirm multi-line paste", selection: $confirmPaste) {
+                    Text("Never").tag(PasteGuard.Policy.never.rawValue)
+                    Text("When lines would run").tag(PasteGuard.Policy.whenRisky.rawValue)
+                    Text("Always").tag(PasteGuard.Policy.always.rawValue)
+                }
                 Toggle("Pinch to zoom", isOn: $pinchZoom)
                 Toggle("Use Option as Meta", isOn: $optionAsMeta)
                 Toggle("Predictive text", isOn: $predictiveText)
             } header: {
                 Text("Input")
             } footer: {
-                Text("Predictive text can make phone typing easier, but iOS may replace shell commands, paths, flags, or secrets. Smart quotes and dashes stay disabled.")
+                Text("The shortcut bar holds the keys a touch keyboard lacks — Esc, Tab, sticky Ctrl and Alt, arrows — and stays in place whether the keyboard is up or down. Turn it off to get the keyboard's standard accessory row instead.\n\n\"When lines would run\" confirms a multi-line paste only if the program on the other end would run each line as it arrives; programs that take a paste as one block are not interrupted. Inside tmux or screen the app can't see which kind of program is running, so that setting never asks there — choose Always if you want the check inside a multiplexer too.\n\nPredictive text can make phone typing easier, but iOS may replace shell commands, paths, flags, or secrets. Smart quotes and dashes stay disabled.")
+            }
+
+            Section {
+                Picker("One-finger scroll", selection: $scrollGesture) {
+                    ForEach(ScrollGesturePref.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+            } header: {
+                Text("Scrolling")
+            } footer: {
+                Text("Automatic: when the remote program has asked for the mouse (tmux with mouse on, most full-screen programs), one finger scrolls that program through its own history; otherwise it scrolls the scrollback saved on this device. Two fingers always scroll this device's scrollback.\n\nIn-app scrollback: one finger scrolls this device's scrollback even then, wherever there is one to scroll.\n\nOver mosh this device receives the screen as it changes, not everything that was printed, so its scrollback misses output that went by faster than the screen updated. The remote's own history is the complete one.")
+            }
+
+            Section {
+                TextField("Prompt pattern", text: $promptPattern)
+                    .font(.callout.monospaced())
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                if PromptScan(pattern: promptPattern) == nil {
+                    Text("Not a valid regular expression.").font(.caption).foregroundStyle(.red)
+                }
+                Button("Use Default Pattern") { promptPattern = PromptScan.defaultPattern }
+                    .disabled(promptPattern == PromptScan.defaultPattern)
+            } header: {
+                Text("Prompts")
+            } footer: {
+                Text("A regular expression that matches your shell prompt. The tmux history view uses it to jump between prompts and to copy the last command's output. The default matches the usual user@host … $ shapes. (In the terminal itself, a shell that emits prompt marks needs no pattern — see Terminal Help.)")
             }
 
             Section {
@@ -113,11 +151,13 @@ struct SettingsView: View {
                 Toggle("Require Face ID / passcode to unlock", isOn: $appLock)
                 Toggle("Record command history (on device)", isOn: $commandHistory)
                 Toggle("Let the remote copy to this clipboard", isOn: $remoteClipboard)
+                Toggle("Set tmux up for it over mosh", isOn: $tmuxClipboard)
+                    .disabled(!remoteClipboard)
                 NavigationLink { KnownHostsView() } label: { Label("Known Hosts", systemImage: "checkmark.shield") }
             } header: {
                 Text("Security")
             } footer: {
-                Text("Command history stays on this device and is never synced. Type a command with a leading space to keep that one out of history.\n\nWith remote clipboard on, a command on the server can put text on this device's clipboard (OSC 52) — useful for grabbing a URL or a one-time code without selecting it by hand. Every write shows a banner, and nothing can read your clipboard back.")
+                Text("Command history stays on this device and is never synced. Type a command with a leading space to keep that one out of history.\n\nWith remote clipboard on, a command on the server can put text on this device's clipboard (OSC 52) — useful for grabbing a URL or a one-time code without selecting it by hand. Every write shows a banner, and nothing can read your clipboard back. tmux copy mode uses this too. Over mosh, tmux has to be told to name the clipboard or its copies never arrive: with the second switch on, the app adds that one option to the tmux server when it starts a tmux session for you (mosh with a tmux session name). For a tmux you start yourself, add the line from Terminal Help to your tmux configuration.")
             }
 
             Section {

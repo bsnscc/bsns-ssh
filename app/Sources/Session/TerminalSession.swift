@@ -73,7 +73,7 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             out?(buffered[...])
         }
     }
-    private var outputBuffer: [UInt8] = []
+    @ObservationIgnored private var outputBuffer: [UInt8] = []
 
     private let lock = NSLock()
     /// A configured local (-L) forward. Survives reconnect (re-applied to the
@@ -87,12 +87,25 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     }
     private(set) var forwards: [Forward] = []
 
-    private var transport: TerminalTransport?
-    private var cols: Int32 = 80
-    private var rows: Int32 = 24
+    // Everything below is bookkeeping guarded by `lock` and touched from the
+    // transport threads — deliberately NOT observable. An observed property
+    // notifies SwiftUI from inside its setter; doing that off the main thread
+    // while holding `lock` deadlocks against a view update that is waiting on
+    // `lock` (the terminal view reads the transport as it is being created).
+    // Only the UI-facing state above is observed, and it is set on the main queue.
+    @ObservationIgnored private var transport: TerminalTransport?
+    @ObservationIgnored private var cols: Int32 = 80
+    @ObservationIgnored private var rows: Int32 = 24
+    @ObservationIgnored private var closed = false
 
     /// Mosh has no in-session forwarding, so forwards only apply to an SSH shell.
     private var sshShell: SSHShell? { currentTransport as? SSHShell }
+
+    /// For a mosh session: a second, otherwise idle SSH connection opened the
+    /// first time a forward is asked for, purely to carry forwards (mosh is UDP
+    /// and has no channel to multiplex them onto). Closed again when the last
+    /// forward goes. Guarded by `lock`.
+    @ObservationIgnored private var forwardCarrier: SSHShell?
 
     /// A snapshot sufficient to re-create and reconnect this session after the app
     /// is killed — set by the creator for sessions that should survive a relaunch
@@ -111,22 +124,121 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// tmux session) and SSH rebuilds its shell.
     func start() { performReconnect(reason: "launch restore") }
 
-    /// Add a local forward and start it on the current shell. Returns nil on
-    /// success or an error string (e.g. the local port is in use).
-    @discardableResult
-    func addForward(listenPort: UInt16, destHost: String, destPort: UInt16) -> String? {
-        // Forwarding is multiplexed over the SSH channel — mosh (UDP) has none.
-        guard let shell = sshShell else { return "Port forwarding isn't available over mosh." }
-        let id = UUID()
-        let err = shell.addLocalForward(id: id, bindAddress: "127.0.0.1",
-                                        listenPort: listenPort, destHost: destHost, destPort: destPort)
-        forwards.append(Forward(id: id, listenPort: listenPort, destHost: destHost, destPort: destPort, error: err))
-        return err
+    func removeForward(_ id: UUID) {
+        let carrier = lock.withLock { forwardCarrier }
+        (sshShell ?? carrier)?.removeLocalForward(id: id)
+        forwards.removeAll { $0.id == id }
+        // The carrier exists only for its forwards; don't leave an idle login
+        // shell on the host once they're gone.
+        if forwards.isEmpty, let carrier {
+            lock.withLock { forwardCarrier = nil }
+            carrier.onClosed = nil
+            carrier.disconnect()
+        }
     }
 
-    func removeForward(_ id: UUID) {
-        sshShell?.removeLocalForward(id: id)
-        forwards.removeAll { $0.id == id }
+    /// The shell that carries this session's forwards: its own SSH connection,
+    /// or (mosh) the carrier, opened on first use.
+    private func forwardShell() async throws -> SSHShell {
+        if let shell = sshShell { return shell }
+        if let carrier = lock.withLock({ forwardCarrier }) { return carrier }
+        let shell = SSHShell()
+        shell.onClosed = { [weak self, weak shell] _ in
+            DispatchQueue.main.async { self?.carrierClosed(shell) }
+        }
+        try await shell.connect(host: spec.host, port: spec.port, user: spec.user, agent: spec.agent,
+                                knownHosts: spec.knownHosts, jump: spec.jump, keyBlob: spec.keyBlob)
+        // Two requests can race to open one; keep whichever landed first.
+        let (winner, discard): (SSHShell, SSHShell?) = lock.withLock {
+            if closed { return (shell, shell) }
+            if let existing = forwardCarrier { return (existing, shell) }
+            forwardCarrier = shell
+            return (shell, nil)
+        }
+        if let discard {
+            discard.onClosed = nil
+            discard.disconnect()
+            if discard === winner { throw SSHShellError.connectFailed }
+        }
+        return winner
+    }
+
+    private func carrierClosed(_ shell: SSHShell?) {
+        let wasCurrent: Bool = lock.withLock {
+            guard let shell, forwardCarrier === shell else { return false }
+            forwardCarrier = nil
+            return true
+        }
+        guard wasCurrent else { return }
+        for i in forwards.indices where forwards[i].error == nil {
+            forwards[i].error = "the forwarding connection closed"
+        }
+    }
+
+    /// Add a local forward, opening the carrier connection first if this is a
+    /// mosh session. Returns nil on success or a message to show.
+    @MainActor
+    func addForwardConnecting(listenPort: UInt16, destHost: String, destPort: UInt16) async -> String? {
+        do {
+            let shell = try await forwardShell()
+            let id = UUID()
+            let err = shell.addLocalForward(id: id, bindAddress: "127.0.0.1",
+                                            listenPort: listenPort, destHost: destHost, destPort: destPort)
+            forwards.append(Forward(id: id, listenPort: listenPort, destHost: destHost, destPort: destPort, error: err))
+            return err
+        } catch {
+            return Self.describe(error)
+        }
+    }
+
+    /// Make a URL that points at the SERVER's loopback reachable from this
+    /// device: forward a local port to it (reusing a forward that already goes
+    /// there) and return the address to open here.
+    @MainActor
+    func forwardLoopback(_ target: LoopbackURL) async -> Result<URL, ForwardFailure> {
+        if let existing = forwards.first(where: {
+            $0.error == nil && $0.destHost == target.remoteHost && $0.destPort == target.remotePort
+        }), let url = target.localURL(port: existing.listenPort) {
+            return .success(url)
+        }
+        let shell: SSHShell
+        do { shell = try await forwardShell() } catch { return .failure(ForwardFailure(message: Self.describe(error))) }
+        for port in target.localPortCandidates {
+            let id = UUID()
+            guard shell.addLocalForward(id: id, bindAddress: "127.0.0.1", listenPort: port,
+                                        destHost: target.remoteHost, destPort: target.remotePort) == nil,
+                  let url = target.localURL(port: port) else { continue }
+            forwards.append(Forward(id: id, listenPort: port, destHost: target.remoteHost, destPort: target.remotePort))
+            return .success(url)
+        }
+        return .failure(ForwardFailure(message: "No free local port near \(target.remotePort)."))
+    }
+
+    struct ForwardFailure: Error { let message: String }
+
+    // MARK: side channel
+
+    /// Which tmux client is this terminal, for commands run beside it.
+    var tmuxTarget: TmuxCommand.Target {
+        TmuxCommand.Target(session: spec.tmuxSession,
+                           moshServerPID: (currentTransport as? MoshSession)?.serverPID)
+    }
+
+    enum SideChannelError: LocalizedError {
+        case jumpHost
+        var errorDescription: String? { "This isn't available through a jump host yet." }
+    }
+
+    /// Open a second SSH connection to the same host, for commands that run
+    /// beside the terminal rather than in it (reading tmux's history, switching
+    /// its window). Authenticates through the agent with the session's own key;
+    /// the caller closes it.
+    func openSideChannel() async throws -> SSHExecSession {
+        guard spec.jump == nil else { throw SideChannelError.jumpHost }
+        let channel = SSHExecSession()
+        try await channel.connect(host: spec.host, port: spec.port, user: spec.user, agent: spec.agent,
+                                  knownHosts: spec.knownHosts, keyBlob: spec.keyBlob)
+        return channel
     }
 
     /// Re-establish all configured forwards on the current shell (after reconnect).
@@ -235,15 +347,20 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     // Local command history: watch the keystroke byte-stream, accumulate a line
     // buffer, and record it on Enter. Best-effort (skips escape sequences); feeds
     // the on-device history only, never leaves the device.
-    private var lineBuf = ""
-    private var inEscape = false
+    @ObservationIgnored private var lineBuf = ""
+    /// Where the keystroke tap is inside an escape sequence, so none of it lands
+    /// in `lineBuf`. A CSI sequence (`ESC [` … final byte) carries parameters —
+    /// an arrow key is three bytes, a mouse report a dozen — and every one of
+    /// them is printable ASCII that would otherwise be recorded as typed text.
+    private enum InputEscape { case none, escape, csi, ss3 }
+    @ObservationIgnored private var inputEscape = InputEscape.none
     /// Armed when recent OUTPUT looks like a password / passphrase prompt. The
     /// next submitted line is then NOT recorded — at such a prompt the remote
     /// reads with echo OFF, but the keystrokes still flow through this tap, so
     /// without this guard a typed password would land in history.
-    private var awaitingSecret = false
+    @ObservationIgnored private var awaitingSecret = false
     /// Rolling tail of recent printable output, for prompt detection across chunks.
-    private var outTail = ""
+    @ObservationIgnored private var outTail = ""
 
     /// Output-side cues (lowercased) that a secret is being prompted for. Liberal
     /// on purpose: a false positive only drops one command from history, while a
@@ -271,9 +388,23 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     private func trackInput(_ bytes: ArraySlice<UInt8>) {
         lock.lock()
         for b in bytes {
+            switch inputEscape {
+            case .escape:
+                // `ESC [` opens a CSI sequence, `ESC O` an SS3 one (one more byte);
+                // anything else is a two-byte escape (Meta-key) that ends here.
+                inputEscape = b == 0x5b ? .csi : (b == 0x4f ? .ss3 : .none)
+                continue
+            case .csi:
+                if (0x40...0x7e).contains(b) { inputEscape = .none }
+                continue
+            case .ss3:
+                inputEscape = .none
+                continue
+            case .none:
+                break
+            }
             switch b {
-            case _ where inEscape: if (0x40...0x7e).contains(b) { inEscape = false }
-            case 0x1b: inEscape = true
+            case 0x1b: inputEscape = .escape
             case 0x0d, 0x0a:
                 let raw = lineBuf
                 lineBuf = ""
@@ -306,7 +437,16 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
 
     func refreshDisplay() { currentTransport?.requestDisplayRefresh() }
 
-    func disconnect() { currentTransport?.disconnect() }
+    /// Close the session for good (the tab is going away). A reconnect still in
+    /// flight sees `closed` and tears its fresh transport down instead of
+    /// installing it, so closing mid-reconnect can't leave a live connection —
+    /// or a mosh-server — that nothing owns.
+    func disconnect() {
+        lock.lock(); closed = true; let t = transport; let carrier = forwardCarrier; forwardCarrier = nil; lock.unlock()
+        t?.disconnect()
+        carrier?.onClosed = nil
+        carrier?.disconnect()
+    }
 
     var isDisconnected: Bool { if case .disconnected = status { return true } else { return false } }
 
@@ -332,9 +472,14 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             }
             old.disconnect()
         }
+        // The old transport is only finishing its shutdown now. Stop routing to
+        // it: the "Reconnecting…" banner re-lays-out the terminal, and a resize
+        // (or a keystroke) handed to a mosh transport mid-shutdown used to abort
+        // the app. Sizes reported meanwhile are remembered and applied to the
+        // new transport instead.
+        lock.withLock { transport = nil }
         DispatchQueue.main.async { self.isStale = false }
         setStatus(.connecting)
-        lock.lock(); let cols = self.cols, rows = self.rows; lock.unlock()
         let spec = self.spec
         Task {
             do {
@@ -346,17 +491,21 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
                     let mosh = MoshSession()
                     mosh.serverPID = connect.pid
                     self.wire(mosh)
+                    // Read the size now, not before the bootstrap — the terminal
+                    // may have been re-laid-out while it ran.
+                    let (cols, rows) = self.lock.withLock { (self.cols, self.rows) }
                     if let err = mosh.open(host: spec.host, port: connect.port, key: connect.key, cols: cols, rows: rows) {
                         // The server is up but we never reached it — reap it next time
                         // rather than leaving it to sit out its idle timeout.
                         if let pid = connect.pid { MoshServerRegistry.shared.abandon(pid: pid) }
                         throw MoshBootstrap.Failure.noConnectLine(err)
                     }
-                    self.lock.withLock { self.transport = mosh }
+                    guard self.install(mosh, openedCols: cols, openedRows: rows) else { return }
                 } else {
                     let shell = SSHShell()
                     self.wire(shell)
-                    self.lock.withLock { self.transport = shell }
+                    let (cols, rows) = self.lock.withLock { (self.cols, self.rows) }
+                    guard self.install(shell, openedCols: cols, openedRows: rows) else { return }
                     try await shell.connect(host: spec.host, port: spec.port, user: spec.user,
                                             agent: spec.agent, cols: cols, rows: rows,
                                             knownHosts: spec.knownHosts, password: nil, jump: spec.jump,
@@ -373,6 +522,26 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     // MARK: internals
 
     private var currentTransport: TerminalTransport? { lock.lock(); defer { lock.unlock() }; return transport }
+
+    /// Make a freshly connected transport the live one. Returns false (after
+    /// tearing it down) if the session was closed while it was connecting. A size
+    /// that changed between opening the transport and installing it is forwarded,
+    /// since `resize` had no transport to deliver it to in between.
+    private func install(_ new: TerminalTransport, openedCols: Int32, openedRows: Int32) -> Bool {
+        lock.lock()
+        if closed {
+            lock.unlock()
+            new.onOutput = nil
+            new.onClosed = nil
+            new.disconnect()
+            return false
+        }
+        transport = new
+        let cols = self.cols, rows = self.rows
+        lock.unlock()
+        if cols != openedCols || rows != openedRows { new.resize(cols: cols, rows: rows) }
+        return true
+    }
 
     private func wire(_ transport: TerminalTransport) {
         transport.onOutput = { [weak self] bytes in self?.deliver(bytes) }
@@ -397,6 +566,11 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
             }
         }
     }
+
+    #if DEBUG
+    /// Dev hook: reconnect exactly as a failed mosh resume does.
+    func devForceReconnect() { performReconnect(reason: "dev") }
+    #endif
 
     /// A resumed mosh transport is still accepting local input, but fresh remote
     /// state never came back. Re-bootstrap mosh so the user gets a visible session

@@ -284,6 +284,13 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                 waitForWakeOnly()
                 continue
             }
+            // Once a shutdown is requested mosh freezes the outgoing state and
+            // ASSERTS on any further change — an abort that takes the whole app
+            // down, not an error we can catch. Work staged during the grace
+            // period (a resize from the "Reconnecting…" banner re-laying-out the
+            // terminal, keys typed meanwhile, a resume) belongs to a session that
+            // is already going away, so it is dropped rather than applied.
+            let shuttingDown = shutdownStarted
 
             // Refresh mosh's frozen clock once per active iteration. Without this
             // every send/ack timer stalls after the first packet and local input
@@ -291,7 +298,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
             mosh_client_freeze_time()
 
             // Returning from the background.
-            if resume {
+            if resume, !shuttingDown {
                 lastResumeAt = Date()
                 let silent = Date().timeIntervalSince(lastContactAt)
                 // The actual size mosh is drawing right now, vs the size we'll re-assert.
@@ -325,7 +332,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                     clearRoamWatch(reason: "resume fresh")
                 }
             }
-            if !input.isEmpty {
+            if !input.isEmpty, !shuttingDown {
                 inputPushSeq += 1
                 let inputSeq = inputPushSeq
                 let inputSilent = Date().timeIntervalSince(lastContactAt)
@@ -346,7 +353,7 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
                     moshLog("input retry prime seq=\(inputSeq) silent=\(Int(inputSilent))s state=\(mosh_client_state_num(c))")
                 }
             }
-            if let (cols, rows) = resize {
+            if let (cols, rows) = resize, !shuttingDown {
                 mosh_client_resize(c, cols, rows)
                 // SwiftTerm reflows its OWN grid on a bounds change, so its on-screen
                 // content diverges from mosh's last framebuffer. A normal diff frame
@@ -712,6 +719,9 @@ final class MoshSession: TerminalTransport, @unchecked Sendable {
         // (2) nudge the SERVER to redraw + re-home its cursor with a real size
         //     change. tmux/screen only reliably re-home on SIGWINCH, so rows-1 →
         //     rows forces two SIGWINCHes ending at the real size.
+        // Not during a shutdown: the resize would trip mosh's frozen-state assert
+        // (see runLoop), and there is no display left to recover anyway.
+        guard !shutdownStarted else { return }
         moshLog("foreground recovery begin reason=\(reason) ask=\(cols)x\(rows)")
         if rows > 1 { mosh_client_resize(c, cols, rows - 1) }
         mosh_client_resize(c, cols, rows)

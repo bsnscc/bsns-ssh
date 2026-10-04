@@ -671,7 +671,7 @@ public final class SSHShell: @unchecked Sendable {
 
     /// Generous per-stream cap. mosh's `MOSH CONNECT` line is tiny, but a server
     /// MOTD/banner echoed before it can be sizeable — don't truncate it away.
-    private static let execStreamCap = 256 * 1024
+    static let execStreamCap = 256 * 1024
 
     /// Run `command` to completion and return stdout, stderr, and exit status.
     /// Both streams are drained to channel EOF — reading only stdout (the old
@@ -706,6 +706,15 @@ public final class SSHShell: @unchecked Sendable {
             throw SSHShellError.noIdentities
         }
 
+        return try exec(command, on: session, fd: fd)
+    }
+
+    /// Run one command on an already-authenticated session and collect its
+    /// result. Leaves the session in blocking mode, ready for another command,
+    /// so a kept-open session (`SSHExecSession`) can run several.
+    static func exec(_ command: String, on session: OpaquePointer, fd: Int32,
+                     streamCap: Int = execStreamCap) throws -> ExecResult {
+        libssh2_session_set_blocking(session, 1)
         guard let channel = libssh2_channel_open_ex(session, "session", 7, 2 * 1024 * 1024, 32768, nil, 0) else {
             throw SSHShellError.channelOpenFailed
         }
@@ -721,7 +730,7 @@ public final class SSHShell: @unchecked Sendable {
         libssh2_session_set_blocking(session, 0)
         var result = ExecResult()
         var buffer = [CChar](repeating: 0, count: 32768)
-        let cap = execStreamCap
+        let cap = streamCap
         var hardError = false   // a non-EAGAIN read error: stop, don't poll forever
 
         func drain(_ streamID: Int32, into sink: inout [UInt8], truncated: inout Bool) -> Bool {

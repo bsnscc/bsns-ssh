@@ -99,6 +99,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
             DiagLog.log("terminal", "feed begin seq=\(seq) bytes=\(chunk.count) updateBefore=\(self.updateRangeDescription()) window=\(self.view.window != nil) bounds=\(Int(self.view.bounds.width))x\(Int(self.view.bounds.height))")
             self.view.noteFeedForDiagnostics(seq: seq, bytes: chunk.count)
             self.view.feed(byteArray: chunk[...])
+            self.handle.notePromptMarks()
             DiagLog.log("terminal", "feed end seq=\(seq) updateAfter=\(self.updateRangeDescription()) terminal=\(self.view.getTerminal().cols)x\(self.view.getTerminal().rows)")
         }
     }
@@ -116,9 +117,9 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         view.setNeedsDisplay(view.bounds)
     }
 
-    func apply(themeId: String, fontFamily: String, fontSize: CGFloat, hardwareKeyboard: Bool) {
+    func apply(themeId: String, fontFamily: String, fontSize: CGFloat, suppressAccessory: Bool) {
         view.setFont(family: fontFamily, size: fontSize)
-        handle.setAccessorySuppressed(hardwareKeyboard)
+        handle.setAccessorySuppressed(suppressAccessory)
         applyPrefs()
         if appliedThemeId != themeId {
             appliedThemeId = themeId
@@ -212,6 +213,7 @@ final class TerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
         // highlight that only a trackpad or Pencil can produce — finger-only,
         // no link is ever tappable. `.always` is the touch-correct mode.
         view.linkHighlightMode = .always
+        view.scrollGesture = ScrollGesturePref(rawValue: d.string(forKey: SettingsKey.scrollGesture) ?? "") ?? .automatic
         view.optionAsMetaKey = d.bool(forKey: SettingsKey.optionAsMeta)
         let predictive = d.bool(forKey: SettingsKey.predictiveText)
         let desiredAutocorrection: UITextAutocorrectionType = predictive ? .yes : .no

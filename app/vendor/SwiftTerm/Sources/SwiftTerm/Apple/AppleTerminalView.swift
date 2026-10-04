@@ -1894,6 +1894,33 @@ extension TerminalView {
     
     public func scrollTo (row: Int, notifyAccessibility: Bool = true)
     {
+        #if os(iOS) || os(visionOS)
+        // bsns fork: on iOS the scroll view's offset is the scroll position — the
+        // draw path reads `contentOffset`, never `yDisp`. Upstream's body below
+        // set `yDisp` and then let `updateScroller` pin the offset back to the
+        // bottom, so programmatic scrolling (keyboard scroll commands, jumping
+        // to a search match) never moved the view.
+        scrollContent (toRow: row)
+        if notifyAccessibility {
+            accessibility.invalidate ()
+        }
+        #else
+        scrollToYDisp (row: row, notifyAccessibility: notifyAccessibility)
+        #endif
+    }
+
+    /// The buffer row at the top of the view: the scroll offset on iOS, `yDisp`
+    /// on the Mac.
+    var viewTopRow: Int {
+        #if os(iOS) || os(visionOS)
+        topVisibleRow
+        #else
+        terminal.displayBuffer.yDisp
+        #endif
+    }
+
+    func scrollToYDisp (row: Int, notifyAccessibility: Bool)
+    {
         let displayBuffer = terminal.displayBuffer
         if row != displayBuffer.yDisp {
             terminal.setViewYDisp (row)
@@ -1933,47 +1960,80 @@ extension TerminalView {
     /// Scrolls up the content of the terminal the specified number of lines
     public func scrollUp (lines: Int)
     {
-        let newPosition = max (terminal.displayBuffer.yDisp - lines, 0)
+        let newPosition = max (viewTopRow - lines, 0)
         scrollTo (row: newPosition)
     }
-    
+
     /// Scrolls down the content of the terminal the specified number of lines
     public func scrollDown (lines: Int)
     {
         let displayBuffer = terminal.displayBuffer
-        let newPosition = max (0, min (displayBuffer.yDisp + lines, displayBuffer.lines.count - displayBuffer.rows))
+        let newPosition = max (0, min (viewTopRow + lines, displayBuffer.lines.count - displayBuffer.rows))
         scrollTo (row: newPosition)
     }
       
     func feedPrepare()
     {
         search.invalidate()
-        // Preserve manual selection while output is streaming when mouse reporting is disabled.
-        if allowMouseReporting {
-            selection.active = false
-        }
+        // bsns fork: a selection survives incoming output. Upstream dropped it on
+        // every feed whenever mouse reporting was allowed (the default), so with
+        // anything on screen that repaints — a multiplexer's status line, a
+        // spinner — the selection was gone before Copy could be tapped. It is
+        // settled after the feed instead; see `settleSelection(after:)`.
         startDisplayUpdates()
     }
-    
+
     func feedFinish ()
     {
         suspendDisplayUpdates ()
         queuePendingDisplay()
     }
-    
+
+    /// bsns fork: what a feed can do to an active selection's coordinates.
+    func selectionFeedMark () -> (linesTop: Int, alternate: Bool)
+    {
+        (terminal.displayBuffer.linesTop, terminal.isDisplayBufferAlternate)
+    }
+
+    /// bsns fork: keep an active selection attached to its text across a feed.
+    /// Lines pushed into scrollback keep their buffer rows, so the selection
+    /// needs nothing; lines trimmed off a full scrollback shift every row up,
+    /// and the selection moves with them. A switch between the normal and
+    /// alternate screens leaves the selection pointing into a different buffer,
+    /// which is the one case where it has to go.
+    func settleSelection (after mark: (linesTop: Int, alternate: Bool))
+    {
+        guard selection.active else { return }
+        if terminal.isDisplayBufferAlternate != mark.alternate {
+            selection.selectNone ()
+            return
+        }
+        let trimmed = terminal.displayBuffer.linesTop - mark.linesTop
+        if trimmed > 0 {
+            selection.linesTrimmed (count: trimmed)
+        } else if trimmed < 0 {
+            // The buffer was reset underneath the selection.
+            selection.selectNone ()
+        }
+    }
+
     /// Sends data to the terminal emulator for interpretation, this can be invoked from a background thread
     public func feed (byteArray: ArraySlice<UInt8>)
     {
+        let mark = selectionFeedMark ()
         feedPrepare()
         terminal.feed (buffer: byteArray)
+        settleSelection (after: mark)
         feedFinish()
     }
-    
+
     /// Sends data to the terminal emulator for interpretation, this can be invoked from a background thread
     public func feed (text: String)
     {
+        let mark = selectionFeedMark ()
         feedPrepare()
         terminal.feed (text: text)
+        settleSelection (after: mark)
         feedFinish()
     }
          

@@ -2,9 +2,9 @@
 import PackageDescription
 
 // Vendored fork of SwiftTerm (https://github.com/migueldeicaza/SwiftTerm, MIT,
-// pinned at 1.13.0) — only the SwiftTerm library target. Patched for desktop-class
-// pointer click-drag selection and forwarding PageUp/PageDown to the remote.
-// See PATCHES.md. Upstream's Fuzz/Termcast/Benchmark products are dropped (they
+// pinned at 1.13.0) — only the SwiftTerm library target. Patched for touch and
+// pointer selection, scrollback that holds its place, and more; every patch is
+// listed in PATCHES.md. Upstream's Fuzz/Termcast/Benchmark products are dropped (they
 // pull external deps we don't need).
 let package = Package(
     name: "SwiftTerm",

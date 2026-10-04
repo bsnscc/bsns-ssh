@@ -1,11 +1,12 @@
 import SwiftUI
 import SwiftTerm
 
-/// An always-visible row of the special keys a terminal needs but a touch
-/// keyboard lacks: Esc, Tab, Ctrl chords, arrows, paging, and shell symbols.
-/// Sends bytes straight to the shell, so it works with a hardware keyboard
-/// attached (iPad) where the soft-keyboard accessory never appears. On iPhone
-/// it hides while the soft keyboard is up, leaving SwiftTerm's own accessory.
+/// The row of keys a terminal needs but a touch keyboard lacks: Esc, Tab,
+/// sticky Ctrl and Alt, arrows, paging, shell symbols — whatever the user has
+/// put on it (see `KeyBarStore`). It sits above the software keyboard when
+/// that is up and along the bottom when it is down, so the same keys are in
+/// the same place either way, and it works with a hardware keyboard attached
+/// (where a keyboard accessory never appears).
 struct TerminalKeyBar: View {
     let session: TerminalSession
     let handle: TerminalHandle
@@ -17,6 +18,12 @@ struct TerminalKeyBar: View {
     var minimal: Bool = false
     @Binding var muxScrollActive: Bool
     @AppStorage(SettingsKey.multiplexer) private var multiplexer = MultiplexerPref.both.rawValue
+    @State private var store = KeyBarStore.shared
+    // Mirrors of the terminal view's sticky modifiers, for the highlight. The
+    // view clears its own flag once the modifier has been applied to a key and
+    // announces it; that announcement clears these.
+    @State private var ctrlArmed = false
+    @State private var altArmed = false
 
     /// tmux/screen buttons to show — narrowed to tmux for app-launched tmux sessions,
     /// else the user's preference. Matches the top control row.
@@ -37,157 +44,148 @@ struct TerminalKeyBar: View {
         self._muxScrollActive = muxScrollActive
     }
 
-    private enum Key: Hashable {
-        case esc, tab
-        case tmuxCopy
-        case screenCopy
-        case ctrl(Character)      // a Ctrl-<letter> chord
-        case arrow(Arrow)
-        case page(Bool)           // true = up
-        case text(String)         // literal symbol
-
-        enum Arrow { case up, down, left, right }
+    /// One button on screen. A bar item is usually one button; the scroll-mode
+    /// item expands to a button per multiplexer (or a single "done").
+    private struct Button_: Identifiable {
+        enum Action { case item(KeyBarItem), tmuxScroll, screenScroll }
+        let id: String
+        let label: String
+        let action: Action
+        var accessibilityLabel: String
+        var repeats = false
     }
 
-    private struct Item: Identifiable {
-        let id = UUID()
-        let label: String
-        let key: Key
-        let wide: Bool
+    private var scrollButtons: [Button_] {
+        if muxScrollActive {
+            return [Button_(id: "scroll-done", label: "done", action: .tmuxScroll,
+                            accessibilityLabel: "Exit multiplexer scroll mode")]
+        }
+        var buttons: [Button_] = []
+        if muxButtons.tmux {
+            buttons.append(Button_(id: "scroll-tmux", label: "tmux", action: .tmuxScroll, accessibilityLabel: "tmux copy mode"))
+        }
+        if muxButtons.screen {
+            buttons.append(Button_(id: "scroll-screen", label: "screen", action: .screenScroll, accessibilityLabel: "screen copy mode"))
+        }
+        return buttons
+    }
 
-        /// A spoken label for VoiceOver — the visible glyphs (↑ ⇞ …) read poorly,
-        /// so name the keys. Falls back to the visible label for plain symbols.
-        var accessibilityLabel: String {
-            switch key {
-            case .esc: return "Escape"
-            case .tab: return "Tab"
-            case .tmuxCopy: return "tmux copy mode"
-            case .screenCopy: return "screen copy mode"
-            case .ctrl(let c): return "Control \(c.uppercased())"
-            case .arrow(let a):
-                switch a {
-                case .up: return "Up arrow"
-                case .down: return "Down arrow"
-                case .left: return "Left arrow"
-                case .right: return "Right arrow"
-                }
-            case .page(let up): return up ? "Page up" : "Page down"
-            case .text(let s): return s
-            }
+    private var buttons: [Button_] {
+        if minimal {
+            let esc = KeyBarItem.key("esc", "Esc")
+            return [Button_(id: "esc", label: esc.label, action: .item(esc), accessibilityLabel: "Escape")] + scrollButtons
+        }
+        return store.items.flatMap { item -> [Button_] in
+            if item.kind == .scrollMode { return scrollButtons }
+            return [Button_(id: item.id.uuidString, label: item.label, action: .item(item),
+                            accessibilityLabel: item.accessibilityLabel, repeats: item.repeats)]
         }
     }
 
-    private var items: [Item] {
-        minimal ? minimalItems : fullItems
-    }
-
-    /// The tmux/screen (or single "done") copy-mode items, filtered to what applies.
-    private var muxItems: [Item] {
-        if muxScrollActive { return [Item(label: "done", key: .tmuxCopy, wide: true)] }
-        var items: [Item] = []
-        if muxButtons.tmux { items.append(Item(label: "tmux", key: .tmuxCopy, wide: true)) }
-        if muxButtons.screen { items.append(Item(label: "screen", key: .screenCopy, wide: true)) }
-        return items
-    }
-
-    private var minimalItems: [Item] {
-        [Item(label: "esc", key: .esc, wide: true)] + muxItems
-    }
-
-    private var fullItems: [Item] {
-        return [
-            Item(label: "esc", key: .esc, wide: true),
-            Item(label: "tab", key: .tab, wide: true),
-        ] + muxItems + [
-            Item(label: "⌃C", key: .ctrl("c"), wide: false),
-            Item(label: "⌃D", key: .ctrl("d"), wide: false),
-            Item(label: "⌃Z", key: .ctrl("z"), wide: false),
-            Item(label: "⌃L", key: .ctrl("l"), wide: false),
-            Item(label: "⌃R", key: .ctrl("r"), wide: false),
-            Item(label: "←", key: .arrow(.left), wide: false),
-            Item(label: "↓", key: .arrow(.down), wide: false),
-            Item(label: "↑", key: .arrow(.up), wide: false),
-            Item(label: "→", key: .arrow(.right), wide: false),
-            Item(label: "⇞", key: .page(true), wide: false),
-            Item(label: "⇟", key: .page(false), wide: false),
-            Item(label: "|", key: .text("|"), wide: false),
-            Item(label: "~", key: .text("~"), wide: false),
-            Item(label: "/", key: .text("/"), wide: false),
-            Item(label: "-", key: .text("-"), wide: false),
-        ]
+    private func isArmed(_ button: Button_) -> Bool {
+        guard case .item(let item) = button.action else { return false }
+        return (item.kind == .ctrl && ctrlArmed) || (item.kind == .alt && altArmed)
     }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(items) { item in
-                    Button { send(item.key) } label: {
-                        Text(item.label)
+                ForEach(buttons) { button in
+                    let armed = isArmed(button)
+                    Button { perform(button.action) } label: {
+                        Text(button.label)
                             .font(.system(size: 15, weight: .medium, design: .monospaced))
-                            .frame(minWidth: item.wide ? 44 : 32, minHeight: 34)
-                            .foregroundStyle(Color(theme.foreground.uiColor))
-                            .background(Color(theme.ansi[8].uiColor).opacity(0.35))
+                            .padding(.horizontal, 4)
+                            .frame(minWidth: button.label.count > 1 ? 44 : 32, minHeight: 34)
+                            .foregroundStyle(armed ? Color(theme.background.uiColor) : Color(theme.foreground.uiColor))
+                            .background(armed ? Brand.accent : Color(theme.ansi[8].uiColor).opacity(0.35))
                             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(item.accessibilityLabel)
+                    .buttonRepeatBehavior(button.repeats ? .enabled : .disabled)
+                    .accessibilityLabel(button.accessibilityLabel)
+                    .accessibilityAddTraits(armed ? .isSelected : [])
                 }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
         }
         .background(Color(theme.background.uiColor))
+        .onReceive(NotificationCenter.default.publisher(for: .terminalViewControlModifierReset)) { note in
+            if (note.object as AnyObject?) === handle.terminal { ctrlArmed = false }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .terminalViewMetaModifierReset)) { note in
+            if (note.object as AnyObject?) === handle.terminal { altArmed = false }
+        }
     }
 
-    private func send(_ key: Key) {
-        let bytes: [UInt8]
-        switch key {
-        case .esc:
+    private func perform(_ action: Button_.Action) {
+        switch action {
+        case .tmuxScroll: toggleScrollMode(sequence: tmuxSequence, fallback: [0x02, 0x5b])
+        case .screenScroll: toggleScrollMode(sequence: screenSequence, fallback: [0x01, 0x5b])
+        case .item(let item): press(item)
+        }
+    }
+
+    private func toggleScrollMode(sequence: String, fallback: [UInt8]) {
+        if muxScrollActive {
             muxScrollActive = false
             handle.setRemoteScrollMode(false)
-            bytes = [0x1b]
-        case .tab: bytes = [0x09]
-        case .tmuxCopy:
+            session.write([UInt8(0x1b)][...])
+        } else {
+            muxScrollActive = true
+            handle.setRemoteScrollMode(true)
+            session.write(KeySequence.bytes(for: sequence, fallback: fallback)[...])
+        }
+    }
+
+    private func press(_ item: KeyBarItem) {
+        guard let terminal = handle.terminal else { return }
+        let app = terminal.getTerminal().applicationCursor
+        var bytes: [UInt8]
+        switch item.kind {
+        case .ctrl:
+            ctrlArmed.toggle()
+            terminal.controlModifier = ctrlArmed
+            return
+        case .alt:
+            altArmed.toggle()
+            terminal.metaModifier = altArmed
+            return
+        case .keyboard:
+            if terminal.isFirstResponder { _ = terminal.resignFirstResponder() } else { _ = terminal.becomeFirstResponder() }
+            return
+        case .scrollMode:
+            return   // expanded into its own buttons above
+        case .up:    bytes = app ? EscapeSequences.moveUpApp : EscapeSequences.moveUpNormal
+        case .down:  bytes = app ? EscapeSequences.moveDownApp : EscapeSequences.moveDownNormal
+        case .left:  bytes = app ? EscapeSequences.moveLeftApp : EscapeSequences.moveLeftNormal
+        case .right: bytes = app ? EscapeSequences.moveRightApp : EscapeSequences.moveRightNormal
+        case .home:  bytes = app ? EscapeSequences.moveHomeApp : EscapeSequences.moveHomeNormal
+        case .end:   bytes = app ? EscapeSequences.moveEndApp : EscapeSequences.moveEndNormal
+        case .pageUp, .pageDown:
             if muxScrollActive {
-                muxScrollActive = false
-                handle.setRemoteScrollMode(false)
-                bytes = [0x1b]
-            } else {
-                muxScrollActive = true
-                handle.setRemoteScrollMode(true)
-                bytes = KeySequence.bytes(for: tmuxSequence, fallback: [0x02, 0x5b])
-            }
-        case .screenCopy:
-            if muxScrollActive {
-                muxScrollActive = false
-                handle.setRemoteScrollMode(false)
-                bytes = [0x1b]
-            } else {
-                muxScrollActive = true
-                handle.setRemoteScrollMode(true)
-                bytes = KeySequence.bytes(for: screenSequence, fallback: [0x01, 0x5b])
-            }
-        case .ctrl(let c):
-            // Ctrl-<letter> masks to the low 5 bits of the uppercase letter.
-            let upper = Character(c.uppercased())
-            bytes = [UInt8(upper.asciiValue ?? 0) & 0x1f]
-        case .arrow(let a):
-            let app = handle.terminal?.getTerminal().applicationCursor ?? false
-            switch a {
-            case .up:    bytes = app ? EscapeSequences.moveUpApp : EscapeSequences.moveUpNormal
-            case .down:  bytes = app ? EscapeSequences.moveDownApp : EscapeSequences.moveDownNormal
-            case .left:  bytes = app ? EscapeSequences.moveLeftApp : EscapeSequences.moveLeftNormal
-            case .right: bytes = app ? EscapeSequences.moveRightApp : EscapeSequences.moveRightNormal
-            }
-        case .page(let up):
-            if muxScrollActive {
-                handle.sendRemoteScrollPage(up: up)
+                handle.sendRemoteScrollPage(up: item.kind == .pageUp)
                 return
             }
-            bytes = up ? EscapeSequences.cmdPageUp : EscapeSequences.cmdPageDown
-        case .text(let s):
-            bytes = Array(s.utf8)
+            bytes = item.kind == .pageUp ? EscapeSequences.cmdPageUp : EscapeSequences.cmdPageDown
+        case .sequence:
+            bytes = KeySequence.bytes(for: item.sequence, fallback: [])
+            guard !bytes.isEmpty else { return }
+            if bytes == [0x1b], muxScrollActive {
+                // Esc leaves copy mode on the remote; leave it here too.
+                muxScrollActive = false
+                handle.setRemoteScrollMode(false)
+            }
+            // A sticky modifier applies to a bar key the way it would to a typed
+            // one: Ctrl folds a single character to its control code, Alt
+            // prefixes Escape.
+            if ctrlArmed, bytes.count == 1, (0x40...0x7e).contains(bytes[0]) { bytes = [bytes[0] & 0x1f] }
+            if altArmed { bytes = [0x1b] + bytes }
         }
+        // Whatever was sent, an armed modifier has now been used (or passed over).
+        if ctrlArmed { terminal.controlModifier = false; ctrlArmed = false }
+        if altArmed { terminal.metaModifier = false; altArmed = false }
         session.write(bytes[...])
     }
 }

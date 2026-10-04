@@ -522,6 +522,24 @@ class SelectionService: CustomDebugStringConvertible {
         setActiveAndNotify()
     }
     
+    /// bsns fork: the buffer dropped `count` lines off its top (the scrollback was
+    /// full), so every surviving line moved up that many rows. Move the selection
+    /// with its text; one that scrolled out of the buffer entirely is dropped.
+    func linesTrimmed (count: Int)
+    {
+        guard active, count > 0 else { return }
+        if max (start.row, end.row) < count {
+            selectNone ()
+            return
+        }
+        func moved (_ p: Position) -> Position {
+            p.row < count ? Position (col: 0, row: 0) : Position (col: p.col, row: p.row - count)
+        }
+        start = moved (start)
+        end = moved (end)
+        if let pivot { self.pivot = moved (pivot) }
+    }
+
     /**
      * Clears the selection
      */

@@ -10,6 +10,7 @@ struct PortForwardsView: View {
     @State private var destHost = "127.0.0.1"
     @State private var destPort = ""
     @State private var error: String?
+    @State private var adding = false
 
     private var canAdd: Bool {
         UInt16(listenPort) != nil && !destHost.isEmpty && UInt16(destPort) != nil
@@ -48,7 +49,7 @@ struct PortForwardsView: View {
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
                     TextField("destination port — e.g. 5432", text: $destPort)
                         .keyboardType(.numberPad)
-                    Button("Add forward") { add() }.disabled(!canAdd)
+                    Button("Add forward") { add() }.disabled(!canAdd || adding)
                 }
 
                 if let error {
@@ -63,7 +64,12 @@ struct PortForwardsView: View {
 
     private func add() {
         guard let lp = UInt16(listenPort), let dp = UInt16(destPort), !destHost.isEmpty else { return }
-        error = session.addForward(listenPort: lp, destHost: destHost, destPort: dp)
-        if error == nil { listenPort = ""; destPort = "" }
+        // Async: a mosh session has to open its forwarding connection first.
+        adding = true
+        Task {
+            error = await session.addForwardConnecting(listenPort: lp, destHost: destHost, destPort: dp)
+            if error == nil { listenPort = ""; destPort = "" }
+            adding = false
+        }
     }
 }

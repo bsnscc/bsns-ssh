@@ -162,12 +162,27 @@ struct RootView: View {
                 known.trust(host: host, port: port, key: hostKey) // dev: auto-trust
                 try await shell.connect(host: host, port: port, user: user, agent: store.agent, knownHosts: known)
             }
+            // Dev hook: BSNS_DEV_MOSH=1 opens the session over mosh instead (the SSH
+            // connect above then only served to learn and trust the host key), with
+            // BSNS_DEV_TMUX naming an optional tmux session for the bootstrap.
+            if env["BSNS_DEV_MOSH"] == "1" {
+                shell.disconnect()
+                let spec = TerminalSession.Spec(host: host, port: port, user: user,
+                                                agent: store.agent, knownHosts: known,
+                                                useMosh: true, tmuxSession: env["BSNS_DEV_TMUX"])
+                let session = TerminalSession(spec: spec, title: "dev · mosh")
+                sessions.add(session)
+                session.start()
+                devDrive(session, env: env)
+                return
+            }
             // Reconnect via the agent key (now installed), not the bootstrap password.
             let spec = TerminalSession.Spec(host: host, port: port, user: user,
                                             agent: store.agent, knownHosts: known)
             let session = TerminalSession(spec: spec, title: "dev")
             session.adopt(shell)
             sessions.add(session)
+            devDrive(session, env: env)
             // Dev hook: BSNS_DEV_FORWARD="listenPort:destHost:destPort" exercises
             // local (-L) forwarding headlessly (curl the sim's listen port).
             if let f = env["BSNS_DEV_FORWARD"]?.split(separator: ":"), f.count == 3,
@@ -182,6 +197,36 @@ struct RootView: View {
         #endif
     }
 }
+
+#if DEBUG
+extension RootView {
+    /// Dev hooks that act on the auto-connected session once it is up:
+    /// BSNS_DEV_RUN=<command> types a command into it, and
+    /// BSNS_DEV_RECONNECT_AFTER=<seconds> then takes the path a failed mosh
+    /// resume takes (tear the transport down, re-bootstrap) — the reconnect can
+    /// be exercised against a server that has been made unreachable.
+    fileprivate func devDrive(_ session: TerminalSession, env: [String: String]) {
+        Task { @MainActor in
+            for _ in 0..<150 where session.status != .connected {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            if let command = env["BSNS_DEV_RUN"], !command.isEmpty {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)   // let the prompt appear
+                session.runCommand(command)
+            }
+            if let after = env["BSNS_DEV_RECONNECT_AFTER"].flatMap(Double.init) {
+                try? await Task.sleep(nanoseconds: UInt64(after * 1_000_000_000))
+                print("dev reconnect: forcing")
+                session.devForceReconnect()
+                for _ in 0..<200 where session.status != .connected {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                print("dev reconnect: status=\(session.status)")
+            }
+        }
+    }
+}
+#endif
 
 /// A horizontal strip of one tab per live session, with a trailing button to
 /// start a new connection. Tapping a tab switches to it; the ✕ closes it.

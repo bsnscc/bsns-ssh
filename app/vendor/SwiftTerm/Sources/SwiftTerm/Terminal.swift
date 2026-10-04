@@ -1731,21 +1731,112 @@ open class Terminal {
     //    ESC ] 52 ; c ; [base64 data] \a
     // where c is for copy and the only thing supported.
     func oscClipboard (_ data: ArraySlice<UInt8>) {
-        // we require data to start with c; followed by base64 content
-        guard data.count >= 2,
-              data[data.startIndex] == UInt8(ascii: "c"),
-              data[data.startIndex+1] == UInt8(ascii: ";") else {
+        // bsns fork: the selection field is `Pc ; Pd`, where Pc is ANY mix of
+        // c/p/q/s/0-7 — including none at all, which is what tmux sends from
+        // copy mode ("52;;<base64>"). Upstream required a literal "c;" and so
+        // dropped every tmux copy. There is one pasteboard here, so every target
+        // maps to it. A "?" payload is a read request; it is not base64 and
+        // falls out below, unanswered, as before.
+        guard let separator = data.firstIndex(of: UInt8(ascii: ";")) else {
             return
         }
-        
-        let base64 = Data(data[(data.startIndex+2)...])
-        guard let content = Data(base64Encoded: base64) else {
+        let targets = data[data.startIndex..<separator]
+        let allowed = Array("cpqs01234567".utf8)
+        guard targets.allSatisfy({ allowed.contains($0) }) else {
             return
         }
-        
+
+        let base64 = Data(data[(separator+1)...])
+        guard let content = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) else {
+            return
+        }
+
         tdel?.clipboardCopy(source: self, content: content)
     }
     
+    // bsns fork: shell prompt marks ("semantic prompts", OSC 133). A shell set
+    // up for them brackets every command: A at the start of the prompt, B where
+    // the typed command begins, C where its output begins, D when it finishes.
+    // Recording where those fell is what makes "jump to the previous prompt" and
+    // "copy the last command's output" possible without guessing at prompt text.
+
+    /// One mark. `line` counts lines since the buffer was created (it does not
+    /// move when the scrollback trims), so a mark stays attached to its text.
+    public struct PromptMark {
+        public enum Kind { case promptStart, commandStart, outputStart, commandEnd }
+        public let kind: Kind
+        public let line: Int
+    }
+
+    private(set) var promptMarks: [PromptMark] = []
+    private static let maxPromptMarks = 4000
+
+    func oscPromptMark (_ data: ArraySlice<UInt8>) {
+        // Only the normal screen keeps history worth navigating.
+        guard buffer === normalBuffer, let code = data.first else { return }
+        let kind: PromptMark.Kind
+        switch code {
+        case UInt8(ascii: "A"): kind = .promptStart
+        case UInt8(ascii: "B"): kind = .commandStart
+        case UInt8(ascii: "C"): kind = .outputStart
+        case UInt8(ascii: "D"): kind = .commandEnd
+        default: return
+        }
+        let line = normalBuffer.linesTop + normalBuffer.yBase + normalBuffer.y
+        // Shells redraw the prompt (on resize, on completion menus): keep one
+        // mark of a kind per line rather than a pile of duplicates.
+        if let last = promptMarks.last, last.kind == kind, last.line == line { return }
+        promptMarks.append (PromptMark (kind: kind, line: line))
+        if promptMarks.count > Terminal.maxPromptMarks {
+            promptMarks.removeFirst (promptMarks.count - Terminal.maxPromptMarks)
+        }
+    }
+
+    /// Marks stop meaning anything when lines are renumbered (the scrollback is
+    /// erased, or a width change reflows it).
+    func clearPromptMarks () {
+        promptMarks.removeAll ()
+    }
+
+    /// Row of `mark` in the normal buffer, or nil once it has scrolled out.
+    private func bufferRow (of mark: PromptMark) -> Int? {
+        let row = mark.line - normalBuffer.linesTop
+        return row >= 0 && row < normalBuffer.lines.count ? row : nil
+    }
+
+    /// True when the shell has marked at least one prompt that is still in the buffer.
+    public var hasPromptMarks: Bool {
+        promptMarks.contains { $0.kind == .promptStart && bufferRow (of: $0) != nil }
+    }
+
+    /// Buffer rows of the prompts still in the buffer, oldest first.
+    public func promptRows () -> [Int] {
+        promptMarks.compactMap { $0.kind == .promptStart ? bufferRow (of: $0) : nil }
+    }
+
+    /// The output of the most recent command that printed anything, or nil.
+    /// A command still running yields what it has printed so far.
+    public func lastCommandOutput () -> String? {
+        let lines = normalBuffer.lines
+        for i in promptMarks.indices.reversed () where promptMarks [i].kind == .outputStart {
+            guard let first = bufferRow (of: promptMarks [i]) else { return nil }
+            // Ends at the next "finished" or "new prompt" mark; without one the
+            // command is still running and the cursor is the end.
+            let endMark = promptMarks [(i + 1)...].first { $0.kind == .commandEnd || $0.kind == .promptStart }
+            let end = endMark.flatMap { bufferRow (of: $0) } ?? (normalBuffer.yBase + normalBuffer.y + 1)
+            guard end > first else { continue }
+            var text = ""
+            for row in first..<min (end, lines.count) {
+                // A wrapped row continues the one before it: no line break.
+                if row > first && !lines [row].isWrapped { text += "\n" }
+                text += normalBuffer.translateBufferLineToString (lineIndex: row, trimRight: true)
+            }
+            let trimmed = text.trimmingCharacters (in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return text.trimmingCharacters (in: .newlines) }
+        }
+        return nil
+    }
+
     // Notifications:
     //    ESC ] 777 ; notify ; [title] ; [body] \a
     func oscNotification(_ data: ArraySlice<UInt8>) {
@@ -2367,6 +2458,7 @@ open class Terminal {
             if scrollBackSize > 0 {
                 buffer.lines.trimStart (count: scrollBackSize)
                 buffer.linesTop = 0
+                clearPromptMarks ()   // bsns fork: the lines were renumbered
                 buffer.yBase = max (buffer.yBase - scrollBackSize, 0)
                 buffer.yDisp = max (buffer.yDisp - scrollBackSize, 0)
             }
@@ -4088,18 +4180,21 @@ open class Terminal {
                 mouseMode = .off
             case 1004: // send focusin/focusout events
                 sendFocus = false
+            // bsns fork: resetting a mouse ENCODING (1005/1006/1015/1016) only
+            // reverts how reports are encoded. Upstream also switched mouse
+            // reporting off here — but the encoding and the reporting mode are
+            // independent, and a renderer that refreshes its modes by resetting
+            // and re-setting each one (as mosh does on every full repaint) left
+            // reporting off for good, since re-setting an encoding doesn't turn
+            // it back on.
             case 1005: // utf8 ext mode mouse
                 mouseProtocol = .x10
-                mouseMode = .off
             case 1006: // sgr ext mode mouse
                 mouseProtocol = .x10
-                mouseMode = .off
             case 1015: // urxvt ext mode mouse
                 mouseProtocol = .x10
-                mouseMode = .off
             case 1016: // sgrPixel mode
                 mouseProtocol = .x10
-                mouseMode = .off
             case 25: // hide cursor
                 hideCursor ()
             case 1048: // alt screen cursor
@@ -5411,6 +5506,9 @@ open class Terminal {
         }
         endSynchronizedOutput ()
         let oldCols = self.cols
+        if newCols != oldCols {
+            clearPromptMarks ()   // bsns fork: a width change reflows the scrollback
+        }
         resizeBuffers(newColumns: newCols, newRows: newRows)
         self.cols = newCols
         self.rows = newRows
