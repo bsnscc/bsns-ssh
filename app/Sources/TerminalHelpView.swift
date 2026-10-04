@@ -45,7 +45,7 @@ struct TerminalHelpView: View {
                 HelpRow(
                     icon: "hand.draw",
                     title: "One finger, two fingers",
-                    text: "When the remote program has asked for the mouse — tmux with mouse on, most full-screen programs — a one-finger swipe scrolls that program through its own history, like a scroll wheel. A flick keeps going and slows down on its own; touch the screen to stop it. Two fingers always scroll the scrollback saved on this device. Settings can make one finger prefer the device's scrollback instead.")
+                    text: "When the remote program has asked for the mouse — tmux with mouse on, most full-screen programs — a one-finger swipe scrolls that program through its own history, like a scroll wheel. The scroll goes to whatever is under the point where the swipe began, however far your finger travels. A flick keeps going and slows down on its own; touch the screen to stop it. Two fingers always scroll the scrollback saved on this device. Settings can make one finger prefer the device's scrollback instead.")
                 HelpRow(
                     icon: "antenna.radiowaves.left.and.right",
                     title: "Scrollback over mosh",
@@ -84,6 +84,10 @@ struct TerminalHelpView: View {
             }
 
             Section {
+                HelpRow(
+                    icon: "chevron.left.chevron.right",
+                    title: "Switching windows",
+                    text: "The arrows on either side of the tmux button go to the previous and next tmux window. Touch and hold the tmux button for last window, new window and the full list. These send your tmux prefix followed by the usual key, using the prefix from the scroll sequence in Settings.")
                 HelpRow(
                     icon: "rectangle.stack",
                     title: "Windows",
