@@ -195,8 +195,29 @@ struct LiveTerminalScreen: View {
                 .accessibilityLabel("Exit multiplexer scroll mode")
         } else {
             if muxButtons.tmux {
-                Button { startMuxScroll(sequence: tmuxScrollSequence, fallback: [0x02, 0x5b]) } label: { muxScrollLabel("tmux", active: false) }
-                    .accessibilityLabel("Enter tmux scroll mode")
+                // Window switching without leaving the keyboard: the arrows step
+                // through tmux's windows, and a long press on "tmux" has the rest.
+                Button { sendTmuxKey("p") } label: { Image(systemName: "chevron.left").frame(minWidth: 22, minHeight: 28) }
+                    .accessibilityLabel("Previous tmux window")
+                Menu {
+                    Button { sendTmuxKey("n") } label: { Label("Next Window", systemImage: "chevron.right") }
+                    Button { sendTmuxKey("p") } label: { Label("Previous Window", systemImage: "chevron.left") }
+                    Button { sendTmuxKey("l") } label: { Label("Last Window", systemImage: "arrow.uturn.backward") }
+                    Button { sendTmuxKey("c") } label: { Label("New Window", systemImage: "plus") }
+                    if session.spec.jump == nil {
+                        Divider()
+                        Button { tmuxPanel = .windows } label: { Label("All Windows…", systemImage: "rectangle.stack") }
+                        Button { tmuxPanel = .history } label: { Label("History…", systemImage: "text.justify.left") }
+                    }
+                } label: {
+                    muxScrollLabel("tmux", active: false)
+                } primaryAction: {
+                    startMuxScroll(sequence: tmuxScrollSequence, fallback: [0x02, 0x5b])
+                }
+                .accessibilityLabel("Enter tmux scroll mode")
+                .accessibilityHint("Touch and hold for window commands")
+                Button { sendTmuxKey("n") } label: { Image(systemName: "chevron.right").frame(minWidth: 22, minHeight: 28) }
+                    .accessibilityLabel("Next tmux window")
             }
             if muxButtons.screen {
                 Button { startMuxScroll(sequence: screenScrollSequence, fallback: [0x01, 0x5b]) } label: { muxScrollLabel("screen", active: false) }
@@ -327,6 +348,14 @@ struct LiveTerminalScreen: View {
             }
             forwarding = false
         }
+    }
+
+    /// Send a tmux command key after the prefix. The prefix is the one already
+    /// configured for scroll mode ("C-b [" → C-b), so a remapped prefix carries over.
+    private func sendTmuxKey(_ key: String) {
+        let prefix = KeyBarPresets.tmuxPrefix(fromScrollSequence: tmuxScrollSequence)
+        let bytes = KeySequence.bytes(for: "\(prefix) \(key)", fallback: [0x02] + Array(key.utf8))
+        session.write(bytes[...])
     }
 
     private func startMuxScroll(sequence: String, fallback: [UInt8]) {
@@ -639,7 +668,9 @@ final class ZoomableTerminalView: TerminalView {
     // way a scroll view does, until it runs out or the screen is touched again.
     private var momentumLink: CADisplayLink?
     private var momentumVelocity: CGFloat = 0     // points per second, + = finger moving down
-    private var momentumPoint: CGPoint = .zero
+    /// Where the swipe in progress started, relative to the visible screen. Every
+    /// wheel event of that swipe (and of the glide after it) is reported there.
+    private var wheelAnchor: CGPoint = .zero
     private var touchDownGesture: TouchDownRecognizer?
     private var lastLoggedMouseReporting = false
     /// Below this a lift is a stop, not a flick.
@@ -884,6 +915,8 @@ final class ZoomableTerminalView: TerminalView {
             autoMuxScrollArmed = panRoute == .local && getTerminal().isCurrentBufferAlternate
             // The remote scrolls relative to its live screen, so show that.
             if panRoute == .wheel, !isAtLiveTail { scrollToLiveTail() }
+            let touch = gesture.location(in: self)
+            wheelAnchor = CGPoint(x: touch.x, y: touch.y - contentOffset.y)
             gesture.setTranslation(.zero, in: self)
         case .changed:
             let deltaY = gesture.translation(in: self).y
@@ -891,7 +924,7 @@ final class ZoomableTerminalView: TerminalView {
             switch panRoute {
             case .wheel:
                 remoteScrollAccumulator += deltaY
-                sendWheelSteps(at: gesture.location(in: self))
+                sendWheelSteps()
             case .keys:
                 remoteScrollAccumulator += deltaY
                 sendRemoteScrollSteps()
@@ -906,7 +939,7 @@ final class ZoomableTerminalView: TerminalView {
             autoMuxScrollArmed = false
             if panRoute == .wheel {
                 DiagLog.log("terminal", "wheel pan ended velocity=\(Int(gesture.velocity(in: self).y))")
-                startMomentum(velocity: gesture.velocity(in: self).y, at: gesture.location(in: self))
+                startMomentum(velocity: gesture.velocity(in: self).y)
             } else {
                 remoteScrollAccumulator = 0
             }
@@ -918,16 +951,13 @@ final class ZoomableTerminalView: TerminalView {
         }
     }
 
-    private func startMomentum(velocity: CGFloat, at point: CGPoint) {
+    private func startMomentum(velocity: CGFloat) {
         stopMomentum()
         guard abs(velocity) >= Self.momentumMinVelocity else {
             remoteScrollAccumulator = 0
             return
         }
         momentumVelocity = velocity
-        // Kept relative to the visible screen: the content offset moves as
-        // output arrives, and the glide belongs to where the finger left.
-        momentumPoint = CGPoint(x: point.x, y: point.y - contentOffset.y)
         let link = CADisplayLink(target: self, selector: #selector(momentumTick(_:)))
         link.add(to: .main, forMode: .common)
         momentumLink = link
@@ -950,15 +980,22 @@ final class ZoomableTerminalView: TerminalView {
         }
         let dt = CGFloat(min(0.05, max(0, link.targetTimestamp - link.timestamp)))
         remoteScrollAccumulator += momentumVelocity * dt
-        sendWheelSteps(at: CGPoint(x: momentumPoint.x, y: momentumPoint.y + contentOffset.y))
+        sendWheelSteps()
         momentumVelocity *= pow(Self.momentumDecayPerMs, dt * 1000)
         if abs(momentumVelocity) < 40 { stopMomentum() }
     }
 
-    /// Turn accumulated finger travel into wheel events at the cell under the
-    /// finger (programs route the wheel by position — a multiplexer picks the
-    /// pane under it).
-    private func sendWheelSteps(at point: CGPoint) {
+    /// Turn accumulated finger travel into wheel events.
+    ///
+    /// Programs route the wheel by position — a multiplexer scrolls the pane
+    /// under it — so the position matters, and it must be the place the swipe
+    /// STARTED, not where the finger is now. A mouse pointer sits still while
+    /// its wheel turns; a finger scrolling back travels down the screen and
+    /// ends on the bottom row, which in a multiplexer is the status line, where
+    /// the wheel means "switch window". For the same reason the row is kept off
+    /// the first and last lines of the screen: a swipe that starts on a status
+    /// line is still someone trying to scroll.
+    private func sendWheelSteps() {
         let terminal = getTerminal()
         let rows = max(1, terminal.rows)
         let cols = max(1, terminal.cols)
@@ -969,11 +1006,11 @@ final class ZoomableTerminalView: TerminalView {
         steps = min(12, max(-12, steps))
         remoteScrollAccumulator -= CGFloat(steps) * stepHeight
 
-        // `point` is in content space (this is a scroll view); the remote wants
-        // the cell on its screen. Capped at 222 — the legacy one-byte mouse
+        // The remote wants a cell on its screen. Capped at 222 — the legacy one-byte mouse
         // encoding cannot express a larger coordinate.
-        let col = min(222, min(cols - 1, max(0, Int(point.x / max(1, bounds.width / CGFloat(cols))))))
-        let row = min(222, min(rows - 1, max(0, Int((point.y - contentOffset.y) / rowHeight))))
+        let col = min(222, min(cols - 1, max(0, Int(wheelAnchor.x / max(1, bounds.width / CGFloat(cols))))))
+        let touched = Int(wheelAnchor.y / rowHeight)
+        let row = min(222, rows > 2 ? min(rows - 2, max(1, touched)) : min(rows - 1, max(0, touched)))
         // Finger down = content down = earlier output = wheel up.
         let flags = terminal.encodeButton(button: steps > 0 ? 4 : 5, release: false,
                                           shift: false, meta: false, control: false)
