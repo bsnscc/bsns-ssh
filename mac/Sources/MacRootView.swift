@@ -102,6 +102,13 @@ private struct SessionRow: View {
     var body: some View {
         HStack(spacing: 7) {
             statusDot
+            // Where the session runs is visible at a glance: this Mac, or elsewhere.
+            Image(systemName: session.isLocal ? "laptopcomputer" : "network")
+                .font(.caption)
+                .foregroundStyle(session.isLocal ? Brand.accent : .secondary)
+                .frame(width: 16)
+                .help(session.isLocal ? "On this Mac" : "Remote")
+                .accessibilityLabel(session.isLocal ? "Local" : "Remote")
             Button(action: select) {
                 Text(session.title)
                     .lineLimit(1)
