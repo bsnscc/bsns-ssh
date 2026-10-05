@@ -14,8 +14,20 @@ import BsnsSSHCore
 @MainActor
 enum MacDevHooks {
     static func run(store: AgentStore, sessions: SessionStore, agentSocket: AgentSocketController,
-                    phoneKeys: PhoneKeyClient, sync: SyncStore, handoff: SessionHandoffStore) async {
+                    phoneKeys: PhoneKeyClient, sync: SyncStore, handoff: SessionHandoffStore,
+                    surfaces: MacSurfaceCache) async {
         let env = ProcessInfo.processInfo.environment
+        // BSNS_DEV_LOCAL=1: open a local shell, type BSNS_DEV_RUN into it, and
+        // report whether its tab is still there a few seconds later.
+        if env["BSNS_DEV_LOCAL"] == "1" {
+            let session = LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store)
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            print("dev local: \(session.title) status=\(session.status)")
+            if let command = env["BSNS_DEV_RUN"], !command.isEmpty { session.runCommand(command) }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            print("dev local: tabs open now=\(sessions.sessions.count)")
+            return
+        }
         // BSNS_DEV_HANDOFF=<folder>, optionally with BSNS_DEV_HANDOFF_PHRASE: use that folder
         // for sync, publish the session named by BSNS_DEV_HANDOFF_PUBLISH
         // ("host|user|tmux", tmux optional) as open here, and report what the

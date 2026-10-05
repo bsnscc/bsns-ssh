@@ -79,6 +79,15 @@ Hosts with more than one address also show whether they are reachable right
 now. That check is a bare connection to the SSH port, closed at once; hosts
 with a single address are never checked unasked.
 
+## Local shells (Mac)
+
+On the Mac a tab can also be a login shell on the machine itself
+(`mac/Sources/LocalShell.swift`). It is one more transport behind the same
+session and terminal view as a remote connection; the SSH-only features (tmux
+panel, port forwards) are simply absent. When the agent is being served to
+other programs, a local shell's `SSH_AUTH_SOCK` points at it, so `ssh` and `git`
+typed there sign with the keys the app holds.
+
 ## Sessions that move between devices
 
 With config sync set up, each device keeps one small file of its open sessions

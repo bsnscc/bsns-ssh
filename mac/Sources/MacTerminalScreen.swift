@@ -27,6 +27,8 @@ struct MacTerminalScreen: View {
         }
         .navigationTitle(session.title)
         .toolbar {
+            // A local shell has no connection for these to ride on.
+            if !session.isLocal {
             ToolbarItemGroup {
                 // tmux beside the terminal needs a second connection, which a
                 // jump host has no tunnel for yet.
@@ -41,6 +43,7 @@ struct MacTerminalScreen: View {
                           systemImage: "arrow.left.arrow.right")
                 }
                 .help("Port forwarding")
+            }
             }
         }
         .sheet(isPresented: $showForwards) { MacForwardsView(session: session) }
@@ -169,7 +172,7 @@ final class MacTerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
               scheme == "http" || scheme == "https" else { return }
         // "localhost" printed by the server means the server's loopback; this
         // Mac's browser would look here instead. Forward the port, then open that.
-        if let loopback = LoopbackURL(url) {
+        if let loopback = LoopbackURL(url), !session.isLocal {
             let session = session
             Task { @MainActor in
                 switch await session.forwardLoopback(loopback) {

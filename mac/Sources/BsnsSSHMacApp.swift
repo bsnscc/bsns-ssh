@@ -76,6 +76,8 @@ struct BsnsSSHMacApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Connection") { sessions.goHome() }
                     .keyboardShortcut("n")
+                Button("New Local Shell") { LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store) }
+                    .keyboardShortcut("t")
             }
         }
 
@@ -123,7 +125,7 @@ struct BsnsSSHMacApp: App {
         Task { @MainActor in
             for delay in [3.0, 10.0] {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                for session in sessions.sessions where !session.spec.useMosh && session.isDisconnected {
+                for session in sessions.sessions where !session.spec.useMosh && !session.isLocal && session.isDisconnected {
                     session.reconnect()
                 }
             }

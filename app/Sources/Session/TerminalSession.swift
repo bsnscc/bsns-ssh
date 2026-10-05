@@ -113,6 +113,12 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// session store persists it on add and forgets it on close.
     var restorable: RestorableSession?
 
+    /// Set for a session that isn't a connection — a shell on this machine: how
+    /// to start its transport (again), at the given size. Such a session has no
+    /// host to reach, so the SSH-only features don't apply to it.
+    @ObservationIgnored var relaunchLocal: ((_ cols: Int32, _ rows: Int32) -> TerminalTransport)?
+    var isLocal: Bool { relaunchLocal != nil }
+
     init(id: UUID = UUID(), spec: Spec, title: String) {
         self.id = id
         self.spec = spec
@@ -480,6 +486,14 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         lock.withLock { transport = nil }
         DispatchQueue.main.async { self.isStale = false }
         setStatus(.connecting)
+        if let relaunchLocal {
+            let (cols, rows) = lock.withLock { (self.cols, self.rows) }
+            let fresh = relaunchLocal(cols, rows)
+            wire(fresh)
+            guard install(fresh, openedCols: cols, openedRows: rows) else { return }
+            setStatus(.connected)
+            return
+        }
         let spec = self.spec
         Task {
             do {

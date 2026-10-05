@@ -28,6 +28,9 @@ struct MacRootView: View {
                         place = .keys
                         sessions.goHome()
                     }
+                    row("New Local Shell", systemImage: "terminal", selected: false) {
+                        LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store)
+                    }
                 }
                 if !sessions.sessions.isEmpty {
                     Section("Sessions") {
@@ -53,7 +56,7 @@ struct MacRootView: View {
         }
         #if DEBUG
         .task { await MacDevHooks.run(store: store, sessions: sessions, agentSocket: agentSocket, phoneKeys: phoneKeys,
-                                       sync: sync, handoff: handoff) }
+                                       sync: sync, handoff: handoff, surfaces: surfaces) }
         #endif
     }
 
