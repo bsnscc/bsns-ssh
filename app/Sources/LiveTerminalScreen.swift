@@ -17,6 +17,10 @@ struct LiveTerminalScreen: View {
     let session: TerminalSession
 
     @Environment(TerminalSurfaceCache.self) private var surfaceCache
+    @Environment(\.horizontalSizeClass) private var hSize
+    /// A phone held upright: the bar keeps only what is used mid-typing, so the
+    /// session name has room; the rest lives in the "more" menu.
+    private var compactBar: Bool { hSize == .compact }
 
     @AppStorage("terminal.fontSize") private var fontSize: Double = Double(defaultFontSize)
     @AppStorage("terminal.themeId") private var themeId: String = TerminalTheme.bsnsDark.id
@@ -166,17 +170,21 @@ struct LiveTerminalScreen: View {
         HStack(spacing: 2) {
             Button { toggleFind() } label: { Image(systemName: "magnifyingglass") }
                 .accessibilityLabel("Find")
-            Button { predictiveText.toggle() } label: {
-                Image(systemName: "textformat.abc")
-                    .foregroundStyle(predictiveText ? Brand.accent : Color.primary)
+            if !compactBar {
+                Button { predictiveText.toggle() } label: {
+                    Image(systemName: "textformat.abc")
+                        .foregroundStyle(predictiveText ? Brand.accent : Color.primary)
+                }
+                .accessibilityLabel(predictiveText ? "Predictive text on" : "Predictive text off")
+                .accessibilityHint("Toggles predictive text")
             }
-            .accessibilityLabel(predictiveText ? "Predictive text on" : "Predictive text off")
-            .accessibilityHint("Toggles predictive text")
             muxScrollButtons
-            Button { setZoom(CGFloat(fontSize) - 1) } label: { Image(systemName: "textformat.size.smaller") }
-                .accessibilityLabel("Decrease text size")
-            Button { setZoom(CGFloat(fontSize) + 1) } label: { Image(systemName: "textformat.size.larger") }
-                .accessibilityLabel("Increase text size")
+            if !compactBar {
+                Button { setZoom(CGFloat(fontSize) - 1) } label: { Image(systemName: "textformat.size.smaller") }
+                    .accessibilityLabel("Decrease text size")
+                Button { setZoom(CGFloat(fontSize) + 1) } label: { Image(systemName: "textformat.size.larger") }
+                    .accessibilityLabel("Increase text size")
+            }
             settingsMenu
         }
         .labelStyle(.iconOnly)
@@ -400,6 +408,14 @@ struct LiveTerminalScreen: View {
             Button { showSnippets = true } label: { Label("Run a snippet…", systemImage: "text.badge.plus") }
             Button { showHistory = true } label: { Label("Command history…", systemImage: "clock.arrow.circlepath") }
             Button { showHelp = true } label: { Label("Terminal Help…", systemImage: "questionmark.circle") }
+            if compactBar {
+                ControlGroup {
+                    Button { setZoom(CGFloat(fontSize) - 1) } label: { Label("Smaller", systemImage: "textformat.size.smaller") }
+                    Button { setZoom(CGFloat(fontSize) + 1) } label: { Label("Larger", systemImage: "textformat.size.larger") }
+                } label: {
+                    Text("Text Size")
+                }
+            }
             Toggle(isOn: $predictiveText) {
                 Label("Predictive text", systemImage: "textformat.abc")
             }
