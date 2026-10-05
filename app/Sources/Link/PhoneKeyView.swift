@@ -30,6 +30,8 @@ struct PhoneKeyView: View {
             }
             .onChange(of: enabled) { _, _ in server.refresh() }
 
+            PhoneInboxSettings()
+
             Section("Paired Computers") {
                 if store.paired.isEmpty {
                     Text("None yet.").foregroundStyle(.secondary)

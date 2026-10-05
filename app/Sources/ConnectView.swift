@@ -116,7 +116,7 @@ struct ConnectView: View {
     @ViewBuilder private var paneLayout: some View {
         if hSize == .regular {
             HStack(spacing: 0) {
-                Form { activeSection; handoffSection; workspacesSection; savedSections }
+                Form { PhoneInboxSection(); activeSection; handoffSection; workspacesSection; savedSections }
                     .frame(maxWidth: Layout.sidebarWidth)
                 Divider()
                 Form {
@@ -126,7 +126,7 @@ struct ConnectView: View {
             }
         } else {
             Form {
-                activeSection; handoffSection; workspacesSection; savedSections; serverSection; keySection
+                PhoneInboxSection(); activeSection; handoffSection; workspacesSection; savedSections; serverSection; keySection
                 passwordSection; actionsSection; importSection; messagesSection
             }
         }

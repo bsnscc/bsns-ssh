@@ -64,6 +64,9 @@ targets:
         # Advertised when "Phone as a Key" is on, so a paired computer can find this phone.
         NSBonjourServices:
           - _bsns-key._tcp
+        # Woken by the push that says a question or notice has arrived.
+        UIBackgroundModes:
+          - remote-notification
         # bsns-ssh://open?host=…&tmux=… and bsns-ssh://workspace?name=…
         CFBundleURLTypes:
           - CFBundleURLName: cc.bsns.ssh.link
@@ -107,3 +110,10 @@ targets:
         # for the platform-passkey provider; harmless for external security keys.
         com.apple.developer.associated-domains:
           - webcredentials:tools.bsns.cc
+        # Questions and notices from paired computers arrive through the user's
+        # private iCloud database; Apple's push is what wakes the phone for them.
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.cc.bsns.ssh
+        com.apple.developer.icloud-services:
+          - CloudKit
+        aps-environment: development

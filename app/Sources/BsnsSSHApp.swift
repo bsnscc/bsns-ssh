@@ -11,6 +11,7 @@ struct BsnsSSHApp: App {
     @State private var snippets = SnippetStore()
     @State private var sessionRestore = SessionRestoreStore()
     @State private var handoff = SessionHandoffStore()
+    @UIApplicationDelegateAdaptor(PhoneAppDelegate.self) private var appDelegate
 
     init() {
         SettingsKey.registerDefaults()

@@ -41,6 +41,7 @@ struct RootView: View {
             let context = AppContext.shared
             context.store = store; context.hosts = hosts; context.knownHosts = knownHosts; context.sessions = sessions
             PhoneKeyServer.shared.configure(agent: store.agent)
+            PhoneInbox.shared.resume()
             await maybeDevAutoConnect()
         }
         // Auto-sync: pull + merge the user's folder on launch; push when backgrounded.
@@ -67,6 +68,7 @@ struct RootView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
+                Task { await PhoneInbox.shared.refresh() }
                 // Picking the phone up is when a session left open elsewhere matters.
                 handoff.publish(sessionRestore.sessions, sync: sync)
                 Task { await handoff.refresh(sync: sync) }
