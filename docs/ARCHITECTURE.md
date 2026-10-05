@@ -97,6 +97,7 @@ device is not offered again, and a device that has published nothing for 30
 days drops out of the list. The model is in
 `Sources/BsnsSSHCore/SessionHandoff.swift`.
 
+
 Key backends share one interface (`KeyBackend`, `Sources/BsnsSSHCore/KeyBackend.swift`):
 
 - **`SecureEnclaveKey`** — non-extractable, biometric-gated, **ECDSA P-256**
