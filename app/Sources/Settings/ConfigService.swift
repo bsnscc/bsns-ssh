@@ -8,6 +8,8 @@ enum ConfigService {
                        snippets: SnippetStore, includeKeys: Bool, passphrase: String?) throws -> Data {
         var bundle = ConfigBundle(hosts: hosts.hosts, knownHosts: knownHosts.knownHosts,
                                   settings: .capture(), snippets: snippets.snippets)
+        let workspaces = WorkspaceStore.shared.workspaces
+        if !workspaces.isEmpty { bundle.workspaces = workspaces }
         // Invariant enforced here (not only in the UI): private keys are NEVER
         // emitted into a plaintext bundle — only when a passphrase will encrypt it.
         let encrypting = !(passphrase ?? "").isEmpty
@@ -66,7 +68,11 @@ enum ConfigService {
     static func apply(_ bundle: ConfigBundle, selection: ImportSelection,
                       hosts: HostStore, knownHosts: KnownHostsStore, agent: AgentStore,
                       snippets: SnippetStore) async {
-        if selection.hosts { hosts.merge(bundle.hosts) }
+        if selection.hosts {
+            hosts.merge(bundle.hosts)
+            // Workspaces name saved hosts, so they travel with them.
+            WorkspaceStore.shared.merge(bundle.workspaces ?? [])
+        }
         if selection.settings { bundle.settings.apply() }
         if selection.knownHosts { knownHosts.merge(bundle.knownHosts) }
         if selection.keys {

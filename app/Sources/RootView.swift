@@ -10,6 +10,7 @@ struct RootView: View {
     @Environment(SnippetStore.self) private var snippets
     @Environment(SessionRestoreStore.self) private var sessionRestore
     @Environment(SessionHandoffStore.self) private var handoff
+    @State private var linkProblem: String?
     @Environment(\.scenePhase) private var scenePhase
     @State private var homeTab = ProcessInfo.processInfo.environment["BSNS_DEV_TAB"] ?? "connect"
     @State private var didRestore = false
@@ -49,6 +50,15 @@ struct RootView: View {
             handoff.publish(sessionRestore.sessions, sync: sync)
             await handoff.refresh(sync: sync)
         }
+        // A bsns-ssh:// link opens a saved host or a workspace.
+        .onOpenURL { url in
+            linkProblem = SessionOpener.follow(url, hosts: hosts, sessions: sessions, store: store, knownHosts: knownHosts)
+        }
+        .alert("Couldn't open that link", isPresented: Binding(get: { linkProblem != nil }, set: { if !$0 { linkProblem = nil } })) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(linkProblem ?? "")
+        }
         .onChange(of: sessionRestore.sessions) { _, open in
             handoff.publish(open, sync: sync)
         }
@@ -82,7 +92,7 @@ struct RootView: View {
             let spec = TerminalSession.Spec(host: r.host, port: r.port, user: r.user,
                                             agent: store.agent, knownHosts: knownHosts.knownHosts,
                                             useMosh: r.useMosh, keyBlob: r.keyBlob,
-                                            tmuxSession: r.tmuxSession)
+                                            tmuxSession: r.tmuxSession, tmuxDirectory: r.tmuxDirectory)
             let s = TerminalSession(id: r.id, spec: spec, title: r.title)
             s.restorable = r
             sessions.add(s)
@@ -164,6 +174,20 @@ struct RootView: View {
             client.disconnect()
             return
         }
+        // BSNS_DEV_HOLD_KEY=1: just hold BSNS_DEV_KEY in the agent, for a run
+        // that is then driven from outside (a link).
+        if env["BSNS_DEV_HOLD_KEY"] == "1", let material = env["BSNS_DEV_KEY"].flatMap({ Data(base64Encoded: $0) }),
+           let key = try? FileKey.from(algorithm: .ed25519, privateKeyMaterial: material) {
+            await store.agent.add(key)
+            print("dev hold: key ready")
+            // BSNS_DEV_FOLLOW_URL: follow this link as if it had been opened
+            // (the system's own "Open in…?" confirmation can't be scripted).
+            if let url = env["BSNS_DEV_FOLLOW_URL"].flatMap(URL.init(string:)) {
+                let problem = SessionOpener.follow(url, hosts: hosts, sessions: sessions, store: store, knownHosts: knownHosts)
+                print("dev follow: \(problem ?? "opened")")
+            }
+            return
+        }
         guard env["BSNS_DEV_AUTOCONNECT"] == "1",
               let keyB64 = env["BSNS_DEV_KEY"],
               let material = Data(base64Encoded: keyB64),
@@ -173,6 +197,26 @@ struct RootView: View {
         else { return }
         let port = UInt16(env["BSNS_DEV_PORT"] ?? "22") ?? 22
         await store.agent.add(key)
+        // BSNS_DEV_SAVE_HOST=1: instead of connecting, save BSNS_DEV_HOST (trusting
+        // its host key) and, with BSNS_DEV_WORKSPACE="name|path", a workspace on
+        // it — the state a link or a shortcut needs. BSNS_DEV_SAVE_MOSH=1 saves
+        // the host as a mosh host.
+        if env["BSNS_DEV_SAVE_HOST"] == "1" {
+            let probe = SSHShell()
+            do {
+                try await probe.connect(host: host, port: port, user: user, agent: store.agent, knownHosts: KnownHosts())
+            } catch SSHShellError.unknownHostKey(let hostKey) {
+                knownHosts.trust(host: host, port: port, key: hostKey)
+            } catch {}
+            probe.disconnect()
+            hosts.add(SavedHost(label: "", host: host, port: Int(port), user: user, useMosh: env["BSNS_DEV_SAVE_MOSH"] == "1"))
+            for existing in WorkspaceStore.shared.workspaces { WorkspaceStore.shared.remove(existing.id) }
+            if let fields = env["BSNS_DEV_WORKSPACE"]?.split(separator: "|"), fields.count == 2 {
+                WorkspaceStore.shared.upsert(Workspace(name: String(fields[0]), path: String(fields[1]), hosts: [host]))
+            }
+            print("dev save: host saved, workspaces=\(WorkspaceStore.shared.workspaces.count)")
+            return
+        }
         // BSNS_DEV_ROUTES: other addresses for BSNS_DEV_HOST, as typed in the form.
         if let routes = env["BSNS_DEV_ROUTES"] {
             RouteBook.shared.set(HostRoutes.parse(routes, excluding: host), for: host)

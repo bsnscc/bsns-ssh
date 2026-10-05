@@ -77,6 +77,12 @@ enum MacDevHooks {
                 print("dev snapshot: saved \(Int(frameView.bounds.width))x\(Int(frameView.bounds.height))")
             }
         }
+        // BSNS_DEV_WORKSPACE="name|path|status command": add that workspace (the
+        // test removes workspaces.json afterwards).
+        if let fields = env["BSNS_DEV_WORKSPACE"]?.split(separator: "|", omittingEmptySubsequences: false), fields.count >= 2 {
+            WorkspaceStore.shared.upsert(Workspace(name: String(fields[0]), path: String(fields[1]),
+                                                   statusCommand: fields.count > 2 ? String(fields[2]) : nil))
+        }
         // BSNS_DEV_LOCAL=1: open a local shell, type BSNS_DEV_RUN into it, and
         // report whether its tab is still there a few seconds later.
         if env["BSNS_DEV_LOCAL"] == "1" {

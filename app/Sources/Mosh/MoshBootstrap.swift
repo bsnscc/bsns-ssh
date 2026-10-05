@@ -64,7 +64,8 @@ enum MoshBootstrap {
         let command = MoshServerCommand.build(tmux: spec.tmuxSession,
                                               idleTimeoutSeconds: idleTimeoutSeconds,
                                               reapPIDs: reap,
-                                              tmuxClipboard: tmuxClipboardSetup)
+                                              tmuxClipboard: tmuxClipboardSetup,
+                                              tmuxDirectory: spec.tmuxDirectory)
         let output: String
         do {
             output = try await SSHShell.execCapturing(

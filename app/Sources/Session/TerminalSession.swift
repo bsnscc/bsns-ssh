@@ -31,6 +31,9 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
         /// Optional tmux session name (mosh): the bootstrap launches
         /// `tmux new-session -A -s <name>` so reconnects re-attach the same session.
         var tmuxSession: String? = nil
+        /// Where that tmux session starts if connecting creates it (a
+        /// workspace's project directory). An existing session is left as is.
+        var tmuxDirectory: String? = nil
         // Note: no password is retained. Reconnect uses the agent (keys); a
         // password-only session must be re-established from the Connect screen.
     }
@@ -599,7 +602,8 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// the connection as it would under mosh; if tmux is missing the shell stays.
     func attachTmuxIfConfigured(_ shell: SSHShell) {
         guard !spec.useMosh, let name = MoshServerCommand.sanitizedTmuxName(spec.tmuxSession) else { return }
-        shell.write(Array("command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s \(name)\n".utf8)[...])
+        let attach = MoshServerCommand.attachCommand(name, directory: spec.tmuxDirectory)
+        shell.write(Array("command -v tmux >/dev/null 2>&1 && exec \(attach)\n".utf8)[...])
     }
 
     /// The registry key for the host this session's mosh-servers run on.

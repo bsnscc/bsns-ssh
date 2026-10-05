@@ -54,11 +54,12 @@ public enum MoshServerCommand {
     public static func build(tmux: String?,
                              idleTimeoutSeconds: Int = defaultIdleTimeoutSeconds,
                              reapPIDs: [Int32] = [],
-                             tmuxClipboard: Bool = false) -> String {
+                             tmuxClipboard: Bool = false,
+                             tmuxDirectory: String? = nil) -> String {
         var env = "env"
         if idleTimeoutSeconds > 0 { env += " MOSH_SERVER_NETWORK_TMOUT=\(idleTimeoutSeconds)" }
         env += " MOSH_SERVER_SIGNAL_TMOUT=\(signalTimeoutSeconds)"
-        return reapPrefix(pids: reapPIDs) + env + " " + base + tmuxSuffix(tmux, clipboard: tmuxClipboard)
+        return reapPrefix(pids: reapPIDs) + env + " " + base + tmuxSuffix(tmux, clipboard: tmuxClipboard, directory: tmuxDirectory)
     }
 
     /// `for`/`case` are POSIX-shell syntax and the remote login shell might be
@@ -91,14 +92,25 @@ public enum MoshServerCommand {
     /// read when a client's terminal is opened), hence `start-server` and the
     /// `set` in the same command as `new-session`; and it is skipped when an
     /// entry is already there, so reconnecting doesn't pile up duplicates.
-    public static func tmuxSuffix(_ tmux: String?, clipboard: Bool = false) -> String {
+    ///
+    /// `directory` is where the session starts if this creates it (an existing
+    /// session is attached as it is); a path that can't be quoted safely is
+    /// left out rather than passed.
+    public static func tmuxSuffix(_ tmux: String?, clipboard: Bool = false, directory: String? = nil) -> String {
         guard let name = sanitizedTmuxName(tmux) else { return "" }
-        let attach = "tmux new-session -A -s \(name)"
+        let attach = attachCommand(name, directory: directory)
         guard clipboard else { return " -- sh -c '\(attach) || exec ${SHELL:-/bin/sh} -l'" }
         return " -- sh -c 'if tmux show -s terminal-overrides 2>/dev/null | grep -q \"\(clipboardOverrideMarker)\"; "
             + "then \(attach); "
             + "else tmux start-server \\; set -as terminal-overrides \"\(clipboardOverride)\" \\; "
-            + "new-session -A -s \(name); fi || exec ${SHELL:-/bin/sh} -l'"
+            + "\(attach.dropFirst("tmux ".count)); fi || exec ${SHELL:-/bin/sh} -l'"
+    }
+
+    /// `tmux new-session -A -s <name>`, starting in `directory` when given.
+    /// `name` must already be sanitized.
+    public static func attachCommand(_ name: String, directory: String? = nil) -> String {
+        let start = directory.flatMap(WorkspaceCommand.quoted).map { " -c \($0)" } ?? ""
+        return "tmux new-session -A -s \(name)\(start)"
     }
 
     /// The `terminal-overrides` entry, as it must appear inside double quotes in

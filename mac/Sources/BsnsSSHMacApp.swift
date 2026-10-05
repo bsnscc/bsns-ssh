@@ -18,6 +18,7 @@ struct BsnsSSHMacApp: App {
     @State private var snippets = SnippetStore()
     @State private var sessionRestore = SessionRestoreStore()
     @State private var didRestore = false
+    @State private var linkProblem: String?
 
     init() {
         SettingsKey.registerDefaults()
@@ -46,6 +47,17 @@ struct BsnsSSHMacApp: App {
                 .environment(machines)
                 .tint(Brand.accent)
                 .frame(minWidth: 760, minHeight: 460)
+                // A bsns-ssh:// link opens a saved host or a workspace in this
+                // window rather than a new one.
+                .onOpenURL { url in
+                    linkProblem = SessionOpener.follow(url, hosts: hosts, sessions: sessions, store: store, knownHosts: knownHosts)
+                }
+                .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+                .alert("Couldn't open that link", isPresented: Binding(get: { linkProblem != nil }, set: { if !$0 { linkProblem = nil } })) {
+                    Button("OK", role: .cancel) { }
+                } message: {
+                    Text(linkProblem ?? "")
+                }
                 .environment(sync)
                 .task {
                     // Every use of a key is recorded, whoever asked for it.
@@ -153,7 +165,7 @@ struct BsnsSSHMacApp: App {
             let spec = TerminalSession.Spec(host: saved.host, port: saved.port, user: saved.user,
                                             agent: store.agent, knownHosts: knownHosts.knownHosts,
                                             useMosh: saved.useMosh, keyBlob: saved.keyBlob,
-                                            tmuxSession: saved.tmuxSession)
+                                            tmuxSession: saved.tmuxSession, tmuxDirectory: saved.tmuxDirectory)
             let session = TerminalSession(id: saved.id, spec: spec, title: saved.title)
             session.restorable = saved
             sessions.add(session)

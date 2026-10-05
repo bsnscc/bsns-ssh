@@ -13,7 +13,7 @@ struct MacRootView: View {
     @Environment(SyncStore.self) private var sync
     @Environment(SessionHandoffStore.self) private var handoff
 
-    private enum Place: Hashable { case connect, keys, machines }
+    private enum Place: Hashable { case connect, keys, machines, workspaces }
     @Environment(MachineBoard.self) private var machines
     @State private var place: Place = MacRootView.initialPlace
 
@@ -24,6 +24,7 @@ struct MacRootView: View {
         switch ProcessInfo.processInfo.environment["BSNS_DEV_PLACE"] {
         case "keys": return .keys
         case "machines": return .machines
+        case "workspaces": return .workspaces
         default: break
         }
         #endif
@@ -45,6 +46,10 @@ struct MacRootView: View {
                     row(machines.waitingCount == 0 ? "Machines" : "Machines (\(machines.waitingCount) waiting)",
                         systemImage: "square.stack.3d.up", selected: sessions.activeID == nil && place == .machines) {
                         place = .machines
+                        sessions.goHome()
+                    }
+                    row("Workspaces", systemImage: "folder", selected: sessions.activeID == nil && place == .workspaces) {
+                        place = .workspaces
                         sessions.goHome()
                     }
                     row("New Local Shell", systemImage: "terminal", selected: false) {
@@ -71,6 +76,8 @@ struct MacRootView: View {
                 MacKeysView()
             } else if place == .machines {
                 MacMachinesView()
+            } else if place == .workspaces {
+                MacWorkspacesView()
             } else {
                 MacConnectView()
             }

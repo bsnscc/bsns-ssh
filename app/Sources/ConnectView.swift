@@ -29,6 +29,7 @@ struct ConnectView: View {
     /// Other addresses for the same machine, as typed (see `SavedHost.routes`).
     @State private var routesText = ""
     @State private var presence = HostPresence()
+    @State private var workspaceStore = WorkspaceStore.shared
     @State private var password = ""
     /// Fingerprint of the key to authenticate with — auth offers only this one.
     @State private var selectedKeyFP = ""
@@ -115,7 +116,7 @@ struct ConnectView: View {
     @ViewBuilder private var paneLayout: some View {
         if hSize == .regular {
             HStack(spacing: 0) {
-                Form { activeSection; handoffSection; savedSections }
+                Form { activeSection; handoffSection; workspacesSection; savedSections }
                     .frame(maxWidth: Layout.sidebarWidth)
                 Divider()
                 Form {
@@ -125,7 +126,7 @@ struct ConnectView: View {
             }
         } else {
             Form {
-                activeSection; handoffSection; savedSections; serverSection; keySection
+                activeSection; handoffSection; workspacesSection; savedSections; serverSection; keySection
                 passwordSection; actionsSection; importSection; messagesSection
             }
         }
@@ -149,6 +150,45 @@ struct ConnectView: View {
                         surfaces.drop(s.id); sessions.close(s)
                     }
                 }
+            }
+        }
+    }
+
+    /// The user's projects: tap one and choose the machine to open it on.
+    @ViewBuilder private var workspacesSection: some View {
+        if !workspaceStore.workspaces.isEmpty {
+            Section {
+                ForEach(workspaceStore.workspaces) { workspace in
+                    let machines = workspace.hosts.compactMap { SessionOpener.savedHost(named: $0, in: hostStore.hosts) }
+                    Menu {
+                        ForEach(machines) { machine in
+                            Button("Open on \(machine.label.isEmpty ? machine.host : machine.label)") {
+                                SessionOpener.open(workspace, on: machine, sessions: sessions, store: store, knownHosts: knownHostsStore)
+                            }
+                        }
+                        if machines.isEmpty { Text("None of its hosts are saved on this device") }
+                    } label: {
+                        HStack {
+                            Image(systemName: "folder").foregroundStyle(Brand.accent)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(workspace.name).foregroundStyle(Color.primary)
+                                Text("\(workspace.path) · \(machines.count) machine\(machines.count == 1 ? "" : "s")")
+                                    .font(.caption).foregroundStyle(Color.secondary)
+                                    .lineLimit(1).truncationMode(.head)
+                            }
+                            .multilineTextAlignment(.leading)
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down").font(.caption).foregroundStyle(Color.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: {
+                Text("Workspaces")
+            } footer: {
+                Text("Opens the workspace's tmux session on the machine you pick, so the same work is under the same name everywhere. Workspaces are created on a Mac and arrive here by sync.")
             }
         }
     }

@@ -18,6 +18,7 @@ struct RestorableSession: Codable, Identifiable, Equatable {
     var useMosh: Bool
     var keyBlob: Data?
     var tmuxSession: String?
+    var tmuxDirectory: String?
 }
 
 /// Persists the set of open sessions to a JSON file so they can be reconnected on

@@ -14,6 +14,7 @@ struct ConfigBundle: Codable {
     var keys: [ExportedKey]?
     var securityKeys: [ExportedSecurityKey]?
     var snippets: [Snippet]?
+    var workspaces: [Workspace]?
 }
 
 struct ExportedKey: Codable {

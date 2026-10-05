@@ -121,10 +121,7 @@ struct MacMachinesView: View {
 
 @MainActor
 enum MachineActions {
-    static func key(for host: SavedHost, store: AgentStore) -> Data? {
-        guard let wanted = host.keyID else { return nil }
-        return store.identities.first { SSHKeyFormat.fingerprint(ofPublicKeyBlob: $0.blob) == wanted }?.blob
-    }
+    static func key(for host: SavedHost, store: AgentStore) -> Data? { SessionOpener.key(for: host, store: store) }
 
     static func canOpen(_ window: TmuxOverview.Window) -> Bool {
         MoshBootstrap.sanitizedTmuxName(window.session) == window.session
@@ -144,17 +141,8 @@ enum MachineActions {
                 return
             }
             if let host = machine.host {
-                let port = UInt16(clamping: host.port)
-                let useMosh = host.useMosh ?? false
-                let spec = TerminalSession.Spec(host: host.host, port: port, user: host.user, agent: store.agent,
-                                                knownHosts: knownHosts.knownHosts, useMosh: useMosh,
-                                                keyBlob: key(for: host, store: store), tmuxSession: window.session)
-                let session = TerminalSession(spec: spec, title: title)
-                session.restorable = RestorableSession(id: session.id, title: session.title, host: host.host, port: port,
-                                                       user: host.user, useMosh: useMosh, keyBlob: spec.keyBlob,
-                                                       tmuxSession: window.session)
-                sessions.add(session)
-                session.start()
+                SessionOpener.open(host, tmux: window.session, title: title,
+                                   sessions: sessions, store: store, knownHosts: knownHosts)
             } else {
                 // This Mac: the tab is tmux itself, not a shell with tmux typed
                 // into it. The name was checked against the shell-safe set above.

@@ -158,6 +158,20 @@ final class MachineBoard {
         }
     }
 
+    /// Run one of the `sh -c '…'` commands on a machine that is being watched
+    /// (or on this Mac), with a deadline — a command that touches a volume
+    /// behind a consent prompt nobody can see must not hang the view. Nil when
+    /// the machine isn't connected or the command didn't finish.
+    func run(_ command: String, on id: String, timeout: Double = 8) async -> String? {
+        if let channel = channels[id] {
+            return try? await withLinkTimeout(timeout) { try await channel.run(command).stdoutString }
+        }
+        #if os(macOS)
+        if id == Self.localID { return try? await Self.runLocally(command) }
+        #endif
+        return nil
+    }
+
     // MARK: internals
 
     private func poll(_ id: String, fetch: @escaping @Sendable () async throws -> String) async {

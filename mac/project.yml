@@ -49,6 +49,10 @@ targets:
         group: Shared/Session
       - path: ../app/Sources/Session/MachineBoard.swift
         group: Shared/Session
+      - path: ../app/Sources/Session/SessionOpener.swift
+        group: Shared/Session
+      - path: ../app/Sources/Session/WorkspaceStore.swift
+        group: Shared/Session
       - path: ../app/Sources/Transport
         group: Shared
       - path: ../app/Sources/Mosh
@@ -92,6 +96,11 @@ targets:
         NSLocalNetworkUsageDescription: "Connect to SSH servers on your local network, and use the keys on an iPhone you have paired."
         NSBonjourServices:
           - _bsns-key._tcp
+        # bsns-ssh://open?host=…&tmux=… and bsns-ssh://workspace?name=…
+        CFBundleURLTypes:
+          - CFBundleURLName: cc.bsns.ssh.link
+            CFBundleURLSchemes:
+              - bsns-ssh
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:
