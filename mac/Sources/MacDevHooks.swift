@@ -16,14 +16,16 @@ enum MacDevHooks {
     static func run(store: AgentStore, sessions: SessionStore, agentSocket: AgentSocketController,
                     phoneKeys: PhoneKeyClient, sync: SyncStore, handoff: SessionHandoffStore) async {
         let env = ProcessInfo.processInfo.environment
-        // BSNS_DEV_HANDOFF=<folder> with BSNS_DEV_HANDOFF_PHRASE: use that folder
+        // BSNS_DEV_HANDOFF=<folder>, optionally with BSNS_DEV_HANDOFF_PHRASE: use that folder
         // for sync, publish the session named by BSNS_DEV_HANDOFF_PUBLISH
         // ("host|user|tmux", tmux optional) as open here, and report what the
         // other devices in the folder offer. Run with `-handoff.deviceID <id>`
         // to stand in for a second device.
-        if let folder = env["BSNS_DEV_HANDOFF"], let phrase = env["BSNS_DEV_HANDOFF_PHRASE"] {
+        if let folder = env["BSNS_DEV_HANDOFF"] {
             sync.setFolder(URL(fileURLWithPath: folder))
-            sync.savePassphrase(phrase)
+            // Without a phrase, the one already stored is used.
+            if let phrase = env["BSNS_DEV_HANDOFF_PHRASE"] { sync.savePassphrase(phrase) }
+            print("dev handoff: stored phrase present=\(sync.hasPassphrase)")
             var open: [RestorableSession] = []
             if let fields = env["BSNS_DEV_HANDOFF_PUBLISH"]?.split(separator: "|", omittingEmptySubsequences: false), fields.count >= 2 {
                 open.append(RestorableSession(id: UUID(), title: "\(fields[1])@\(fields[0])", host: String(fields[0]), port: 22,

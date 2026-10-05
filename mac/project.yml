@@ -98,7 +98,12 @@ targets:
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"
-        # Signed to run locally for now. A distributable build needs the team
-        # identity, the hardened runtime and (for the App Store) the sandbox.
-        CODE_SIGN_STYLE: Manual
-        CODE_SIGN_IDENTITY: "-"
+        # Signed with the team's development identity, so the signature — and
+        # with it the keychain items and privacy grants tied to it — stays the
+        # same from one build to the next. Distribution outside the team still
+        # needs a Developer ID build and notarization; the App Store, the sandbox.
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 4L394FY4WC
+        CODE_SIGN_IDENTITY: "Apple Development"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: BsnsSSHMac.entitlements

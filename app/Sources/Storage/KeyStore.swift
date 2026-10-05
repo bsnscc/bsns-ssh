@@ -89,7 +89,7 @@ enum KeyStore {
             kSecMatchLimit as String: kSecMatchLimitAll,
         ]
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+        guard SecItemCopyMatching(Keychain.scoped(query) as CFDictionary, &result) == errSecSuccess,
               let items = result as? [[String: Any]] else { return [] }
         return items.compactMap { item in
             guard let data = item[kSecValueData as String] as? Data,
@@ -119,11 +119,11 @@ enum KeyStore {
             kSecValueData as String: payload,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
-        let updateStatus = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
+        let updateStatus = SecItemUpdate(Keychain.scoped(query) as CFDictionary, attrs as CFDictionary)
         if updateStatus == errSecSuccess { return }
         if updateStatus != errSecItemNotFound { throw StoreError.keychain(updateStatus) }
         // Nothing to update — add it. No delete-then-add: a record is never lost.
-        let addStatus = SecItemAdd(query.merging(attrs) { _, new in new } as CFDictionary, nil)
+        let addStatus = SecItemAdd(Keychain.scoped(query.merging(attrs) { _, new in new }) as CFDictionary, nil)
         if addStatus != errSecSuccess { throw StoreError.keychain(addStatus) }
     }
 
@@ -137,7 +137,7 @@ enum KeyStore {
             kSecMatchLimit as String: kSecMatchLimitAll,
         ]
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+        guard SecItemCopyMatching(Keychain.scoped(query) as CFDictionary, &result) == errSecSuccess,
               let items = result as? [[String: Any]] else { return [] }
 
         return items.compactMap { item -> (any KeyBackend)? in
@@ -181,6 +181,6 @@ enum KeyStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: id.rawValue,
         ]
-        SecItemDelete(query as CFDictionary)
+        SecItemDelete(Keychain.scoped(query) as CFDictionary)
     }
 }

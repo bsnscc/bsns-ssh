@@ -97,7 +97,7 @@ final class LinkStore {
             kSecReturnData as String: true,
         ]
         var result: AnyObject?
-        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data,
+        if SecItemCopyMatching(Keychain.scoped(query) as CFDictionary, &result) == errSecSuccess, let data = result as? Data,
            let identity = try? LinkIdentity(privateKeyData: data) {
             return identity
         }
@@ -112,7 +112,7 @@ final class LinkStore {
             kSecValueData as String: identity.privateKeyData,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
-        let status = SecItemAdd(attributes as CFDictionary, nil)
+        let status = SecItemAdd(Keychain.scoped(attributes) as CFDictionary, nil)
         if status != errSecSuccess { DiagLog.log("link", "identity save failed status=\(status)") }
         return identity
     }

@@ -150,12 +150,12 @@ final class SyncStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: "passphrase",
         ]
-        SecItemDelete(query as CFDictionary)
+        SecItemDelete(Keychain.scoped(query) as CFDictionary)
         guard !passphrase.isEmpty else { return }
         var add = query
         add[kSecValueData as String] = Data(passphrase.utf8)
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        SecItemAdd(add as CFDictionary, nil)
+        SecItemAdd(Keychain.scoped(add) as CFDictionary, nil)
     }
 
     func loadPassphrase() -> String? {
@@ -167,7 +167,7 @@ final class SyncStore {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess,
+        guard SecItemCopyMatching(Keychain.scoped(query) as CFDictionary, &out) == errSecSuccess,
               let data = out as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
