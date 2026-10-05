@@ -116,6 +116,19 @@ enum MacDevHooks {
         // hosts, write its authorized_keys line to BSNS_DEV_PEERKEY_OUT, serve
         // the agent socket (hardware and automation keys only) knowing the host
         // key of BSNS_DEV_HOST:_PORT, wait, then delete the key again.
+        // BSNS_DEV_LEGACY_PLANT=1: put a sync passphrase in the login keychain,
+        // as an older build would have, to exercise the move on the next launch.
+        if env["BSNS_DEV_LEGACY_PLANT"] == "1" {
+            let status = SecItemAdd([
+                kSecClass as String: kSecClassGenericPassword,
+                kSecUseDataProtectionKeychain as String: false,
+                kSecAttrService as String: "cc.bsns.ssh.sync",
+                kSecAttrAccount as String: "passphrase",
+                kSecValueData as String: Data("legacy-test-value".utf8),
+            ] as CFDictionary, nil)
+            print("dev legacy: planted status=\(status)")
+            return
+        }
         // BSNS_DEV_PEERKEY_PURGE=1: delete every automation key (test cleanup).
         if env["BSNS_DEV_PEERKEY_PURGE"] == "1" {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -141,7 +154,8 @@ enum MacDevHooks {
                 probe.disconnect()
                 print("dev peer key: test server known=\(!known.allEntries.isEmpty)")
                 agentSocket.pinned = true
-                agentSocket.start(enabled: true, hardwareOnly: true, agent: store.agent, knownHosts: known)
+                agentSocket.start(enabled: true, hardwareOnly: true, automationKeys: env["BSNS_DEV_PEERKEY_OFFER"] != "0",
+                                  agent: store.agent, knownHosts: known)
                 print("dev peer key: ready, limited to \(store.peerHosts(of: identity) ?? []), socket \(agentSocket.state)")
                 try? await Task.sleep(nanoseconds: 14_000_000_000)
                 await store.deleteKey(identity)
@@ -159,8 +173,16 @@ enum MacDevHooks {
                 await store.agent.add(key)
             }
             agentSocket.pinned = true
-            agentSocket.start(enabled: true, hardwareOnly: mode != "all", agent: store.agent, knownHosts: KnownHosts())
+            agentSocket.start(enabled: true, hardwareOnly: mode != "all", automationKeys: false,
+                              agent: store.agent, knownHosts: KnownHosts())
             print("dev agent socket: \(agentSocket.state)")
+            // BSNS_DEV_AGENT_SOCKET_STOP_AFTER=<seconds>: turn the agent off again,
+            // to check that programs already connected lose their access.
+            if let after = env["BSNS_DEV_AGENT_SOCKET_STOP_AFTER"].flatMap(Double.init) {
+                try? await Task.sleep(nanoseconds: UInt64(after * 1_000_000_000))
+                agentSocket.stop()
+                print("dev agent socket: stopped")
+            }
         }
         if env["BSNS_DEV_ENCLAVE"] == "1" {
             do {

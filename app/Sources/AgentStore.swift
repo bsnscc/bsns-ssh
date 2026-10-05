@@ -22,6 +22,9 @@ final class AgentStore {
 
     init() {
         Task {
+            #if os(macOS)
+            await Keychain.migrateIfNeeded()
+            #endif
             for key in KeyStore.loadAll() {
                 await agent.add(key)
                 if key.requiresUserPresence { hardwareKeyIDs.insert(key.id.rawValue) }

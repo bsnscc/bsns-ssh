@@ -22,6 +22,9 @@ struct BsnsSSHMacApp: App {
     init() {
         SettingsKey.registerDefaults()
         AgentSocketController.registerDefaults()
+        // A peer closing a socket mid-write is an error to handle, not a
+        // signal that ends the process.
+        signal(SIGPIPE, SIG_IGN)
         DiagLog.refreshEnabled()
         DiagLog.markLaunch()
         // Any mosh-server started by a previous run is orphaned (its client's

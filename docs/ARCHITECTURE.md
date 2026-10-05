@@ -124,7 +124,8 @@ hosts it may sign in to, and refuses everything else:
   server. A destination that is merely announced to the agent is not enough.
 - Anything that isn't a login — signing arbitrary data — is refused.
 
-Refusals are recorded in the key activity log alongside uses. What the scope
+Offering automation keys to other programs is a setting of its own, off by
+default. Refusals are recorded in the key activity log alongside uses. What the scope
 does not protect against: a program running as the user on the unlocked Mac can
 use the key to reach the listed hosts, exactly as it could use a key file — the
 difference is that the key cannot be copied away, cannot be used for any other

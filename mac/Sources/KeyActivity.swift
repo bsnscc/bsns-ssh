@@ -51,6 +51,9 @@ final class KeyActivityLog {
 final class AgentSocketController {
     static let enabledKey = "agent.socketEnabled"
     static let hardwareOnlyKey = "agent.socketHardwareOnly"
+    /// Automation keys sign without asking, so offering them to other programs
+    /// is its own decision — never a side effect of another setting.
+    static let automationKey = "agent.socketAutomationKeys"
 
     enum State: Equatable { case off, listening, failed(String) }
     private(set) var state = State.off
@@ -73,7 +76,7 @@ final class AgentSocketController {
     static func registerDefaults() {
         // Off until asked for; and when on, only keys that ask every time are
         // offered unless the user widens it.
-        UserDefaults.standard.register(defaults: [enabledKey: false, hardwareOnlyKey: true])
+        UserDefaults.standard.register(defaults: [enabledKey: false, hardwareOnlyKey: true, automationKey: false])
     }
 
     /// Apply the current settings: (re)start or stop the socket.
@@ -81,10 +84,11 @@ final class AgentSocketController {
         guard !pinned else { return }
         let defaults = UserDefaults.standard
         start(enabled: defaults.bool(forKey: Self.enabledKey),
-              hardwareOnly: defaults.bool(forKey: Self.hardwareOnlyKey), agent: agent, knownHosts: knownHosts)
+              hardwareOnly: defaults.bool(forKey: Self.hardwareOnlyKey),
+              automationKeys: defaults.bool(forKey: Self.automationKey), agent: agent, knownHosts: knownHosts)
     }
 
-    func start(enabled: Bool, hardwareOnly: Bool, agent: Agent, knownHosts: KnownHosts) {
+    func start(enabled: Bool, hardwareOnly: Bool, automationKeys: Bool, agent: Agent, knownHosts: KnownHosts) {
         server?.stop()
         server = nil
         guard enabled else { state = .off; return }
@@ -93,10 +97,14 @@ final class AgentSocketController {
         var names: [Data: String] = [:]
         for (identifier, key) in knownHosts.allEntries { names[key.blob] = identifier }
         let lookup = names
-        // Keys that ask every time, and automation keys — which refuse anything
-        // but a login provably bound to one of their hosts.
-        let presenceOnly: @Sendable (any KeyBackend) -> Bool = { $0.requiresUserPresence || $0 is ScopedKey }
-        let server = AgentSocketServer(agent: agent, exposing: hardwareOnly ? presenceOnly : nil,
+        // An automation key is offered only when its own switch is on,
+        // whatever the other setting says; everything else follows
+        // "only keys that ask every time".
+        let offered: @Sendable (any KeyBackend) -> Bool = { key in
+            if key is ScopedKey { return automationKeys }
+            return hardwareOnly ? key.requiresUserPresence : true
+        }
+        let server = AgentSocketServer(agent: agent, exposing: offered,
                                        hostName: { blob in lookup[blob] })
         do {
             try server.start()

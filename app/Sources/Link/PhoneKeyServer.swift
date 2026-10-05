@@ -34,6 +34,9 @@ final class PhoneKeyServer {
     var acceptsPairing = false
 
     @ObservationIgnored private var listener: NWListener?
+    /// Connections being served. Turning the feature off ends them: a computer
+    /// connected while it was on doesn't keep its session afterwards.
+    @ObservationIgnored private var connections: [ObjectIdentifier: LinkConnection] = [:]
     @ObservationIgnored private var agent: Agent?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     /// Debug builds only: confirm pairings without asking, and offer every key.
@@ -98,13 +101,30 @@ final class PhoneKeyServer {
     private func stopListening() {
         listener?.cancel()
         listener = nil
+        for connection in connections.values { connection.cancel() }
+        connections = [:]
         if let pending = pendingPairing { pending.decide(false) }
+    }
+
+    /// Admit a connection — only while still listening.
+    private func admit(_ connection: LinkConnection) -> Bool {
+        guard listener != nil else { return false }
+        connections[ObjectIdentifier(connection)] = connection
+        return true
+    }
+
+    private func release(_ connection: LinkConnection) {
+        connections[ObjectIdentifier(connection)] = nil
     }
 
     // MARK: connections
 
     private nonisolated func serve(_ connection: LinkConnection) async {
-        defer { connection.cancel() }
+        guard await admit(connection) else { connection.cancel(); return }
+        defer {
+            connection.cancel()
+            Task { @MainActor in self.release(connection) }
+        }
         do {
             try await withLinkTimeout(10) { try await connection.start() }
             let first = try await withLinkTimeout(10) { try await connection.receive() }
@@ -168,6 +188,8 @@ final class PhoneKeyServer {
             // Nothing is acted on until a message from the computer opens —
             // that is what proves it holds the key it claimed.
             let frame = try await connection.receive()
+            // Unpaired since this session began: it ends here.
+            guard store.pairedName(forPublicKey: accepted.peerPublicKey) != nil else { return }
             let request = try LinkRequest(decoding: try accepted.session.open(frame))
             let asker = "\(request.requester ?? "A program") on \(computer)"
             // The host is the computer's word for it — shown, never relied on.

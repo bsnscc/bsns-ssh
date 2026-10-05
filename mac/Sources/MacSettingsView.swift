@@ -13,6 +13,7 @@ struct MacSettingsView: View {
     @State private var syncing = false
     @AppStorage(AgentSocketController.enabledKey) private var socketEnabled = false
     @AppStorage(AgentSocketController.hardwareOnlyKey) private var socketHardwareOnly = true
+    @AppStorage(AgentSocketController.automationKey) private var socketAutomationKeys = false
     @AppStorage(SettingsKey.theme) private var themeId = TerminalTheme.bsnsDark.id
     @AppStorage(SettingsKey.fontFamily) private var fontFamily = TerminalFont.families[0]
     @AppStorage(SettingsKey.fontSize) private var fontSize = 13.0
@@ -55,6 +56,9 @@ struct MacSettingsView: View {
                 Toggle("Serve keys to other programs", isOn: $socketEnabled)
                 Toggle("Only keys that ask every time", isOn: $socketHardwareOnly)
                     .disabled(!socketEnabled)
+                Toggle("Also offer automation keys", isOn: $socketAutomationKeys)
+                    .disabled(!socketEnabled)
+                    .help("Automation keys sign without asking, only for the hosts each one lists")
                 if socketEnabled {
                     switch agentSocket.state {
                     case .listening:
@@ -78,6 +82,7 @@ struct MacSettingsView: View {
             }
             .onChange(of: socketEnabled) { _, _ in applyAgentSocket() }
             .onChange(of: socketHardwareOnly) { _, _ in applyAgentSocket() }
+            .onChange(of: socketAutomationKeys) { _, _ in applyAgentSocket() }
 
             Section {
                 LabeledContent("Folder") {

@@ -34,6 +34,11 @@ final class AgentSocketServer: @unchecked Sendable {
     private let hostName: @Sendable (Data) -> String?
     private let lock = NSLock()
     private var listenFD: Int32 = -1
+    /// Accepted connections still being served. Stopping the server ends them
+    /// too: a program that connected while the agent was on must not keep its
+    /// access — or the key filter it connected under — after it is turned off
+    /// or restricted.
+    private var clients: Set<Int32> = []
 
     init(agent: Agent, exposing isExposed: (@Sendable (any KeyBackend) -> Bool)?,
          hostName: @escaping @Sendable (Data) -> String?) {
@@ -75,10 +80,27 @@ final class AgentSocketServer: @unchecked Sendable {
     }
 
     func stop() {
-        let fd: Int32 = lock.withLock { let fd = listenFD; listenFD = -1; return fd }
+        let (fd, open): (Int32, Set<Int32>) = lock.withLock {
+            let fd = listenFD
+            listenFD = -1
+            return (fd, clients)
+        }
+        // Each serving thread owns its descriptor and closes it; shutting the
+        // connection down here wakes that thread and makes any further read or
+        // write fail, including the answer to a request still awaiting approval.
+        for client in open { shutdown(client, SHUT_RDWR) }
         guard fd >= 0 else { return }
         close(fd)
         unlink(Self.socketURL.path)
+    }
+
+    /// Whether `client` is still one this server answers.
+    private func isLive(_ client: Int32) -> Bool {
+        lock.withLock { listenFD >= 0 && clients.contains(client) }
+    }
+
+    private func release(_ client: Int32) {
+        lock.withLock { _ = clients.remove(client) }
     }
 
     private func acceptLoop(_ fd: Int32) {
@@ -92,10 +114,24 @@ final class AgentSocketServer: @unchecked Sendable {
             // say so; this is the check that doesn't depend on them.
             var uid: uid_t = 0, gid: gid_t = 0
             guard getpeereid(client, &uid, &gid) == 0, uid == getuid() else { close(client); continue }
+            // A client that goes away while its request waits for approval must
+            // get a failed write, not a signal that takes the whole app down.
+            var on: Int32 = 1
+            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+            // Registered only while the server is still running: a connection
+            // that slipped in as it stopped is dropped.
+            let admitted: Bool = lock.withLock {
+                guard listenFD >= 0 else { return false }
+                clients.insert(client)
+                return true
+            }
+            guard admitted else { close(client); continue }
             let requester = Self.describePeer(client)
-            Thread.detachNewThread { [agent, isExposed, hostName] in
+            Thread.detachNewThread { [weak self, agent, isExposed, hostName] in
                 Self.serve(client, connection: AgentClientConnection(agent: agent, requester: requester,
-                                                                     exposing: isExposed, hostName: hostName))
+                                                                     exposing: isExposed, hostName: hostName),
+                           isLive: { self?.isLive(client) ?? false },
+                           finished: { self?.release(client) })
             }
         }
     }
@@ -103,14 +139,17 @@ final class AgentSocketServer: @unchecked Sendable {
     /// One client, start to finish, on its own thread: blocking reads, and each
     /// request answered before the next is read (the protocol is strictly
     /// request/response).
-    private static func serve(_ fd: Int32, connection: AgentClientConnection) {
-        defer { close(fd) }
+    private static func serve(_ fd: Int32, connection: AgentClientConnection,
+                              isLive: @escaping @Sendable () -> Bool, finished: @escaping @Sendable () -> Void) {
+        // Unregistered before the descriptor is closed, so `stop` can never
+        // shut down a number that has since been reused for something else.
+        defer { finished(); close(fd) }
         var reader = AgentFrameReader()
         var buffer = [UInt8](repeating: 0, count: 16 * 1024)
         while true {
             let n = read(fd, &buffer, buffer.count)
             if n < 0 && errno == EINTR { continue }
-            guard n > 0 else { return }
+            guard n > 0, isLive() else { return }
             reader.append(Data(buffer[0..<n]))
             while true {
                 let payload: Data?
@@ -125,7 +164,8 @@ final class AgentSocketServer: @unchecked Sendable {
                     done.signal()
                 }
                 done.wait()
-                guard writeAll(fd, AgentFrameReader.frame(box.value)) else { return }
+                // Turned off while this was being answered: the answer isn't sent.
+                guard isLive(), writeAll(fd, AgentFrameReader.frame(box.value)) else { return }
             }
         }
     }
