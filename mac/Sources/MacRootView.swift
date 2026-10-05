@@ -13,7 +13,8 @@ struct MacRootView: View {
     @Environment(SyncStore.self) private var sync
     @Environment(SessionHandoffStore.self) private var handoff
 
-    private enum Place: Hashable { case connect, keys }
+    private enum Place: Hashable { case connect, keys, machines }
+    @Environment(MachineBoard.self) private var machines
     @State private var place: Place = .connect
 
     var body: some View {
@@ -26,6 +27,11 @@ struct MacRootView: View {
                     }
                     row("Keys", systemImage: "key.fill", selected: sessions.activeID == nil && place == .keys) {
                         place = .keys
+                        sessions.goHome()
+                    }
+                    row(machines.waitingCount == 0 ? "Machines" : "Machines (\(machines.waitingCount) waiting)",
+                        systemImage: "square.stack.3d.up", selected: sessions.activeID == nil && place == .machines) {
+                        place = .machines
                         sessions.goHome()
                     }
                     row("New Local Shell", systemImage: "terminal", selected: false) {
@@ -50,13 +56,16 @@ struct MacRootView: View {
                     .id(active.id)
             } else if place == .keys {
                 MacKeysView()
+            } else if place == .machines {
+                MacMachinesView()
             } else {
                 MacConnectView()
             }
         }
         #if DEBUG
         .task { await MacDevHooks.run(store: store, sessions: sessions, agentSocket: agentSocket, phoneKeys: phoneKeys,
-                                       sync: sync, handoff: handoff, surfaces: surfaces) }
+                                       sync: sync, handoff: handoff, surfaces: surfaces,
+                                       machines: machines) }
         #endif
     }
 

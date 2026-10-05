@@ -1,0 +1,175 @@
+import SwiftUI
+import UserNotifications
+import BsnsSSHCore
+
+/// Every tmux window on every machine, with what each is doing — and which
+/// ones are waiting for you.
+struct MacMachinesView: View {
+    @Environment(MachineBoard.self) private var board
+    @Environment(AgentStore.self) private var store
+    @Environment(KnownHostsStore.self) private var knownHosts
+    @Environment(SessionStore.self) private var sessions
+    @Environment(MacSurfaceCache.self) private var surfaces
+
+    var body: some View {
+        List {
+            ForEach(board.machines) { machine in
+                Section {
+                    content(of: machine)
+                } header: {
+                    header(of: machine)
+                }
+            }
+            if board.machines.count <= 1 {
+                Section {
+                    Text("Save a host under Connect and it appears here. Watching a machine keeps one connection open to it; the key signs once, when watching starts.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle("Machines")
+    }
+
+    @ViewBuilder private func header(of machine: MachineBoard.Machine) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: machine.isLocal ? "desktopcomputer" : "server.rack")
+            Text(machine.name).font(.headline)
+            if let overview = machine.overview, let load = overview.load.first {
+                Text("load \(String(format: "%.1f", load))\(overview.cpus.map { " on \($0) cores" } ?? "")")
+                    .font(.caption).foregroundStyle(load > Double(overview.cpus ?? 8) ? .orange : .secondary)
+            }
+            Spacer()
+            switch machine.state {
+            case .connecting: ProgressView().controlSize(.small)
+            case .live where !machine.isLocal: Button("Stop Watching") { board.stop(machine.id) }.controlSize(.small)
+            case .idle where !machine.isLocal, .failed where !machine.isLocal:
+                Button("Watch") { watch(machine) }.controlSize(.small)
+            default: EmptyView()
+            }
+        }
+    }
+
+    @ViewBuilder private func content(of machine: MachineBoard.Machine) -> some View {
+        switch machine.state {
+        case .failed(let reason):
+            Text(reason).foregroundStyle(.red).font(.callout)
+        case .idle:
+            Text("Not being watched.").foregroundStyle(.secondary).font(.callout)
+        case .connecting:
+            Text("Connecting…").foregroundStyle(.secondary).font(.callout)
+        case .live:
+            if let overview = machine.overview {
+                if overview.windows.isEmpty {
+                    Text("No tmux sessions.").foregroundStyle(.secondary).font(.callout)
+                }
+                ForEach(overview.windows) { window in
+                    row(window, on: machine, now: overview.now)
+                }
+            }
+        }
+    }
+
+    private func row(_ window: TmuxOverview.Window, on machine: MachineBoard.Machine, now: Int) -> some View {
+        let attention = machine.attention(for: window)
+        let openable = MoshBootstrap.sanitizedTmuxName(window.session) == window.session
+        return HStack(spacing: 10) {
+            Circle().fill(color(of: attention)).frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(window.session) · \(window.index): \(window.name)")
+                Text(caption(window, attention: attention, now: now)).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Open") { open(window, on: machine) }
+                .controlSize(.small)
+                .disabled(!openable)
+                .help(openable ? "Attach this tmux session here" : "This session's name has characters the app can't pass to tmux safely")
+        }
+    }
+
+    private func color(of attention: AttentionTracker.State) -> Color {
+        switch attention {
+        case .working: return .green
+        case .waiting: return .orange
+        case .quiet: return .gray.opacity(0.5)
+        }
+    }
+
+    private func caption(_ window: TmuxOverview.Window, attention: AttentionTracker.State, now: Int) -> String {
+        let what = window.command.isEmpty ? "" : "\(window.command) · "
+        switch attention {
+        case .working: return what + "working"
+        case .waiting(let since): return what + "waiting for you · \(MachineBoard.span(now - since))"
+        case .quiet: return what + "quiet for \(MachineBoard.span(now - window.lastActivity))"
+        }
+    }
+
+    // MARK: actions
+
+    private func key(for host: SavedHost) -> Data? {
+        guard let wanted = host.keyID else { return nil }
+        return store.identities.first { SSHKeyFormat.fingerprint(ofPublicKeyBlob: $0.blob) == wanted }?.blob
+    }
+
+    private func watch(_ machine: MachineBoard.Machine) {
+        guard let host = machine.host else { return }
+        AttentionNotifier.shared.prepare()
+        board.watch(machine.id, agent: store.agent, knownHosts: knownHosts.knownHosts, keyBlob: key(for: host))
+    }
+
+    /// Bring a window up in this app: its tmux session attached in a tab, with
+    /// that window current.
+    private func open(_ window: TmuxOverview.Window, on machine: MachineBoard.Machine) {
+        board.acknowledge(machine: machine.id, window: window.id)
+        Task {
+            await board.selectWindow(machine: machine.id, session: window.session, index: window.index)
+            if let host = machine.host {
+                if let existing = sessions.sessions.first(where: {
+                    !$0.isLocal && $0.spec.host == host.host && $0.spec.user == host.user && $0.spec.tmuxSession == window.session
+                }) {
+                    sessions.activate(existing)
+                    return
+                }
+                let port = UInt16(clamping: host.port)
+                let useMosh = host.useMosh ?? false
+                let spec = TerminalSession.Spec(host: host.host, port: port, user: host.user, agent: store.agent,
+                                                knownHosts: knownHosts.knownHosts, useMosh: useMosh,
+                                                keyBlob: key(for: host), tmuxSession: window.session)
+                let session = TerminalSession(spec: spec, title: "\(machine.name) · \(window.session)")
+                session.restorable = RestorableSession(id: session.id, title: session.title, host: host.host, port: port,
+                                                       user: host.user, useMosh: useMosh, keyBlob: spec.keyBlob,
+                                                       tmuxSession: window.session)
+                sessions.add(session)
+                session.start()
+            } else {
+                let session = LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store)
+                // The name was checked against the shell-safe set before Open was offered.
+                session.runCommand("tmux attach -t =\(window.session)")
+            }
+        }
+    }
+}
+
+/// Tells the user a window is waiting when they aren't looking at the app: a
+/// system notification (local — nothing is sent anywhere) and a Dock bounce.
+@MainActor
+final class AttentionNotifier {
+    static let shared = AttentionNotifier()
+    private var asked = false
+
+    /// Ask for permission to show notifications, the first time it matters.
+    func prepare() {
+        guard !asked else { return }
+        asked = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    func announce(_ window: TmuxOverview.Window, on machine: MachineBoard.Machine) {
+        guard !NSApp.isActive else { return }
+        NSApp.requestUserAttention(.informationalRequest)
+        let content = UNMutableNotificationContent()
+        content.title = "\(machine.name): \(window.session) is waiting"
+        content.body = window.name.isEmpty ? window.command : "\(window.name) — \(window.command)"
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "\(machine.id)/\(window.id)", content: content, trigger: nil))
+    }
+}

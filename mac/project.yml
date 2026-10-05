@@ -47,6 +47,8 @@ targets:
         group: Shared/Session
       - path: ../app/Sources/Session/SessionHandoffStore.swift
         group: Shared/Session
+      - path: ../app/Sources/Session/MachineBoard.swift
+        group: Shared/Session
       - path: ../app/Sources/Transport
         group: Shared
       - path: ../app/Sources/Mosh

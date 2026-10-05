@@ -12,6 +12,7 @@ struct BsnsSSHMacApp: App {
     @State private var agentSocket = AgentSocketController()
     @State private var phoneKeys = PhoneKeyClient()
     @State private var handoff = SessionHandoffStore()
+    @State private var machines = MachineBoard()
     @State private var sync = SyncStore()
     @State private var snippets = SnippetStore()
     @State private var sessionRestore = SessionRestoreStore()
@@ -38,6 +39,7 @@ struct BsnsSSHMacApp: App {
                 .environment(agentSocket)
                 .environment(phoneKeys)
                 .environment(handoff)
+                .environment(machines)
                 .tint(Brand.accent)
                 .frame(minWidth: 760, minHeight: 460)
                 .environment(sync)
@@ -51,8 +53,16 @@ struct BsnsSSHMacApp: App {
                     // device's key or host arrives first.
                     await ConfigSync.autoPull(sync: sync, hosts: hosts, knownHosts: knownHosts, agent: store, snippets: snippets)
                     restoreSessions()
+                    // This Mac's own tmux is always on the board; other machines
+                    // are watched when asked, since that takes a signature.
+                    machines.onAttention = { machine, window in AttentionNotifier.shared.announce(window, on: machine) }
+                    machines.sync(hosts: hosts.hosts, localName: Host.current().localizedName ?? "This Mac")
+                    machines.watchLocal()
                     handoff.publish(sessionRestore.sessions, sync: sync)
                     await handoff.refresh(sync: sync)
+                }
+                .onChange(of: hosts.hosts) { _, saved in
+                    machines.sync(hosts: saved, localName: Host.current().localizedName ?? "This Mac")
                 }
                 .onChange(of: sessionRestore.sessions) { _, open in
                     handoff.publish(open, sync: sync)

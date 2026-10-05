@@ -15,8 +15,46 @@ import BsnsSSHCore
 enum MacDevHooks {
     static func run(store: AgentStore, sessions: SessionStore, agentSocket: AgentSocketController,
                     phoneKeys: PhoneKeyClient, sync: SyncStore, handoff: SessionHandoffStore,
-                    surfaces: MacSurfaceCache) async {
+                    surfaces: MacSurfaceCache, machines: MachineBoard) async {
         let env = ProcessInfo.processInfo.environment
+        // BSNS_DEV_MACHINES=1 with BSNS_DEV_KEY/_HOST/_PORT/_USER: watch that
+        // host (not saved anywhere) beside this Mac and report what the board
+        // sees for half a minute.
+        if env["BSNS_DEV_MACHINES"] == "1",
+           let seed = env["BSNS_DEV_KEY"].flatMap({ Data(base64Encoded: $0) }),
+           let host = env["BSNS_DEV_HOST"], let user = env["BSNS_DEV_USER"],
+           let key = try? FileKey.from(algorithm: .ed25519, privateKeyMaterial: seed) {
+            let port = UInt16(env["BSNS_DEV_PORT"] ?? "22") ?? 22
+            await store.agent.add(key)
+            var known = KnownHosts()
+            let probe = SSHShell()
+            do {
+                try await probe.connect(host: host, port: port, user: user, agent: store.agent, knownHosts: known)
+            } catch SSHShellError.unknownHostKey(let hostKey) {
+                known.trust(host: host, port: port, key: hostKey)
+            } catch {}
+            probe.disconnect()
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            let saved = SavedHost(label: "test machine", host: host, port: Int(port), user: user)
+            machines.sync(hosts: [saved], localName: "This Mac")
+            machines.onAttention = { machine, window in print("dev machines: ATTENTION \(machine.name) \(window.id) (\(window.command))") }
+            machines.watchLocal()
+            machines.watch(saved.id.uuidString, agent: store.agent, knownHosts: known, keyBlob: nil)
+            for _ in 0..<10 {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                for machine in machines.machines {
+                    let rows = machine.isLocal ? "\(machine.overview?.windows.count ?? -1) windows"
+                        : (machine.overview?.windows.map { "\($0.id)=\(machine.attention(for: $0))" }.joined(separator: " ") ?? "-")
+                    print("dev machines: \(machine.name) \(machine.state) load=\(machine.overview?.load.first ?? -1) | \(rows)")
+                }
+            }
+            if let target = machines.machines.last, let window = target.overview?.windows.last {
+                await machines.selectWindow(machine: target.id, session: window.session, index: 0)
+                machines.acknowledge(machine: target.id, window: window.id)
+                print("dev machines: after a look, waiting=\(machines.waitingCount)")
+            }
+            return
+        }
         // BSNS_DEV_LOCAL=1: open a local shell, type BSNS_DEV_RUN into it, and
         // report whether its tab is still there a few seconds later.
         if env["BSNS_DEV_LOCAL"] == "1" {

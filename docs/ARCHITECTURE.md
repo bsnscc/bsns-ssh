@@ -88,6 +88,22 @@ panel, port forwards) are simply absent. When the agent is being served to
 other programs, a local shell's `SSH_AUTH_SOCK` points at it, so `ssh` and `git`
 typed there sign with the keys the app holds.
 
+## Machines: what is running where
+
+The Machines view lists every tmux window on each of the user's machines, how
+loaded each machine is, and which windows are waiting for their owner. A remote
+machine is watched over one side connection that stays open — the key signs
+once, when watching starts — and each refresh is a single `tmux list-windows`
+plus the clock, load and CPU count (`TmuxCommand.overview`). Nothing is
+installed on the other side. The Mac the app runs on is read directly.
+
+"Waiting" is decided from tmux's own activity times (`AttentionTracker`): a
+window that produced output for a while and then went quiet — a build that
+finished, an agent that stopped to ask — or one that rang the bell. It is
+announced once, with a local notification when the app isn't in front, and
+stops waiting when it is opened or produces output again. Times are compared in
+the remote machine's own clock.
+
 ## Sessions that move between devices
 
 With config sync set up, each device keeps one small file of its open sessions
