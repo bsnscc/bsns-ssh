@@ -58,6 +58,7 @@ struct MacPairingSheet: View {
         error = nil
         Task {
             do { pairing = try await phoneKeys.beginPairing(with: phone) }
+            catch let error as PhoneKeyClient.PairingError { self.error = error.localizedDescription }
             catch { self.error = "Couldn't start pairing: \(error.localizedDescription)" }
             busy = false
         }

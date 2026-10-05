@@ -117,6 +117,11 @@ final class PhoneKeyClient {
             let (reveal, outcome) = try initiator.reveal(afterResponse: response)
             try await connection.send(reveal)
             return Pairing(outcome: outcome, connection: connection)
+        } catch LinkConnection.TransportError.closed {
+            // The phone hangs up on a pairing attempt unless its pairing screen
+            // is showing — that screen is how its owner says "now".
+            connection.cancel()
+            throw PairingError.phoneNotWaiting
         } catch {
             connection.cancel()
             throw error
@@ -124,8 +129,14 @@ final class PhoneKeyClient {
     }
 
     enum PairingError: LocalizedError {
-        case declinedOnPhone
-        var errorDescription: String? { "The pairing wasn't confirmed on the phone." }
+        case declinedOnPhone, phoneNotWaiting
+        var errorDescription: String? {
+            switch self {
+            case .declinedOnPhone: return "The pairing wasn't confirmed on the phone."
+            case .phoneNotWaiting:
+                return "The phone isn't waiting to pair. On the phone, open Settings → Phone as a Key → Pair a Computer and leave \"Waiting for a computer\" on screen, then choose the phone here again."
+            }
+        }
     }
 
     /// Complete (or abandon) a pairing. It is kept only if both this user and
