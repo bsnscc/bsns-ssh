@@ -111,6 +111,36 @@ announced once, with a local notification when the app isn't in front, and
 stops waiting when it is opened or produces output again. Times are compared in
 the remote machine's own clock.
 
+## Workspaces
+
+A workspace is one repository at a path on each machine that has it
+(`Sources/BsnsSSHCore/Workspace.swift`). Opening it on a machine attaches the
+tmux session named after the workspace, created in the project directory the
+first time — the naming rule is what makes "the same workspace on the other
+machine" always findable. The Mac shows, per machine, its load and the
+project's state there (branch, changed files, unpushed commits, and the head of
+an optional status command), read with one read-only command over the machine's
+watch connection, and can open the workspace on whichever machine has the
+lowest load for its size. It shows state and opens sessions; it does not move
+code.
+
+Workspaces travel in the sync bundle beside the saved hosts. A status command
+does not: like a snippet that runs on connect, it is something that executes on
+the user's machines, so a bundle can neither introduce nor change one.
+
+## Links and shortcuts
+
+`bsns-ssh://open?host=<saved host>&tmux=<session>` and
+`bsns-ssh://workspace?name=<workspace>&host=<saved host>` open a session
+(`DeepLink`). A link names things the user has already saved and carries no
+address, key or secret, so following one cannot make the app connect anywhere
+new; an unknown name is an error, not a connection.
+
+On iOS the same actions are available to Shortcuts (`app/Sources/Intents`):
+open a session, open a workspace, and run a command on a saved host and return
+its output. Running a command brings the app forward — the signing key lives
+here — and always shows the command for confirmation first.
+
 ## Automation keys
 
 Hardware-backed keys ask their owner for every signature, which is right for a

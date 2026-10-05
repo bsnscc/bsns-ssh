@@ -37,6 +37,9 @@ struct RootView: View {
         }
         .tint(Brand.accent)   // brand accent on every control, link, and selection
         .task {
+            // What a shortcut's actions work with.
+            let context = AppContext.shared
+            context.store = store; context.hosts = hosts; context.knownHosts = knownHosts; context.sessions = sessions
             PhoneKeyServer.shared.configure(agent: store.agent)
             await maybeDevAutoConnect()
         }
