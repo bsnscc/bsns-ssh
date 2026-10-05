@@ -72,6 +72,11 @@ struct MacKeysView: View {
                             Text(device.peer.name.isEmpty ? "iPhone" : device.peer.name)
                             Text("\(device.identities.count) key\(device.identities.count == 1 ? "" : "s") · \(device.id)")
                                 .font(.caption).foregroundStyle(.secondary)
+                            TextField("Also at", text: Binding(
+                                get: { (device.addresses ?? []).joined(separator: ", ") },
+                                set: { phoneKeys.setAddresses($0, for: device.id) }),
+                                      prompt: Text("Its address on another network — a tailnet name"))
+                                .font(.caption).textFieldStyle(.roundedBorder).frame(maxWidth: 320)
                         }
                         Spacer()
                         Button("Refresh Keys") {
@@ -87,7 +92,7 @@ struct MacKeysView: View {
             } header: {
                 Text("iPhone as a Key")
             } footer: {
-                Text("Use the hardware-backed keys on your iPhone from this Mac. In bsns.SSH on the phone, turn on Settings → Phone as a Key and choose Pair a Computer. Each sign-in is then approved on the phone with Face ID. Both devices must be on the same local network, with the app open on the phone.")
+                Text("Use the hardware-backed keys on your iPhone from this Mac. In bsns.SSH on the phone, turn on Settings → Phone as a Key and choose Pair a Computer. Each sign-in is then approved on the phone with Face ID. The two devices connect directly: on the same network, nearby without one, or — if you give the phone's address — across a private network such as a tailnet. The app must be open on the phone.")
             }
 
             if let error {

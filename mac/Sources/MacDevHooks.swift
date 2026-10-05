@@ -94,16 +94,29 @@ enum MacDevHooks {
         }
         // BSNS_DEV_LINK_PAIR=1: pair with the first phone found on the network,
         // accepting the code without asking, and report the keys it offers.
+        // BSNS_DEV_LINK_PURGE=1: forget every paired phone and this Mac's link
+        // identity (test cleanup).
+        if env["BSNS_DEV_LINK_PURGE"] == "1" {
+            for device in LinkStore.shared.paired { await phoneKeys.unpair(device.id) }
+            let status = SecItemDelete(Keychain.scoped([kSecClass as String: kSecClassGenericPassword,
+                                                        kSecAttrService as String: "cc.bsns.ssh.link"]) as CFDictionary)
+            print("dev link: purged, paired=\(LinkStore.shared.paired.count) identity delete status=\(status)")
+            return
+        }
         if env["BSNS_DEV_LINK_PAIR"] == "1" {
-            phoneKeys.startBrowsing()
-            for _ in 0..<80 where phoneKeys.found.isEmpty { try? await Task.sleep(nanoseconds: 100_000_000) }
-            if let phone = phoneKeys.found.first {
+            // BSNS_DEV_LINK_ADDRESS: reach the phone by address, not discovery.
+            let byAddress = env["BSNS_DEV_LINK_ADDRESS"].map { PhoneKeyClient.Found.at($0) }
+            if byAddress == nil {
+                phoneKeys.startBrowsing()
+                for _ in 0..<80 where phoneKeys.found.isEmpty { try? await Task.sleep(nanoseconds: 100_000_000) }
+            }
+            if let phone = byAddress ?? phoneKeys.found.first {
                 do {
                     let pairing = try await phoneKeys.beginPairing(with: phone)
                     print("dev link: code \(pairing.outcome.code) with \(pairing.outcome.peer.name) (\(pairing.outcome.peer.id))")
                     try await phoneKeys.finish(pairing, accepted: true)
                     let offered = LinkStore.shared.paired.first { $0.id == pairing.outcome.peer.id }?.identities.count ?? 0
-                    print("dev link: paired, phone offers \(offered) key(s)")
+                    print("dev link: paired, phone offers \(offered) key(s), reachable also at \(LinkStore.shared.paired.first?.addresses ?? [])")
                 } catch {
                     print("dev link: FAILED \(error)")
                 }

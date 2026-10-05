@@ -9,6 +9,7 @@ struct MacPairingSheet: View {
     @State private var pairing: PhoneKeyClient.Pairing?
     @State private var busy = false
     @State private var error: String?
+    @State private var address = ""
 
     var body: some View {
         VStack(spacing: 18) {
@@ -32,7 +33,7 @@ struct MacPairingSheet: View {
                 Text("On the iPhone: bsns.SSH → Settings → Phone as a Key → Pair a Computer.")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 if phoneKeys.found.isEmpty {
-                    ProgressView("Looking for an iPhone on this network…").controlSize(.small)
+                    ProgressView("Looking for an iPhone nearby…").controlSize(.small)
                 } else {
                     ForEach(phoneKeys.found) { phone in
                         Button {
@@ -43,6 +44,13 @@ struct MacPairingSheet: View {
                         .disabled(busy)
                     }
                 }
+                HStack {
+                    TextField("Or the phone's address", text: $address, prompt: Text("Not nearby? Its tailnet name or address"))
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { beginByAddress() }
+                    Button("Connect") { beginByAddress() }
+                        .disabled(busy || address.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
             }
             if let error { Text(error).foregroundStyle(.red).multilineTextAlignment(.center) }
@@ -51,6 +59,11 @@ struct MacPairingSheet: View {
         .frame(width: 420)
         .onAppear { phoneKeys.startBrowsing() }
         .onDisappear { phoneKeys.stopBrowsing() }
+    }
+
+    private func beginByAddress() {
+        guard let first = HostRoutes.parse(address, excluding: "").first else { return }
+        begin(.at(first))
     }
 
     private func begin(_ phone: PhoneKeyClient.Found) {

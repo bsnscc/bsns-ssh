@@ -32,6 +32,10 @@ public enum DeviceLink {
     /// Bonjour service type the key-holding device advertises.
     public static let serviceType = "_bsns-key._tcp"
     public static let version: UInt8 = 1
+    /// The port the key-holding device listens on when it is free. Discovery
+    /// on a local network doesn't need it (the advertisement carries the port);
+    /// a computer reaching the device by address — across a tailnet — does.
+    public static let port: UInt16 = 47822
 
     public enum LinkError: Error, Equatable {
         case malformed, unsupportedVersion, commitmentMismatch, unknownPeer, weakKey, authenticationFailed

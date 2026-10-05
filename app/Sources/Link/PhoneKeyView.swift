@@ -15,13 +15,18 @@ struct PhoneKeyView: View {
                 Toggle("Let paired computers use this phone's keys", isOn: $enabled)
                 if enabled {
                     switch server.state {
-                    case .listening: Label("Available on this network", systemImage: "dot.radiowaves.left.and.right").foregroundStyle(.green)
+                    case .listening:
+                        Label("Available to nearby computers", systemImage: "dot.radiowaves.left.and.right").foregroundStyle(.green)
+                        if server.reachableByAddress {
+                            Text("From another network — over a private network such as a tailnet — give the computer this phone's address on that network.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     case .failed(let message): Text(message).foregroundStyle(.red)
                     case .off: EmptyView()
                     }
                 }
             } footer: {
-                Text("A paired computer can ask this phone to sign in to a server with one of its hardware-backed keys. Every request is approved here with Face ID, and the prompt says which program on which computer is asking, and for where. It works only on the same local network, only while this app is open, and only for computers you have paired. The keys themselves never leave the phone.")
+                Text("A paired computer can ask this phone to sign in to a server with one of its hardware-backed keys. Every request is approved here with Face ID, and the prompt says which program on which computer is asking, and for where. It works directly between the two devices — on the same network, nearby without one, or across a private network of your own — only while this app is open, and only for computers you have paired. The keys themselves never leave the phone.")
             }
             .onChange(of: enabled) { _, _ in server.refresh() }
 
@@ -67,7 +72,7 @@ private struct PairingSheet: View {
                 } else {
                     ProgressView()
                     Text("Waiting for a computer").font(.headline)
-                    Text("On the computer, open bsns.SSH, go to Keys and choose Pair iPhone. Both devices need to be on the same network.")
+                    Text("On the computer, open bsns.SSH, go to Keys and choose Pair iPhone. The two devices need to be near each other or on the same network.")
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
             }

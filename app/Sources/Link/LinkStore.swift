@@ -17,6 +17,9 @@ final class LinkStore {
         var peer: LinkPeer
         /// Public keys the paired device has offered (computer side).
         var identities: [Offered] = []
+        /// Addresses the device can also be reached at when it isn't on this
+        /// network — a tailnet name, say (computer side).
+        var addresses: [String]?
         var id: String { peer.id }
 
         struct Offered: Codable, Equatable {
@@ -71,6 +74,12 @@ final class LinkStore {
     func setIdentities(_ identities: [SSHPublicKey], for id: String) {
         guard let i = paired.firstIndex(where: { $0.id == id }) else { return }
         paired[i].identities = identities.map { Paired.Offered(blob: $0.blob, comment: $0.comment) }
+        save()
+    }
+
+    func setAddresses(_ addresses: [String], for id: String) {
+        guard let i = paired.firstIndex(where: { $0.id == id }) else { return }
+        paired[i].addresses = addresses.isEmpty ? nil : addresses
         save()
     }
 

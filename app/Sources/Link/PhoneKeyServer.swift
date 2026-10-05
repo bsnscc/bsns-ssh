@@ -34,6 +34,8 @@ final class PhoneKeyServer {
     var acceptsPairing = false
 
     @ObservationIgnored private var listener: NWListener?
+    /// Listening on the known port, so a computer can also connect by address.
+    private(set) var reachableByAddress = false
     /// Connections being served. Turning the feature off ends them: a computer
     /// connected while it was on doesn't keep its session afterwards.
     @ObservationIgnored private var connections: [ObjectIdentifier: LinkConnection] = [:]
@@ -73,7 +75,11 @@ final class PhoneKeyServer {
     private func startListening() {
         guard listener == nil, agent != nil else { return }
         do {
-            let listener = try NWListener(using: LinkConnection.parameters)
+            // The known port when it is free, so a computer can reach this
+            // phone by address; any port otherwise (found by advertisement only).
+            let fixed = NWEndpoint.Port(rawValue: DeviceLink.port).flatMap { try? NWListener(using: LinkConnection.parameters, on: $0) }
+            let listener = try fixed ?? NWListener(using: LinkConnection.parameters)
+            reachableByAddress = fixed != nil
             // Advertised under an id derived from the link key: it identifies
             // this phone to a computer paired with it and says nothing else.
             listener.service = NWListener.Service(name: LinkStore.shared.identity.deviceID, type: DeviceLink.serviceType)

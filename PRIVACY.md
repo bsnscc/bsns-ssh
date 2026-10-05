@@ -41,8 +41,9 @@ The app opens a network connection **only** to destinations **you** specify:
    Drive, Google Drive, Dropbox, or a file you move yourself) — and only the
    encrypted bundle, which that provider handles as opaque ciphertext; and
 4. another device of yours that **you** paired for the optional "phone as a key"
-   feature — directly over your local network, encrypted end to end, never
-   through a server. Only signing requests and signatures cross it; private keys
+   feature — directly between the two devices (your local network, a
+   nearby wireless link, or a private network of your own), encrypted end to
+   end, never through a server. Only signing requests and signatures cross it; private keys
    do not.
 
 It makes **no** connection to any analytics, crash-reporting, attribution, ad, or

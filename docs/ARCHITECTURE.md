@@ -20,10 +20,11 @@ stop and surface the conflict rather than quietly compromise.
 - **No account. No telemetry. No analytics. No crash reporting that phones home.**
 - **No network calls except (a) the user's own SSH connections, (b) the
   user's own chosen sync storage, and (c) a direct link between the user's own
-  paired devices on the local network.** This is a *verifiable* property —
+  paired devices.** This is a *verifiable* property —
   running a proxy must show nothing else leaving the device. (c) is off until
-  the user turns it on, never leaves the local network, and never passes
-  through a server.
+  the user turns it on and never passes through a server: it runs over the
+  local network, a device-to-device wireless link, or a private network the
+  user runs themselves (a tailnet).
 - **Private keys in hardware are non-extractable by construction** — the point,
   not a limitation to work around.
 - **The sync storage provider only ever sees ciphertext** — client-side
@@ -45,9 +46,15 @@ it. The private key never leaves the phone: the computer sends a signing request
 the phone asks its owner (the biometric prompt is the approval and names who is
 asking), and only the signature travels back.
 
-- **Finding each other:** the phone advertises `_bsns-key._tcp` on the local
-  network while the feature is on and the app is open. There is no relay and no
-  rendezvous server; off the same network, the key is simply unavailable.
+- **Finding each other:** the phone advertises `_bsns-key._tcp` while the
+  feature is on and the app is open — on the local network, and over the
+  device-to-device wireless link that needs no access point, so it still works
+  where a Wi-Fi network keeps its clients apart. A computer can also be given
+  the phone's address on a private network (a tailnet) and connect to a known
+  port there. The computer tries every way at once and uses whichever
+  connects; which one it was doesn't matter for trust, because the session only
+  completes with the device holding the paired key. There is no relay and no
+  rendezvous server.
 - **Pairing:** the computer commits to its keys before the phone reveals its
   own, then both show a six-digit code derived from the whole exchange. The user
   confirms it on both screens; a device in the middle would have had to guess

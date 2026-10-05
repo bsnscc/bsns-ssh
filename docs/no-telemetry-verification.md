@@ -18,10 +18,12 @@ the exact steps to confirm it yourself.
 > 2. a ProxyJump bastion you configured, to reach the target through it;
 > 3. the file/sync provider **you** chose for config sync — and only the encrypted
 >    bundle, which that provider handles as opaque ciphertext; and
-> 4. a device **you** paired for "phone as a key" — directly, on the local
->    network only, encrypted end to end, and only while that feature is on. In a
->    capture this appears as mDNS for `_bsns-key._tcp` and a TCP flow between
->    your two devices' local addresses; nothing goes to the internet.
+> 4. a device **you** paired for "phone as a key" — directly, encrypted end to
+>    end, and only while that feature is on: over the local network, a
+>    device-to-device wireless link, or an address you gave on a private network
+>    of your own. In a capture this appears as mDNS for `_bsns-key._tcp` and a
+>    TCP flow between your two devices' addresses (port 47822 when reached by
+>    address); nothing goes to a server of ours or anyone else's.
 >
 > It opens **no** connection to any analytics, crash-reporting, attribution, ad,
 > or "home" endpoint of ours. There is no account system and no server we operate.

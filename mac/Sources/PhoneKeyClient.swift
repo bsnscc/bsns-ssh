@@ -14,6 +14,15 @@ final class PhoneKeyClient {
     struct Found: Identifiable, Equatable {
         let id: String            // the advertised device id
         let endpoint: NWEndpoint
+        /// Set when the phone was named by address instead of being found.
+        var address: String? = nil
+
+        /// A phone reached by address — on another network, across a tailnet.
+        static func at(_ address: String) -> Found {
+            Found(id: address, endpoint: .hostPort(host: NWEndpoint.Host(address),
+                                                  port: NWEndpoint.Port(rawValue: DeviceLink.port) ?? .any),
+                  address: address)
+        }
     }
 
     private(set) var found: [Found] = []
@@ -91,15 +100,64 @@ final class PhoneKeyClient {
         }
     }
 
+    /// A started connection to a paired phone: by its advertisement (same
+    /// network, or nearby with no network) and by each address the user gave
+    /// for it, all at once — the first to connect is used. Which one answered
+    /// doesn't matter for trust: the session that follows only completes with
+    /// the device that holds the paired key.
+    private nonisolated func connect(to deviceID: String, addresses: [String]) async throws -> LinkConnection {
+        let attempts: [@Sendable () async throws -> LinkConnection] = [{
+            let connection = LinkConnection(to: try await self.locate(deviceID))
+            try await Self.start(connection)
+            return connection
+        }] + addresses.map { address in {
+            let connection = LinkConnection(toAddress: address)
+            try await Self.start(connection)
+            return connection
+        } }
+        let once = LinkOnce()
+        let failures = FailureCount(total: attempts.count)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<LinkConnection, Error>) in
+            for attempt in attempts {
+                Task {
+                    do {
+                        let connection = try await attempt()
+                        if once.claim() { continuation.resume(returning: connection) } else { connection.cancel() }
+                    } catch {
+                        if failures.addIsLast(), once.claim() { continuation.resume(throwing: error) }
+                    }
+                }
+            }
+        }
+    }
+
+    private nonisolated static func start(_ connection: LinkConnection) async throws {
+        do { try await withLinkTimeout(8) { try await connection.start() } }
+        catch { connection.cancel(); throw error }
+    }
+
+    private final class FailureCount: @unchecked Sendable {
+        private let lock = NSLock()
+        private var remaining: Int
+        init(total: Int) { remaining = total }
+        func addIsLast() -> Bool { lock.withLock { remaining -= 1; return remaining == 0 } }
+    }
+
+    func setAddresses(_ text: String, for deviceID: String) {
+        store.setAddresses(HostRoutes.parse(text, excluding: ""), for: deviceID)
+    }
+
     // MARK: pairing
 
     /// A pairing that has exchanged keys and is waiting for the user to compare codes.
     final class Pairing: @unchecked Sendable {
         let outcome: PairingOutcome
         fileprivate let connection: LinkConnection
-        fileprivate init(outcome: PairingOutcome, connection: LinkConnection) {
+        fileprivate let address: String?
+        fileprivate init(outcome: PairingOutcome, connection: LinkConnection, address: String?) {
             self.outcome = outcome
             self.connection = connection
+            self.address = address
         }
     }
 
@@ -116,7 +174,7 @@ final class PhoneKeyClient {
             let response = try await withLinkTimeout(10) { try await connection.receive() }
             let (reveal, outcome) = try initiator.reveal(afterResponse: response)
             try await connection.send(reveal)
-            return Pairing(outcome: outcome, connection: connection)
+            return Pairing(outcome: outcome, connection: connection, address: phone.address)
         } catch LinkConnection.TransportError.closed {
             // The phone hangs up on a pairing attempt unless its pairing screen
             // is showing — that screen is how its owner says "now".
@@ -148,6 +206,8 @@ final class PhoneKeyClient {
         let theirs = try await withLinkTimeout(120) { try await pairing.connection.receive() }
         guard theirs == Data([1]) else { throw PairingError.declinedOnPhone }
         store.add(pairing.outcome.peer)
+        // Paired by address: that address is how to reach it again.
+        if let address = pairing.address { store.setAddresses([address], for: pairing.outcome.peer.id) }
         try await refreshKeys(of: pairing.outcome.peer.id)
     }
 
@@ -193,10 +253,9 @@ final class PhoneKeyClient {
     /// reaching for their phone.
     private nonisolated func request(_ request: LinkRequest, of peer: LinkPeer) async throws -> Data {
         let identity = await store.identity
-        let endpoint = try await locate(peer.id)
-        let connection = LinkConnection(to: endpoint)
+        let addresses = await store.paired.first { $0.id == peer.id }?.addresses ?? []
+        let connection = try await connect(to: peer.id, addresses: addresses)
         defer { connection.cancel() }
-        try await withLinkTimeout(10) { try await connection.start() }
         let initiator = SessionInitiator(identity: identity, peer: peer)
         try await connection.send(initiator.hello())
         let response = try await withLinkTimeout(10) { try await connection.receive() }

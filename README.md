@@ -30,7 +30,7 @@
   only ever sees ciphertext — no account, no server of ours.
 - **No telemetry, no analytics, no phone-home.** The only network traffic is
   your own SSH/mosh connections, your own chosen sync storage, and — if you turn
-  it on — a direct, encrypted local-network link between your own paired devices
+  it on — a direct, encrypted link between your own paired devices (local network, nearby device-to-device wireless, or your own private network)
   (phone as a key). You can
   confirm it yourself ([docs/no-telemetry-verification.md](docs/no-telemetry-verification.md)).
   We collect nothing: [Privacy Policy](PRIVACY.md).

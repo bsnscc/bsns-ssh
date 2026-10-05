@@ -31,13 +31,21 @@ final class LinkConnection: @unchecked Sendable {
         self.init(NWConnection(to: endpoint, using: LinkConnection.parameters))
     }
 
-    /// Plain TCP, local network only: no cellular, no relays, no proxies. The
+    /// Plain TCP between the two devices, never through a relay or proxy and
+    /// never over cellular: the local network, a direct device-to-device
+    /// wireless link (which needs no access point, so it still works where
+    /// Wi-Fi keeps clients apart), or a private network the user runs. The
     /// confidentiality and authentication come from the session inside.
     static var parameters: NWParameters {
         let parameters = NWParameters.tcp
         parameters.prohibitedInterfaceTypes = [.cellular]
-        parameters.includePeerToPeer = false
+        parameters.includePeerToPeer = true
         return parameters
+    }
+
+    /// A device named by address rather than found by its advertisement.
+    convenience init(toAddress address: String, port: UInt16 = DeviceLink.port) {
+        self.init(to: .hostPort(host: NWEndpoint.Host(address), port: NWEndpoint.Port(rawValue: port) ?? .any))
     }
 
     func start() async throws {
