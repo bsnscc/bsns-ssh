@@ -49,7 +49,9 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     private(set) var transferSymbol = TerminalSession.transferDefaultSymbol
     static let transferDefaultSymbol = "photo.on.rectangle.angled"
     let spec: Spec
-    let title: String
+    /// Shown on the tab. Fixed for a connection; a local shell keeps it current
+    /// with where the shell is and what it is running.
+    var title: String
 
     /// Set by the terminal coordinator; receives shell output (called off-main —
     /// the coordinator hops to main itself, matching SSHShell's existing contract).

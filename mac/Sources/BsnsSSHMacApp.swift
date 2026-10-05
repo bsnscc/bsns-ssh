@@ -93,6 +93,26 @@ struct BsnsSSHMacApp: App {
                     .keyboardShortcut("n")
                 Button("New Local Shell") { LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store) }
                     .keyboardShortcut("t")
+                Divider()
+                // ⌘W closes the tab being looked at; with none, the window.
+                Button(sessions.active == nil ? "Close Window" : "Close Tab") {
+                    if let active = sessions.active {
+                        LocalShellLauncher.close(active, sessions: sessions, surfaces: surfaces)
+                    } else {
+                        NSApp.keyWindow?.performClose(nil)
+                    }
+                }
+                .keyboardShortcut("w")
+                Button("Next Tab") { step(1) }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                    .disabled(sessions.sessions.count < 2)
+                Button("Previous Tab") { step(-1) }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                    .disabled(sessions.sessions.count < 2)
+                ForEach(Array(sessions.sessions.prefix(9).enumerated()), id: \.element.id) { index, session in
+                    Button(session.title) { sessions.activate(session) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")))
+                }
             }
         }
 
@@ -131,6 +151,13 @@ struct BsnsSSHMacApp: App {
             session.start()
         }
         sessions.goHome()
+    }
+
+    private func step(_ by: Int) {
+        let all = sessions.sessions
+        guard !all.isEmpty else { return }
+        let current = all.firstIndex { $0.id == sessions.activeID } ?? (by > 0 ? -1 : 0)
+        sessions.activate(all[(current + by + all.count) % all.count])
     }
 
     /// Hosts whose key is an automation key allowed to sign in to them can be

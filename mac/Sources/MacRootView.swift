@@ -43,7 +43,7 @@ struct MacRootView: View {
                         ForEach(sessions.sessions) { session in
                             SessionRow(session: session, selected: sessions.activeID == session.id,
                                        select: { sessions.activate(session) },
-                                       close: { surfaces.drop(session.id); sessions.close(session) })
+                                       close: { LocalShellLauncher.close(session, sessions: sessions, surfaces: surfaces) })
                         }
                     }
                 }

@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import AppKit
 import BsnsSSHCore
 
 /// Headless integration hooks, driven by environment variables and compiled
@@ -54,6 +55,27 @@ enum MacDevHooks {
                 print("dev machines: after a look, waiting=\(machines.waitingCount)")
             }
             return
+        }
+        // BSNS_DEV_SNAPSHOT=<file.png>: a few seconds in (BSNS_DEV_SNAPSHOT_AFTER,
+        // default 6), save a picture of the app's main window as the app drew it.
+        if let path = env["BSNS_DEV_SNAPSHOT"] {
+            let delay = Double(env["BSNS_DEV_SNAPSHOT_AFTER"] ?? "") ?? 6
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }),
+                      let frameView = window.contentView?.superview,
+                      let bitmap = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) else {
+                    print("dev snapshot: no window")
+                    return
+                }
+                if let size = env["BSNS_DEV_WINDOW_SIZE"]?.split(separator: "x").compactMap({ Double($0) }), size.count == 2 {
+                    window.setContentSize(NSSize(width: size[0], height: size[1]))
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                }
+                frameView.cacheDisplay(in: frameView.bounds, to: bitmap)
+                try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                print("dev snapshot: saved \(Int(frameView.bounds.width))x\(Int(frameView.bounds.height))")
+            }
         }
         // BSNS_DEV_LOCAL=1: open a local shell, type BSNS_DEV_RUN into it, and
         // report whether its tab is still there a few seconds later.

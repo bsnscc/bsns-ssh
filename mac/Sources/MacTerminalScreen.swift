@@ -23,6 +23,9 @@ struct MacTerminalScreen: View {
             statusBanner
             MacTerminalHost(surface: surfaces.surface(for: session),
                             themeId: themeId, fontFamily: fontFamily, fontSize: fontSize)
+                // Text shouldn't touch the window's edges or the sidebar.
+                .padding(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 6))
+                .background(Color(nsColor: TerminalTheme.named(themeId).background.uiColor))
                 .overlay(alignment: .top) { notice }
         }
         .navigationTitle(session.title)
