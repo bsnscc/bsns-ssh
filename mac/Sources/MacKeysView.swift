@@ -13,6 +13,9 @@ struct MacKeysView: View {
     @Environment(PhoneKeyClient.self) private var phoneKeys
     @State private var links = LinkStore.shared
     @State private var pairingPhone = false
+    @Environment(HostStore.self) private var hosts
+    /// The automation key whose host list is being edited (nil blob = a new key).
+    @State private var scoping: PeerScopeRequest?
 
     static func name(of identity: SSHPublicKey, hardware: Bool) -> String {
         let kind: String
@@ -47,6 +50,9 @@ struct MacKeysView: View {
                 }
                 .disabled(!store.enclaveAvailable)
                 Button("New Ed25519 Key") { Task { await store.generateKey(.ed25519) } }
+                Button("New Automation Key…") { scoping = PeerScopeRequest(identity: nil, hosts: []) }
+                    .disabled(!store.enclaveAvailable)
+                    .help("A Secure Enclave key that signs without asking, only for the hosts you choose")
             } header: {
                 Text("Create")
             } footer: {
@@ -107,6 +113,16 @@ struct MacKeysView: View {
         .formStyle(.grouped)
         .navigationTitle("Keys")
         .sheet(isPresented: $pairingPhone) { MacPairingSheet() }
+        .sheet(item: $scoping) { request in
+            PeerScopeSheet(request: request, savedHosts: hosts.hosts.map(\.host)) { chosen in
+                Task {
+                    do {
+                        if let identity = request.identity { try await store.setPeerKeyHosts(chosen, for: identity) }
+                        else { try await store.generatePeerKey(hosts: chosen) }
+                    } catch { self.error = "Couldn't save the automation key: \(error.localizedDescription)" }
+                }
+            }
+        }
         .confirmationDialog("Delete this key?", isPresented: Binding(get: { deleting != nil },
                                                                      set: { if !$0 { deleting = nil } }),
                             presenting: deleting) { identity in
@@ -126,6 +142,7 @@ struct MacKeysView: View {
         case .signed: (symbol, tint) = ("checkmark.circle", .green)
         case .declined: (symbol, tint) = ("hand.raised", .orange)
         case .failed: (symbol, tint) = ("xmark.circle", .red)
+        case .refused: (symbol, tint) = ("nosign", .red)
         }
         return HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: symbol).foregroundStyle(tint)
@@ -150,8 +167,16 @@ struct MacKeysView: View {
                 Text(SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob))
                     .font(.caption.monospaced()).foregroundStyle(.secondary)
                     .textSelection(.enabled)
+                if let allowed = store.peerHosts(of: identity) {
+                    Text(allowed.isEmpty ? "Signs without asking — but no hosts are allowed yet, so it signs for nothing."
+                                         : "Signs without asking, only for: \(allowed.joined(separator: ", "))")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             }
             Spacer()
+            if let allowed = store.peerHosts(of: identity) {
+                Button("Hosts…") { scoping = PeerScopeRequest(identity: identity, hosts: allowed) }
+            }
             Button(copied == identity.blob ? "Copied" : "Copy Public Key") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(authorizedKeysLine(identity), forType: .string)
@@ -162,5 +187,58 @@ struct MacKeysView: View {
                 .help("Delete key")
                 .accessibilityLabel("Delete key")
         }
+    }
+}
+
+/// Which automation key's host list is being chosen.
+struct PeerScopeRequest: Identifiable {
+    let id = UUID()
+    /// nil while creating a new key.
+    let identity: SSHPublicKey?
+    let hosts: [String]
+}
+
+/// Choose the hosts an automation key may sign in to.
+private struct PeerScopeSheet: View {
+    let request: PeerScopeRequest
+    let savedHosts: [String]
+    let done: ([String]) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var chosen: Set<String> = []
+
+    private var choices: [String] {
+        var seen = Set<String>()
+        return (savedHosts + request.hosts).map { $0.lowercased() }.filter { seen.insert($0).inserted }.sorted()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(request.identity == nil ? "New Automation Key" : "Allowed Hosts").font(.headline)
+            Text("This key lives in the Secure Enclave and can't be copied off this Mac, but unlike your other keys it signs without Touch ID — so scripts and schedulers can use it. It only signs in to the hosts ticked here, and only when the connection is provably to that host. Every use is in the activity log.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if choices.isEmpty {
+                Text("Save a host under Connect first.").foregroundStyle(.secondary)
+            }
+            ForEach(choices, id: \.self) { host in
+                Toggle(host, isOn: Binding(
+                    get: { chosen.contains(host) },
+                    set: { if $0 { chosen.insert(host) } else { chosen.remove(host) } }))
+            }
+            Text("Tick only machines that are yours. Anyone who can run programs as you on this Mac while it is unlocked can use this key to reach them.")
+                .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(request.identity == nil ? "Create Key" : "Save") {
+                    done(chosen.sorted())
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(request.identity == nil && chosen.isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
+        .onAppear { chosen = Set(request.hosts.map { $0.lowercased() }) }
     }
 }

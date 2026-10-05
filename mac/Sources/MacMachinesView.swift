@@ -41,7 +41,7 @@ struct MacMachinesView: View {
             Spacer()
             switch machine.state {
             case .connecting: ProgressView().controlSize(.small)
-            case .live where !machine.isLocal: Button("Stop Watching") { board.stop(machine.id) }.controlSize(.small)
+            case .live where !machine.isLocal: Button("Stop Watching") { board.pause(machine.id) }.controlSize(.small)
             case .idle where !machine.isLocal, .failed where !machine.isLocal:
                 Button("Watch") { watch(machine) }.controlSize(.small)
             default: EmptyView()

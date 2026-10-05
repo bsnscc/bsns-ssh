@@ -30,6 +30,7 @@ enum KeyStore {
         var slot: UInt8?           // yubikey: PIV slot
         var credentialID: Data?    // fido2/webauthn: FIDO credential id (material holds the public blob)
         var application: String?   // fido2/webauthn: OpenSSH application / WebAuthn rpId
+        var allowedHosts: [String]? // enclave-peer: the only hosts the key may sign in to
     }
 
     static func save(_ key: FileKey) throws {
@@ -44,6 +45,15 @@ enum KeyStore {
             algorithm: key.algorithm.rawValue,
             material: key.keyData,
             comment: key.publicKey.comment, kind: "enclave"))
+    }
+
+    /// An unattended Secure Enclave key and the hosts it is limited to. Saving it
+    /// again replaces the host list.
+    static func savePeer(_ key: SecureEnclaveKey, hosts: [String]) throws {
+        try persist(account: key.id.rawValue, Stored(
+            algorithm: key.algorithm.rawValue,
+            material: key.keyData,
+            comment: key.publicKey.comment, kind: "enclave-peer", allowedHosts: hosts))
     }
 
     #if os(iOS)
@@ -145,6 +155,12 @@ enum KeyStore {
                   let stored = try? JSONDecoder().decode(Stored.self, from: data) else { return nil }
             if stored.kind == "enclave" {
                 return try? SecureEnclaveKey.from(keyData: stored.material, comment: stored.comment)
+            }
+            if stored.kind == "enclave-peer" {
+                // Never loaded bare: without its host list it signs for nothing.
+                guard let key = try? SecureEnclaveKey.from(keyData: stored.material, comment: stored.comment,
+                                                           unattended: true) else { return nil }
+                return ScopedKey(key, allowedHosts: stored.allowedHosts ?? [])
             }
             #if os(iOS)
             if stored.kind == "yubikey" {

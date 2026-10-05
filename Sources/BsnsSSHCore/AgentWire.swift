@@ -130,16 +130,22 @@ public actor AgentClientConnection {
         }
         var host: String?
         var user: String?
+        var proven = false
         if let request = AgentWire.signRequest(payload),
            let auth = AgentWire.userAuthRequest(signedData: request.data) {
             user = auth.user
+            // A host key inside the data to be signed makes the signature
+            // worthless anywhere but in a session with that server. A host key
+            // only announced beforehand is the program's word for it.
+            proven = auth.hostKeyBlob != nil
             if let hostKey = auth.hostKeyBlob ?? boundHosts[auth.sessionID] {
                 // A name the user will recognise if there is one; otherwise the
                 // host key's fingerprint, which at least identifies the server.
                 host = hostName(hostKey) ?? SSHKeyFormat.fingerprint(ofPublicKeyBlob: hostKey)
             }
         }
-        let context = SignContext(host: host, purpose: .remoteAgent, requester: requester, user: user)
+        let context = SignContext(host: host, purpose: .remoteAgent, requester: requester, user: user,
+                                  hostProven: proven)
         return await agent.handleAgentMessage(payload, context: context, exposing: isExposed)
     }
 }

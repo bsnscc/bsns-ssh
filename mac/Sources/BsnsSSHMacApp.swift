@@ -1,4 +1,5 @@
 import SwiftUI
+import BsnsSSHCore
 import AppKit
 
 @main
@@ -58,6 +59,7 @@ struct BsnsSSHMacApp: App {
                     machines.onAttention = { machine, window in AttentionNotifier.shared.announce(window, on: machine) }
                     machines.sync(hosts: hosts.hosts, localName: Host.current().localizedName ?? "This Mac")
                     machines.watchLocal()
+                    watchMachinesUnattended()
                     handoff.publish(sessionRestore.sessions, sync: sync)
                     await handoff.refresh(sync: sync)
                 }
@@ -126,6 +128,23 @@ struct BsnsSSHMacApp: App {
             session.start()
         }
         sessions.goHome()
+    }
+
+    /// Hosts whose key is an automation key allowed to sign in to them can be
+    /// watched without a prompt, so they are — now, and again every so often in
+    /// case the connection dropped or the machine came back.
+    private func watchMachinesUnattended() {
+        Task { @MainActor in
+            while !Task.isCancelled {
+                machines.watchUnattended(agent: store.agent, knownHosts: knownHosts.knownHosts) { host in
+                    guard let wanted = host.keyID,
+                          let identity = store.identities.first(where: { SSHKeyFormat.fingerprint(ofPublicKeyBlob: $0.blob) == wanted }),
+                          let allowed = store.peerHosts(of: identity), allowed.contains(host.host.lowercased()) else { return nil }
+                    return identity.blob
+                }
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
+        }
     }
 
     /// Sleep kills a TCP connection without telling anyone until something is

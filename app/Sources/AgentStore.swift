@@ -14,6 +14,8 @@ final class AgentStore {
     private(set) var hardwareKeyIDs: Set<String> = []
     private(set) var yubiKeyIDs: Set<String> = []
     private(set) var securityKeyIDs: Set<String> = []
+    /// Automation keys (fingerprint → the hosts each may sign in to).
+    private(set) var peerKeyHosts: [String: [String]] = [:]
 
     /// Whether this device can create Secure Enclave keys (false on the simulator).
     var enclaveAvailable: Bool { SecureEnclaveKey.isAvailable }
@@ -23,6 +25,10 @@ final class AgentStore {
             for key in KeyStore.loadAll() {
                 await agent.add(key)
                 if key.requiresUserPresence { hardwareKeyIDs.insert(key.id.rawValue) }
+                if let scoped = key as? ScopedKey {
+                    hardwareKeyIDs.insert(key.id.rawValue)
+                    peerKeyHosts[key.id.rawValue] = scoped.allowedHosts.sorted()
+                }
                 #if os(iOS)
                 if key is YubiKeyPIVKey { yubiKeyIDs.insert(key.id.rawValue) }
                 if key is WebAuthnSecurityKey || key is Fido2SecurityKey { securityKeyIDs.insert(key.id.rawValue) }
@@ -136,6 +142,35 @@ final class AgentStore {
         await agent.add(key)
         hardwareKeyIDs.insert(key.id.rawValue)
         await refresh()
+    }
+
+    /// Create a key for automation between the user's own machines: in the
+    /// Secure Enclave and non-extractable like any other, but it signs without
+    /// asking — and only for logins to `hosts`.
+    func generatePeerKey(hosts: [String]) async throws {
+        let key = try SecureEnclaveKey.generate(comment: "Automation key", unattended: true)
+        try KeyStore.savePeer(key, hosts: hosts)
+        let scoped = ScopedKey(key, allowedHosts: hosts)
+        await agent.add(scoped)
+        hardwareKeyIDs.insert(key.id.rawValue)
+        peerKeyHosts[key.id.rawValue] = scoped.allowedHosts.sorted()
+        await refresh()
+    }
+
+    /// Change which hosts an automation key may sign in to.
+    func setPeerKeyHosts(_ hosts: [String], for identity: SSHPublicKey) async throws {
+        let id = SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob)
+        guard let scoped = KeyStore.loadAll().first(where: { $0.id.rawValue == id }) as? ScopedKey,
+              let key = scoped.base as? SecureEnclaveKey else { return }
+        try KeyStore.savePeer(key, hosts: hosts)
+        let updated = ScopedKey(key, allowedHosts: hosts)
+        await agent.add(updated)
+        peerKeyHosts[id] = updated.allowedHosts.sorted()
+    }
+
+    /// The hosts an automation key is limited to; nil for any other key.
+    func peerHosts(of identity: SSHPublicKey) -> [String]? {
+        peerKeyHosts[SSHKeyFormat.fingerprint(ofPublicKeyBlob: identity.blob)]
     }
 
     /// Add a key that isn't stored here — one held by a paired device — to the
@@ -256,6 +291,7 @@ final class AgentStore {
         KeyStore.delete(id)
         await agent.remove(id)
         hardwareKeyIDs.remove(id.rawValue)
+        peerKeyHosts[id.rawValue] = nil
         yubiKeyIDs.remove(id.rawValue)
         securityKeyIDs.remove(id.rawValue)
         await refresh()

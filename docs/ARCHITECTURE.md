@@ -104,6 +104,33 @@ announced once, with a local notification when the app isn't in front, and
 stops waiting when it is opened or produces output again. Times are compared in
 the remote machine's own clock.
 
+## Automation keys
+
+Hardware-backed keys ask their owner for every signature, which is right for a
+person and useless for a scheduler. An automation key is the deliberate
+exception: generated in the Secure Enclave and non-extractable like the others,
+but without the presence requirement, so it signs while the Mac is unlocked
+without asking.
+
+It is never handed to the agent bare. `ScopedKey` wraps it with the list of
+hosts it may sign in to, and refuses everything else:
+
+- The app's own connections qualify when the host is on the list — they have
+  already checked the server's host key before asking for a signature.
+- A request from another program (through the agent socket) qualifies only when
+  it uses OpenSSH's host-bound public-key method, where the data to be signed
+  contains the server's host key, and that key is one the app has on record for
+  a listed host. Such a signature is worthless in a session with any other
+  server. A destination that is merely announced to the agent is not enough.
+- Anything that isn't a login — signing arbitrary data — is refused.
+
+Refusals are recorded in the key activity log alongside uses. What the scope
+does not protect against: a program running as the user on the unlocked Mac can
+use the key to reach the listed hosts, exactly as it could use a key file — the
+difference is that the key cannot be copied away, cannot be used for any other
+host, and every use is logged. The Machines view uses such a key, when a host
+has one, to watch that host without a prompt.
+
 ## Sessions that move between devices
 
 With config sync set up, each device keeps one small file of its open sessions

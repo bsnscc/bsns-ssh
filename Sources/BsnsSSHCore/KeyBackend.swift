@@ -88,14 +88,21 @@ public struct SignContext: Sendable {
     public let requester: String?
     /// The account being logged in to, when the request reveals it.
     public let user: String?
+    /// Whether `host` is established rather than merely claimed. The app's own
+    /// connections have checked the server's host key before they ask; a
+    /// request from outside proves its destination only when the data to be
+    /// signed itself names the server's key. A key limited to certain hosts
+    /// signs only for a proven one.
+    public let hostProven: Bool
 
     public init(host: String? = nil, purpose: Purpose, rsaAlgorithm: RSASignatureAlgorithm = .sha1,
-                requester: String? = nil, user: String? = nil) {
+                requester: String? = nil, user: String? = nil, hostProven: Bool = true) {
         self.host = host
         self.purpose = purpose
         self.rsaAlgorithm = rsaAlgorithm
         self.requester = requester
         self.user = user
+        self.hostProven = hostProven
     }
 
     /// One line for an approval prompt: who is asking, and for what.
@@ -113,6 +120,8 @@ public struct SignContext: Sendable {
 public enum KeyBackendError: Error, Sendable {
     case userCancelled
     case userPresenceRequired
+    /// The key is limited to certain hosts and this request isn't for one.
+    case notPermitted
     case unsupportedAlgorithm
     case signingFailed(String)
 }

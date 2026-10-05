@@ -112,6 +112,45 @@ enum MacDevHooks {
             }
             phoneKeys.stopBrowsing()
         }
+        // BSNS_DEV_PEERKEY=<hosts>: create an automation key limited to those
+        // hosts, write its authorized_keys line to BSNS_DEV_PEERKEY_OUT, serve
+        // the agent socket (hardware and automation keys only) knowing the host
+        // key of BSNS_DEV_HOST:_PORT, wait, then delete the key again.
+        // BSNS_DEV_PEERKEY_PURGE=1: delete every automation key (test cleanup).
+        if env["BSNS_DEV_PEERKEY_PURGE"] == "1" {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            for identity in store.identities where store.peerHosts(of: identity) != nil { await store.deleteKey(identity) }
+            print("dev peer key: purged, keys left=\(store.identities.count)")
+            return
+        }
+        if let scope = env["BSNS_DEV_PEERKEY"], let out = env["BSNS_DEV_PEERKEY_OUT"],
+           let host = env["BSNS_DEV_HOST"] {
+            let port = UInt16(env["BSNS_DEV_PORT"] ?? "22") ?? 22
+            do {
+                let before = Set(store.identities.map(\.blob))
+                try await store.generatePeerKey(hosts: scope.split(separator: ",").map(String.init))
+                guard let identity = store.identities.first(where: { !before.contains($0.blob) }) else { return }
+                try? (authorizedKeysLine(identity) + "\n").write(toFile: out, atomically: true, encoding: .utf8)
+                var known = KnownHosts()
+                let probe = SSHShell()
+                do {
+                    try await probe.connect(host: host, port: port, user: NSUserName(), agent: store.agent, knownHosts: known)
+                } catch SSHShellError.unknownHostKey(let hostKey) {
+                    known.trust(host: host, port: port, key: hostKey)
+                } catch {}
+                probe.disconnect()
+                print("dev peer key: test server known=\(!known.allEntries.isEmpty)")
+                agentSocket.pinned = true
+                agentSocket.start(enabled: true, hardwareOnly: true, agent: store.agent, knownHosts: known)
+                print("dev peer key: ready, limited to \(store.peerHosts(of: identity) ?? []), socket \(agentSocket.state)")
+                try? await Task.sleep(nanoseconds: 14_000_000_000)
+                await store.deleteKey(identity)
+                print("dev peer key: deleted, keys left=\(store.identities.count)")
+            } catch {
+                print("dev peer key: FAILED \(error)")
+            }
+            return
+        }
         // BSNS_DEV_AGENT_SOCKET=1 serves the agent socket for this run without
         // touching the saved settings; =all also offers software keys.
         if let mode = env["BSNS_DEV_AGENT_SOCKET"], !mode.isEmpty {

@@ -33,6 +33,9 @@ final class MachineBoard {
     /// A window started waiting (work stopped, or it rang the bell).
     @ObservationIgnored var onAttention: ((Machine, TmuxOverview.Window) -> Void)?
 
+    /// Machines the user chose to stop watching; these are not picked up again
+    /// automatically.
+    @ObservationIgnored private(set) var paused: Set<String> = []
     @ObservationIgnored private var channels: [String: SSHExecSession] = [:]
     @ObservationIgnored private var polls: [String: Task<Void, Never>] = [:]
     private static let interval: UInt64 = 3_000_000_000
@@ -62,6 +65,7 @@ final class MachineBoard {
     func watch(_ id: String, agent: Agent, knownHosts: KnownHosts, keyBlob: Data?) {
         guard let machine = machines.first(where: { $0.id == id }), let host = machine.host,
               polls[id] == nil, machine.state != .connecting else { return }
+        paused.remove(id)
         update(id) { $0.state = .connecting }
         polls[id] = Task { [weak self] in
             let channel = SSHExecSession()
@@ -111,6 +115,23 @@ final class MachineBoard {
         }
     }
     #endif
+
+    /// Stop at the user's request, and stay stopped.
+    func pause(_ id: String) {
+        paused.insert(id)
+        stop(id)
+    }
+
+    /// Watch every machine that can be watched without asking the user for
+    /// anything — `keyFor` returns a key only for hosts whose key signs
+    /// unattended. Called now and then, so a dropped connection comes back.
+    func watchUnattended(agent: Agent, knownHosts: KnownHosts, keyFor: (SavedHost) -> Data?) {
+        for machine in machines {
+            guard let host = machine.host, !paused.contains(machine.id), polls[machine.id] == nil,
+                  machine.state != .connecting, let key = keyFor(host) else { continue }
+            watch(machine.id, agent: agent, knownHosts: knownHosts, keyBlob: key)
+        }
+    }
 
     func stop(_ id: String) {
         polls[id]?.cancel()

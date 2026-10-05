@@ -14,7 +14,7 @@ public enum SSHAgentMessageType: UInt8, Sendable {
 /// One use of a key, for the audit trail. Records what was asked and how it
 /// ended — never the data that was signed.
 public struct AgentAuditEvent: Sendable, Codable, Equatable {
-    public enum Outcome: String, Sendable, Codable { case signed, declined, failed }
+    public enum Outcome: String, Sendable, Codable { case signed, declined, failed, refused }
     public var date: Date
     public var keyFingerprint: String
     public var keyComment: String
@@ -59,7 +59,9 @@ public actor Agent {
             auditor?(event)
             return signature
         } catch {
-            if case KeyBackendError.userCancelled = error { event.outcome = .declined } else { event.outcome = .failed }
+            if case KeyBackendError.userCancelled = error { event.outcome = .declined }
+            else if case KeyBackendError.notPermitted = error { event.outcome = .refused }
+            else { event.outcome = .failed }
             auditor?(event)
             throw error
         }
@@ -130,7 +132,8 @@ public actor Agent {
                 let rsaAlg: RSASignatureAlgorithm = (flags & 0x04) != 0 ? .sha512
                     : (flags & 0x02) != 0 ? .sha256 : .sha1
                 let ctx = SignContext(host: context.host, purpose: context.purpose, rsaAlgorithm: rsaAlg,
-                                      requester: context.requester, user: context.user)
+                                      requester: context.requester, user: context.user,
+                                      hostProven: context.hostProven)
                 let signature = try await sign(publicKeyBlob: keyBlob, data: data, context: ctx)
                 return SSHEncoder.build {
                     $0.writeByte(SSHAgentMessageType.signResponse.rawValue)

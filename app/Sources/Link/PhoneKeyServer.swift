@@ -170,7 +170,9 @@ final class PhoneKeyServer {
             let frame = try await connection.receive()
             let request = try LinkRequest(decoding: try accepted.session.open(frame))
             let asker = "\(request.requester ?? "A program") on \(computer)"
-            let context = SignContext(host: request.host, purpose: .remoteAgent, requester: asker, user: request.user)
+            // The host is the computer's word for it — shown, never relied on.
+            let context = SignContext(host: request.host, purpose: .remoteAgent, requester: asker, user: request.user,
+                                      hostProven: false)
             let answer = await agent.handleAgentMessage(request.agentPayload, context: context, exposing: exposed)
             try await connection.send(try accepted.session.seal(answer))
         }

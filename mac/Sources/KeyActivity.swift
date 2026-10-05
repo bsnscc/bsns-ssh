@@ -93,7 +93,9 @@ final class AgentSocketController {
         var names: [Data: String] = [:]
         for (identifier, key) in knownHosts.allEntries { names[key.blob] = identifier }
         let lookup = names
-        let presenceOnly: @Sendable (any KeyBackend) -> Bool = { $0.requiresUserPresence }
+        // Keys that ask every time, and automation keys — which refuse anything
+        // but a login provably bound to one of their hosts.
+        let presenceOnly: @Sendable (any KeyBackend) -> Bool = { $0.requiresUserPresence || $0 is ScopedKey }
         let server = AgentSocketServer(agent: agent, exposing: hardwareOnly ? presenceOnly : nil,
                                        hostName: { blob in lookup[blob] })
         do {
