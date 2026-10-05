@@ -17,6 +17,23 @@ packages:
   CMosh:
     path: ../app/vendor/mosh
 targets:
+  # `bsns ask` / `bsns notify`: the command-line way in for scripts. Shipped
+  # inside the app, beside its main executable.
+  bsns:
+    type: tool
+    platform: macOS
+    sources:
+      - path: CLI
+    settings:
+      base:
+        PRODUCT_NAME: bsns
+        PRODUCT_BUNDLE_IDENTIFIER: cc.bsns.ssh.mac.cli
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 4L394FY4WC
+        CODE_SIGN_IDENTITY: "Apple Development"
+        ENABLE_HARDENED_RUNTIME: YES
+        SKIP_INSTALL: YES
   BsnsSSHMac:
     type: application
     platform: macOS
@@ -76,7 +93,20 @@ targets:
         group: Shared/Settings
       - path: ../app/Sources/Settings/Snippets.swift
         group: Shared/Settings
+    # The command-line tool rides inside the app, beside its main executable
+    # (copied with its own signature, before the app itself is signed).
+    postCompileScripts:
+      - name: Embed bsns
+        script: |
+          cp -f "${BUILT_PRODUCTS_DIR}/bsns" "${BUILT_PRODUCTS_DIR}/${EXECUTABLE_FOLDER_PATH}/bsns"
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/bsns
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(EXECUTABLE_FOLDER_PATH)/bsns
     dependencies:
+      - target: bsns
+        embed: false
+        link: false
       - package: bsns-ssh
         product: BsnsSSHCore
       - package: SwiftTerm

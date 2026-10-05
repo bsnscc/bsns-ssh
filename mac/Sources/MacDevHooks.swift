@@ -1,6 +1,7 @@
 #if DEBUG
 import Foundation
 import AppKit
+import CloudKit
 import BsnsSSHCore
 
 /// Headless integration hooks, driven by environment variables and compiled
@@ -76,6 +77,54 @@ enum MacDevHooks {
                 try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
                 print("dev snapshot: saved \(Int(frameView.bounds.width))x\(Int(frameView.bounds.height))")
             }
+        }
+        // BSNS_DEV_ASK_ANSWER=<choice>: stand in for the person — two seconds
+        // after a question appears, answer it with that choice (questions whose
+        // text contains "nobody" or "goes away" are left alone), and report
+        // what the inbox sees.
+        if let choice = env["BSNS_DEV_ASK_ANSWER"] {
+            Task { @MainActor in
+                var seen: Set<UUID> = []
+                var lastCount = -1
+                while true {
+                    let center = AskCenter.shared
+                    if center.pending.count != lastCount {
+                        lastCount = center.pending.count
+                        print("dev ask: pending=\(lastCount) history=\(center.history.count) \(center.pending.map { "[\($0.source ?? "?")] \($0.text) \($0.options)" }.joined(separator: "; "))")
+                    }
+                    for ask in center.pending where !seen.contains(ask.id) && Date().timeIntervalSince(ask.created) >= 2 {
+                        seen.insert(ask.id)
+                        if ask.text.contains("nobody") || ask.text.contains("goes away") { continue }
+                        let accepted = center.answer(AskAnswer(askID: ask.id, choice: choice))
+                        let forged = center.answer(AskAnswer(askID: ask.id, choice: "something else"))
+                        print("dev ask: answered '\(choice)' accepted=\(accepted); a second, unoffered answer accepted=\(forged)")
+                    }
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                }
+            }
+        }
+        // BSNS_DEV_CLOUD_PROBE=1: can this build reach the user's private iCloud
+        // database at all? Saves one throwaway record, reads it back, deletes it.
+        if env["BSNS_DEV_CLOUD_PROBE"] == "1" {
+            let container = CKContainer(identifier: "iCloud.cc.bsns.ssh")
+            do {
+                let status = try await container.accountStatus()
+                print("dev cloud: account status=\(status.rawValue) (1 = available)")
+                let database = container.privateCloudDatabase
+                let id = CKRecord.ID(recordName: "probe-\(UUID().uuidString)")
+                let record = CKRecord(recordType: "Relay", recordID: id)
+                record["kind"] = 9 as NSNumber
+                record["box"] = Data("probe".utf8) as NSData
+                record["to"] = "probe" as NSString
+                let saved = try await database.save(record)
+                let fetched = try await database.record(for: saved.recordID)
+                print("dev cloud: round trip ok, box=\((fetched["box"] as? Data).map { String(decoding: $0, as: UTF8.self) } ?? "?")")
+                _ = try await database.deleteRecord(withID: saved.recordID)
+                print("dev cloud: probe record deleted")
+            } catch {
+                print("dev cloud: FAILED \(error)")
+            }
+            return
         }
         // BSNS_DEV_WORKSPACE="name|path|status command": add that workspace (the
         // test removes workspaces.json afterwards).

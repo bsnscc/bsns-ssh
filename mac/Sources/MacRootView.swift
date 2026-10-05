@@ -13,7 +13,8 @@ struct MacRootView: View {
     @Environment(SyncStore.self) private var sync
     @Environment(SessionHandoffStore.self) private var handoff
 
-    private enum Place: Hashable { case connect, keys, machines, workspaces }
+    private enum Place: Hashable { case connect, keys, machines, workspaces, inbox }
+    @State private var asks = AskCenter.shared
     @Environment(MachineBoard.self) private var machines
     @State private var place: Place = MacRootView.initialPlace
 
@@ -25,6 +26,7 @@ struct MacRootView: View {
         case "keys": return .keys
         case "machines": return .machines
         case "workspaces": return .workspaces
+        case "inbox": return .inbox
         default: break
         }
         #endif
@@ -46,6 +48,11 @@ struct MacRootView: View {
                     row(machines.waitingCount == 0 ? "Machines" : "Machines (\(machines.waitingCount) waiting)",
                         systemImage: "square.stack.3d.up", selected: sessions.activeID == nil && place == .machines) {
                         place = .machines
+                        sessions.goHome()
+                    }
+                    row(asks.pending.isEmpty ? "Inbox" : "Inbox (\(asks.pending.count))", systemImage: "tray",
+                        selected: sessions.activeID == nil && place == .inbox) {
+                        place = .inbox
                         sessions.goHome()
                     }
                     row("Workspaces", systemImage: "folder", selected: sessions.activeID == nil && place == .workspaces) {
@@ -78,6 +85,8 @@ struct MacRootView: View {
                 MacMachinesView()
             } else if place == .workspaces {
                 MacWorkspacesView()
+            } else if place == .inbox {
+                MacInboxView()
             } else {
                 MacConnectView()
             }

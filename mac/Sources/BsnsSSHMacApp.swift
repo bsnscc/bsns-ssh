@@ -1,6 +1,7 @@
 import SwiftUI
 import BsnsSSHCore
 import AppKit
+import UserNotifications
 
 @main
 struct BsnsSSHMacApp: App {
@@ -31,6 +32,7 @@ struct BsnsSSHMacApp: App {
         // Any mosh-server started by a previous run is orphaned (its client's
         // crypto state died with the process); let the next connect reap it.
         MoshServerRegistry.shared.markAllAbandonedFromPreviousRun()
+        UNUserNotificationCenter.current().delegate = AskNotificationDelegate.shared
     }
 
     var body: some Scene {
@@ -74,6 +76,8 @@ struct BsnsSSHMacApp: App {
                     machines.onAttention = { machine, window in AttentionNotifier.shared.announce(window, on: machine) }
                     machines.sync(hosts: hosts.hosts, localName: Host.current().localizedName ?? "This Mac")
                     machines.watchLocal()
+                    // Programs on this Mac can now ask and notify (`bsns ask …`).
+                    AskCenter.shared.start()
                     watchMachinesUnattended()
                     handoff.publish(sessionRestore.sessions, sync: sync)
                     await handoff.refresh(sync: sync)
@@ -132,8 +136,8 @@ struct BsnsSSHMacApp: App {
         MenuBarExtra {
             MacMenuBarContent(board: machines, sessions: sessions, surfaces: surfaces, store: store, knownHosts: knownHosts)
         } label: {
-            Label(machines.waitingCount == 0 ? "bsns.SSH" : "\(machines.waitingCount)",
-                  systemImage: machines.waitingCount == 0 ? "terminal" : "terminal.fill")
+            let waiting = machines.waitingCount + AskCenter.shared.pending.count
+            Label(waiting == 0 ? "bsns.SSH" : "\(waiting)", systemImage: waiting == 0 ? "terminal" : "terminal.fill")
                 .labelStyle(.titleAndIcon)
         }
 

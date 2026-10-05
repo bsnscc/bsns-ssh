@@ -12,6 +12,19 @@ struct MacMenuBarContent: View {
     let knownHosts: KnownHostsStore
 
     var body: some View {
+        // Questions come first: something is blocked until they are answered.
+        let asks = AskCenter.shared.pending
+        if !asks.isEmpty {
+            Section("Waiting for an Answer") {
+                ForEach(asks) { ask in
+                    Menu("\(ask.source ?? ask.machine): \(ask.text)") {
+                        ForEach(ask.options, id: \.self) { option in
+                            Button(option) { AskCenter.shared.answer(AskAnswer(askID: ask.id, choice: option)) }
+                        }
+                    }
+                }
+            }
+        }
         let live = board.machines.filter { $0.overview != nil }
         if live.isEmpty {
             Text("No machines being watched")
