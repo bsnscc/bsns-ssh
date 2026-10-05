@@ -20,6 +20,13 @@ struct MacConnectView: View {
     @State private var presence = HostPresence()
     @State private var keyID: String?
     @State private var busy = false
+    /// The account's password on the server, typed for one use: putting the
+    /// chosen key on a server that has no key of yours yet. Never stored.
+    @State private var serverPassword = ""
+    @State private var notice: String?
+    /// What to carry on with once a new host key has been trusted.
+    @State private var afterTrust: AfterTrust = .connect
+    private enum AfterTrust { case connect, installKey }
     @State private var error: String?
     @State private var pendingHostKey: HostKey?
 
@@ -46,9 +53,9 @@ struct MacConnectView: View {
         .alert("Trust this host?", isPresented: Binding(get: { pendingHostKey != nil },
                                                         set: { if !$0 { pendingHostKey = nil } }),
                presenting: pendingHostKey) { key in
-            Button("Trust and Connect") {
+            Button(afterTrust == .installKey ? "Trust and Install Key" : "Trust and Connect") {
                 if let portValue { knownHosts.trust(host: host, port: portValue, key: key) }
-                connect()
+                if afterTrust == .installKey { installKey() } else { connect() }
             }
             Button("Cancel", role: .cancel) { }
         } message: { key in
@@ -133,6 +140,18 @@ struct MacConnectView: View {
             } footer: {
                 Text("With a tmux session named, the connection attaches to it (creating it the first time), so reconnecting — after sleep, a network change or relaunching the app — returns to the same work.")
             }
+            Section {
+                SecureField("Password", text: $serverPassword, prompt: Text("Only to install your key the first time"))
+                Button("Install Key on Server") { installKey() }
+                    .disabled(!canConnect || serverPassword.isEmpty)
+            } header: {
+                Text("First Time on This Server")
+            } footer: {
+                Text("If the server doesn't have your key yet, enter the account's password once: the key chosen above is added to the server's authorized keys, and from then on you sign in with the key. The password is used for that one step and not kept.")
+            }
+            if let notice {
+                Section { Text(notice).foregroundStyle(Brand.accent) }
+            }
             if let error {
                 Section { Text(error).foregroundStyle(.red) }
             }
@@ -150,6 +169,37 @@ struct MacConnectView: View {
         }
         .formStyle(.grouped)
         .autocorrectionDisabled()
+    }
+
+    /// Add the chosen key to the server's authorized keys, signing in with the
+    /// password just this once.
+    private func installKey() {
+        guard let portValue, let key = selectedKey else { return }
+        let host = host.trimmingCharacters(in: .whitespaces)
+        let user = user
+        RouteBook.shared.set(HostRoutes.parse(routesText, excluding: host), for: host)
+        error = nil
+        notice = nil
+        busy = true
+        afterTrust = .installKey
+        let known = knownHosts.knownHosts
+        let secret = serverPassword
+        let line = authorizedKeysLine(key)
+        Task {
+            do {
+                try await SSHShell.installPublicKeys([line], host: host, port: portValue, user: user,
+                                                     password: secret, knownHosts: known)
+                busy = false
+                serverPassword = ""
+                notice = "Your key is on \(host). Connect signs in with it from now on."
+            } catch SSHShellError.unknownHostKey(let hostKey) {
+                busy = false
+                pendingHostKey = hostKey
+            } catch {
+                busy = false
+                self.error = TerminalSession.describe(error)
+            }
+        }
     }
 
     private func fill(_ saved: SavedHost) {
@@ -206,6 +256,8 @@ struct MacConnectView: View {
         RouteBook.shared.set(HostRoutes.parse(routesText, excluding: host), for: host)
         error = nil
         busy = true
+        afterTrust = .connect
+        notice = nil
         let known = knownHosts.knownHosts
         let agent = store.agent
         let tmux = MoshBootstrap.sanitizedTmuxName(tmuxSession)
