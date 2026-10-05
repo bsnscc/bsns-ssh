@@ -15,7 +15,20 @@ struct MacRootView: View {
 
     private enum Place: Hashable { case connect, keys, machines }
     @Environment(MachineBoard.self) private var machines
-    @State private var place: Place = .connect
+    @State private var place: Place = MacRootView.initialPlace
+
+    /// BSNS_DEV_PLACE=keys|machines (debug builds) opens on that screen, for
+    /// looking at it without clicking.
+    private static var initialPlace: Place {
+        #if DEBUG
+        switch ProcessInfo.processInfo.environment["BSNS_DEV_PLACE"] {
+        case "keys": return .keys
+        case "machines": return .machines
+        default: break
+        }
+        #endif
+        return .connect
+    }
 
     var body: some View {
         NavigationSplitView {

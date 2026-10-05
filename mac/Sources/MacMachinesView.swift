@@ -71,7 +71,7 @@ struct MacMachinesView: View {
 
     private func row(_ window: TmuxOverview.Window, on machine: MachineBoard.Machine, now: Int) -> some View {
         let attention = machine.attention(for: window)
-        let openable = MoshBootstrap.sanitizedTmuxName(window.session) == window.session
+        let openable = MachineActions.canOpen(window)
         return HStack(spacing: 10) {
             Circle().fill(color(of: attention)).frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
@@ -95,7 +95,8 @@ struct MacMachinesView: View {
     }
 
     private func caption(_ window: TmuxOverview.Window, attention: AttentionTracker.State, now: Int) -> String {
-        let what = window.command.isEmpty ? "" : "\(window.command) · "
+        // A window named after its program would otherwise say so twice.
+        let what = window.command.isEmpty || window.command == window.name ? "" : "\(window.command) · "
         switch attention {
         case .working: return what + "working"
         case .waiting(let since): return what + "waiting for you · \(MachineBoard.span(now - since))"
@@ -105,45 +106,61 @@ struct MacMachinesView: View {
 
     // MARK: actions
 
-    private func key(for host: SavedHost) -> Data? {
+    private func watch(_ machine: MachineBoard.Machine) {
+        guard let host = machine.host else { return }
+        AttentionNotifier.shared.prepare()
+        board.watch(machine.id, agent: store.agent, knownHosts: knownHosts.knownHosts,
+                    keyBlob: MachineActions.key(for: host, store: store))
+    }
+
+    private func open(_ window: TmuxOverview.Window, on machine: MachineBoard.Machine) {
+        MachineActions.open(window, on: machine, board: board, sessions: sessions, surfaces: surfaces,
+                            store: store, knownHosts: knownHosts)
+    }
+}
+
+@MainActor
+enum MachineActions {
+    static func key(for host: SavedHost, store: AgentStore) -> Data? {
         guard let wanted = host.keyID else { return nil }
         return store.identities.first { SSHKeyFormat.fingerprint(ofPublicKeyBlob: $0.blob) == wanted }?.blob
     }
 
-    private func watch(_ machine: MachineBoard.Machine) {
-        guard let host = machine.host else { return }
-        AttentionNotifier.shared.prepare()
-        board.watch(machine.id, agent: store.agent, knownHosts: knownHosts.knownHosts, keyBlob: key(for: host))
+    static func canOpen(_ window: TmuxOverview.Window) -> Bool {
+        MoshBootstrap.sanitizedTmuxName(window.session) == window.session
     }
 
     /// Bring a window up in this app: its tmux session attached in a tab, with
     /// that window current.
-    private func open(_ window: TmuxOverview.Window, on machine: MachineBoard.Machine) {
+    static func open(_ window: TmuxOverview.Window, on machine: MachineBoard.Machine, board: MachineBoard,
+                     sessions: SessionStore, surfaces: MacSurfaceCache, store: AgentStore, knownHosts: KnownHostsStore) {
+        guard canOpen(window) else { return }
         board.acknowledge(machine: machine.id, window: window.id)
         Task {
             await board.selectWindow(machine: machine.id, session: window.session, index: window.index)
+            let title = "\(machine.name) · \(window.session)"
+            if let existing = sessions.sessions.first(where: { $0.title == title }) {
+                sessions.activate(existing)
+                return
+            }
             if let host = machine.host {
-                if let existing = sessions.sessions.first(where: {
-                    !$0.isLocal && $0.spec.host == host.host && $0.spec.user == host.user && $0.spec.tmuxSession == window.session
-                }) {
-                    sessions.activate(existing)
-                    return
-                }
                 let port = UInt16(clamping: host.port)
                 let useMosh = host.useMosh ?? false
                 let spec = TerminalSession.Spec(host: host.host, port: port, user: host.user, agent: store.agent,
                                                 knownHosts: knownHosts.knownHosts, useMosh: useMosh,
-                                                keyBlob: key(for: host), tmuxSession: window.session)
-                let session = TerminalSession(spec: spec, title: "\(machine.name) · \(window.session)")
+                                                keyBlob: key(for: host, store: store), tmuxSession: window.session)
+                let session = TerminalSession(spec: spec, title: title)
                 session.restorable = RestorableSession(id: session.id, title: session.title, host: host.host, port: port,
                                                        user: host.user, useMosh: useMosh, keyBlob: spec.keyBlob,
                                                        tmuxSession: window.session)
                 sessions.add(session)
                 session.start()
             } else {
-                let session = LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store)
-                // The name was checked against the shell-safe set before Open was offered.
-                session.runCommand("tmux attach -t =\(window.session)")
+                // This Mac: the tab is tmux itself, not a shell with tmux typed
+                // into it. The name was checked against the shell-safe set above.
+                LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store,
+                                        // Quoted: zsh would otherwise read a leading "=" as "the path of this command".
+                                        command: "exec tmux attach -t '=\(window.session)'", title: title)
             }
         }
     }

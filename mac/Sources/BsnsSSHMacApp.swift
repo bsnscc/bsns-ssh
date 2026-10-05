@@ -116,6 +116,15 @@ struct BsnsSSHMacApp: App {
             }
         }
 
+        // Always there, so waiting work is visible without the window.
+        MenuBarExtra {
+            MacMenuBarContent(board: machines, sessions: sessions, surfaces: surfaces, store: store, knownHosts: knownHosts)
+        } label: {
+            Label(machines.waitingCount == 0 ? "bsns.SSH" : "\(machines.waitingCount)",
+                  systemImage: machines.waitingCount == 0 ? "terminal" : "terminal.fill")
+                .labelStyle(.titleAndIcon)
+        }
+
         Settings {
             MacSettingsView()
                 .environment(store)

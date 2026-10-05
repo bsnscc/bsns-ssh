@@ -33,7 +33,7 @@ final class LocalShell: TerminalTransport, LocalProcessDelegate {
     private var process: LocalProcess?
     private var size = winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0)
     private var stopped = false
-    private var pendingSpawn: (agentSocket: String?, directory: String?)?
+    private var pendingSpawn: (agentSocket: String?, directory: String?, command: String?)?
 
     /// Start the user's login shell in `directory` (their home when nil).
     /// `agentSocket` is the app's agent, when it is being served: ssh and git
@@ -43,16 +43,19 @@ final class LocalShell: TerminalTransport, LocalProcessDelegate {
     /// reports (or shortly after, if none comes): a shell started at a guessed
     /// size draws its first prompt for the wrong width, which leaves debris on
     /// the first line once the real size arrives.
-    func start(cols: Int32, rows: Int32, agentSocket: String?, directory: String? = nil) {
+    ///
+    /// With `command`, the login shell runs just that and exits with it — the
+    /// user's profile still applies, so their PATH finds the program.
+    func start(cols: Int32, rows: Int32, agentSocket: String?, directory: String? = nil, command: String? = nil) {
         lock.withLock {
             size = winsize(ws_row: UInt16(clamping: rows), ws_col: UInt16(clamping: cols), ws_xpixel: 0, ws_ypixel: 0)
-            pendingSpawn = (agentSocket, directory)
+            pendingSpawn = (agentSocket, directory, command)
         }
         queue.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.spawnIfPending() }
     }
 
     private func spawnIfPending() {
-        let config: (agentSocket: String?, directory: String?)? = lock.withLock {
+        let config: (agentSocket: String?, directory: String?, command: String?)? = lock.withLock {
             defer { pendingSpawn = nil }
             return stopped ? nil : pendingSpawn
         }
@@ -76,7 +79,7 @@ final class LocalShell: TerminalTransport, LocalProcessDelegate {
         let process = LocalProcess(delegate: self, dispatchQueue: queue)
         lock.withLock { self.process = process }
         // A leading dash in argv[0] is what makes it a login shell.
-        process.startProcess(executable: shell, args: [], environment: environment,
+        process.startProcess(executable: shell, args: config.command.map { ["-c", $0] } ?? [], environment: environment,
                              execName: "-" + (shell as NSString).lastPathComponent,
                              currentDirectory: start)
     }
@@ -164,7 +167,8 @@ final class LocalShell: TerminalTransport, LocalProcessDelegate {
             onCleanExit?()
             onClosed?(nil)
         } else {
-            onClosed?(exitCode.map { "The shell exited with status \($0)." } ?? "The shell ended.")
+            // What arrives is the raw wait status; the exit code is its high byte.
+            onClosed?(exitCode.map { "Exited with status \(($0 >> 8) & 0xff)." } ?? "The shell ended.")
         }
     }
 }
@@ -179,10 +183,14 @@ enum LocalShellLauncher {
 
     /// Open a new local shell tab — in the directory of the local tab being
     /// looked at, if there is one, as a new terminal tab usually does.
+    ///
+    /// With `command` the tab runs that instead of an interactive shell, titled
+    /// `title`, and closes when it ends.
     @discardableResult
-    static func open(sessions: SessionStore, surfaces: MacSurfaceCache, store: AgentStore) -> TerminalSession {
-        let name = (LocalShell.loginShell() as NSString).lastPathComponent
-        let directory = sessions.active.flatMap { shells[$0.id]?.currentDirectory() }
+    static func open(sessions: SessionStore, surfaces: MacSurfaceCache, store: AgentStore,
+                     command: String? = nil, title: String? = nil) -> TerminalSession {
+        let name = title ?? (LocalShell.loginShell() as NSString).lastPathComponent
+        let directory = command == nil ? sessions.active.flatMap { shells[$0.id]?.currentDirectory() } : nil
         let spec = TerminalSession.Spec(host: "localhost", port: 0, user: NSUserName(),
                                         agent: store.agent, knownHosts: KnownHosts())
         let session = TerminalSession(spec: spec, title: name)
@@ -202,13 +210,14 @@ enum LocalShellLauncher {
             let socket = AgentSocketServer.socketURL.path
             shell.start(cols: cols, rows: rows,
                         agentSocket: FileManager.default.fileExists(atPath: socket) ? socket : nil,
-                        directory: directory)
+                        directory: directory, command: command)
             Task { @MainActor in shells[id] = shell }
             return shell
         }
         sessions.add(session)
         session.start()
-        keepTitleCurrent(session, shellName: name, sessions: sessions)
+        // A tab running one named thing keeps that name.
+        if command == nil { keepTitleCurrent(session, shellName: name, sessions: sessions) }
         return session
     }
 
@@ -235,7 +244,8 @@ enum LocalShellLauncher {
 
     /// Close a tab. A local shell with something still running in it asks first.
     static func close(_ session: TerminalSession, sessions: SessionStore, surfaces: MacSurfaceCache) {
-        if let program = shells[session.id]?.foregroundProgram() {
+        // tmux carries on without the tab; nothing is lost by closing it.
+        if let program = shells[session.id]?.foregroundProgram(), program != "tmux" {
             let alert = NSAlert()
             alert.messageText = "Close this tab?"
             alert.informativeText = "\(program) is still running in it and will be stopped."

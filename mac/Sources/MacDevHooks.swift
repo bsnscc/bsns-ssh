@@ -80,12 +80,17 @@ enum MacDevHooks {
         // BSNS_DEV_LOCAL=1: open a local shell, type BSNS_DEV_RUN into it, and
         // report whether its tab is still there a few seconds later.
         if env["BSNS_DEV_LOCAL"] == "1" {
-            let session = LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store)
+            // BSNS_DEV_LOCAL_COMMAND: the tab runs this instead of a shell.
+            let session = LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store,
+                                                  command: env["BSNS_DEV_LOCAL_COMMAND"],
+                                                  title: env["BSNS_DEV_LOCAL_COMMAND"].map { _ in "dev command" })
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             print("dev local: \(session.title) status=\(session.status)")
             if let command = env["BSNS_DEV_RUN"], !command.isEmpty { session.runCommand(command) }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             print("dev local: tabs open now=\(sessions.sessions.count)")
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            print("dev local: later, tabs open=\(sessions.sessions.count)")
             return
         }
         // BSNS_DEV_HANDOFF=<folder>, optionally with BSNS_DEV_HANDOFF_PHRASE: use that folder
