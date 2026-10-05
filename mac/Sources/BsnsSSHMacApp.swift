@@ -78,6 +78,7 @@ struct BsnsSSHMacApp: App {
                     machines.watchLocal()
                     // Programs on this Mac can now ask and notify (`bsns ask …`).
                     AskCenter.shared.start()
+                    AskCenter.shared.applyRelaySetting()
                     watchMachinesUnattended()
                     handoff.publish(sessionRestore.sessions, sync: sync)
                     await handoff.refresh(sync: sync)

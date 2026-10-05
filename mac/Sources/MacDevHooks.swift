@@ -82,6 +82,13 @@ enum MacDevHooks {
         // after a question appears, answer it with that choice (questions whose
         // text contains "nobody" or "goes away" are left alone), and report
         // what the inbox sees.
+        // BSNS_DEV_RELAY_SELF=1: prove the iCloud path on this Mac alone, by
+        // pairing it with a second identity made up for the test — which stands
+        // in for the phone, reads the ask from iCloud and writes the answer.
+        if env["BSNS_DEV_RELAY_SELF"] == "1" {
+            await DevRelayLoop.run()
+            return
+        }
         if let choice = env["BSNS_DEV_ASK_ANSWER"] {
             Task { @MainActor in
                 var seen: Set<UUID> = []
@@ -363,3 +370,71 @@ enum MacDevHooks {
     }
 }
 #endif
+
+/// A stand-in phone for testing the iCloud relay with one Mac: it holds its
+/// own link identity, is "paired" with this Mac for the run, and uses the same
+/// record names and sealing a real phone would.
+@MainActor
+enum DevRelayLoop {
+    static func run() async {
+        let database = CKContainer(identifier: CloudRelay.containerID).privateCloudDatabase
+        let phone = LinkIdentity()
+        let mac = LinkStore.shared.identity
+        let phonePeer = LinkPeer(publicKey: phone.publicKey, name: "test phone")
+        LinkStore.shared.add(phonePeer)
+        defer { LinkStore.shared.remove(phonePeer.id) }
+        guard let phoneChannel = try? RelayChannel(identity: phone, peer: LinkPeer(publicKey: mac.publicKey, name: "mac")) else { return }
+        UserDefaults.standard.set(true, forKey: AskCenter.relayKey)
+        AskCenter.shared.applyRelaySetting()
+        defer { UserDefaults.standard.removeObject(forKey: AskCenter.relayKey); AskCenter.shared.applyRelaySetting() }
+
+        let ask = Ask(text: "Deploy integration to prod?", options: ["approve", "rollback"], machine: AskCenter.machineName, source: "relay test", lifetime: 120)
+        let started = Date()
+        async let outcome = AskCenter.shared.ask(ask)
+
+        // The "phone": wait for the sealed ask to appear in iCloud, open it, answer.
+        let askID = CKRecord.ID(recordName: RelayChannel.recordName(.ask, askID: ask.id, to: phonePeer.id))
+        var received: Ask?
+        for _ in 0..<30 {
+            if let record = try? await database.record(for: askID), let box = record["box"] as? Data {
+                received = try? phoneChannel.open(box, as: .ask)
+                print("dev relay: phone found the ask in iCloud after \(String(format: "%.1f", Date().timeIntervalSince(started)))s; stored bytes readable as text: \(String(data: box, encoding: .utf8)?.contains("Deploy") ?? false)")
+                break
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        // What a phone does to find its asks and to be told about new ones:
+        // a query and a subscription on "to" and "kind". Both need indexes.
+        do {
+            let predicate = NSPredicate(format: "to == %@ AND kind == %d", phonePeer.id, Int(RelayChannel.Kind.ask.rawValue))
+            let (results, _) = try await database.records(matching: CKQuery(recordType: CloudRelay.recordType, predicate: predicate), resultsLimit: 10)
+            print("dev relay: query for the phone's asks found \(results.count)")
+            let subscription = CKQuerySubscription(recordType: CloudRelay.recordType, predicate: predicate,
+                                                   subscriptionID: "dev-probe", options: [.firesOnRecordCreation])
+            let info = CKSubscription.NotificationInfo()
+            info.alertBody = "probe"
+            subscription.notificationInfo = info
+            _ = try await database.save(subscription)
+            _ = try await database.deleteSubscription(withID: "dev-probe")
+            print("dev relay: subscription saved and removed")
+        } catch {
+            print("dev relay: query/subscription FAILED \(error)")
+        }
+        guard let received else { print("dev relay: FAILED — the ask never appeared in iCloud"); AskCenter.shared.withdraw(ask.id); _ = await outcome; return }
+        print("dev relay: phone read: \(received.text) \(received.options)")
+        if let box = try? phoneChannel.seal(AskAnswer(askID: received.id, choice: "approve"), as: .answer) {
+            let answer = CKRecord(recordType: CloudRelay.recordType,
+                                  recordID: CKRecord.ID(recordName: RelayChannel.recordName(.answer, askID: received.id, to: mac.deviceID)))
+            answer["to"] = mac.deviceID as NSString
+            answer["kind"] = NSNumber(value: RelayChannel.Kind.answer.rawValue)
+            answer["box"] = box as NSData
+            do { _ = try await database.save(answer) } catch { print("dev relay: answer save FAILED \(error)") }
+        }
+        let result = await outcome
+        print("dev relay: the Mac got \(result) after \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
+        try? await Task.sleep(nanoseconds: 4_000_000_000)
+        let left = (try? await database.record(for: askID)) != nil
+        print("dev relay: ask record still in iCloud afterwards: \(left)")
+    }
+}
+

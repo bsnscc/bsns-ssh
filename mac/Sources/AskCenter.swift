@@ -30,11 +30,44 @@ final class AskCenter {
 
     @ObservationIgnored private var waiters: [UUID: CheckedContinuation<Outcome, Never>] = [:]
     @ObservationIgnored private var server: ControlSocketServer?
+    @ObservationIgnored private var collector: Task<Void, Never>?
     /// Passes each new question on to the user's other devices, when set.
     @ObservationIgnored var relay: (@MainActor (Ask) -> Void)?
     @ObservationIgnored var relayWithdraw: (@MainActor (Ask) -> Void)?
 
     static var machineName: String { Host.current().localizedName ?? "This Mac" }
+
+    /// Also send asks to the user's paired phone through their iCloud.
+    static let relayKey = "ask.relayThroughICloud"
+
+    /// Apply the setting: start or stop relaying.
+    func applyRelaySetting() {
+        let on = UserDefaults.standard.bool(forKey: Self.relayKey)
+        let publish: @MainActor (Ask) -> Void = { ask in
+            _ = Task<Void, Never> { await CloudRelay.shared.publish(ask) }
+        }
+        let retract: @MainActor (Ask) -> Void = { ask in
+            _ = Task<Void, Never> { await CloudRelay.shared.retract(ask) }
+        }
+        relay = on ? publish : nil
+        relayWithdraw = on ? retract : nil
+        collector?.cancel()
+        collector = nil
+        guard on else { return }
+        // While something is waiting, look for its answer every few seconds.
+        collector = Task { [weak self] in
+            while !Task.isCancelled {
+                if let self, !self.pending.isEmpty {
+                    for answer in await CloudRelay.shared.collectAnswers(for: self.pending) {
+                        if let ask = self.pending.first(where: { $0.id == answer.askID }), self.answer(answer) {
+                            await CloudRelay.shared.retract(ask)
+                        }
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+        }
+    }
 
     func start() {
         guard server == nil else { return }

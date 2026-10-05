@@ -4,6 +4,7 @@ import BsnsSSHCore
 /// Questions waiting for an answer, and what was said recently.
 struct MacInboxView: View {
     @State private var center = AskCenter.shared
+    @AppStorage(AskCenter.relayKey) private var relayThroughICloud = false
 
     var body: some View {
         List {
@@ -36,6 +37,12 @@ struct MacInboxView: View {
                         }
                     }
                 }
+            }
+            Section {
+                Toggle("Also send to my paired iPhone, through my iCloud", isOn: $relayThroughICloud)
+                    .onChange(of: relayThroughICloud) { _, _ in center.applyRelaySetting() }
+            } footer: {
+                Text("Questions and notices are sealed with the keys this Mac and the phone exchanged when you paired them, then stored in your private iCloud database so Apple can deliver a notification to the phone and Watch. Apple holds ciphertext: it can see that a message exists, which device it is for and when — not what it says. The answer comes back the same way, and can only ever be one of the options offered.")
             }
             Section {
                 Text("Anything on this Mac can ask: `bsns ask \"Deploy to prod?\" --option approve --option rollback` waits here for your answer and prints it; `bsns notify \"Build finished\"` just tells you. The `bsns` command is inside the app — link it onto your PATH with:\n`ln -sf \(AskCLI.path) /usr/local/bin/bsns`")
