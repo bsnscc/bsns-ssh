@@ -369,7 +369,6 @@ enum MacDevHooks {
         }
     }
 }
-#endif
 
 /// A stand-in phone for testing the iCloud relay with one Mac: it holds its
 /// own link identity, is "paired" with this Mac for the run, and uses the same
@@ -437,4 +436,4 @@ enum DevRelayLoop {
         print("dev relay: ask record still in iCloud afterwards: \(left)")
     }
 }
-
+#endif
