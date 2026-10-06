@@ -19,8 +19,8 @@ below are a guide, not a substitute for those texts.
 |-----------|---------|---------|-----|
 | [mosh](https://mosh.org) | 1.4.0 | **GPL-3.0-or-later** | UDP/roaming terminal transport |
 | [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) | 1.13.0 | MIT | terminal emulator / view |
-| [libssh2](https://libssh2.org) | 1.11.0 | BSD-3-Clause | SSH transport |
-| [OpenSSL](https://openssl.org) | 3.5.1 | Apache-2.0 | crypto backend for libssh2 |
+| [libssh2](https://libssh2.org) | 1.11.1 | BSD-3-Clause | SSH transport |
+| [OpenSSL](https://openssl.org) | 3.5.9 | Apache-2.0 | crypto backend for libssh2 |
 | [yubikit-swift](https://github.com/Yubico/yubikit-swift) | 1.3.0 | Apache-2.0 | YubiKey PIV over NFC / USB-C |
 | [Protocol Buffers (lite)](https://github.com/protocolbuffers/protobuf) | 3.20.3 | BSD-3-Clause | mosh wire format |
 | [swift-argument-parser](https://github.com/apple/swift-argument-parser) | 1.8.2 | Apache-2.0 | transitive (yubikit-swift) |
@@ -72,3 +72,10 @@ What this means for distribution:
   `android/jni/build-libssh2.sh` and mosh by `android/jni/build-mosh.sh`; the
   Gradle/Maven dependencies (AndroidX, Compose, Bouncy Castle, yubikit-android)
   are version-locked in per-module `android/**/gradle.lockfile`.
+
+## Native security patch set (2026-10-06)
+
+The libssh2 1.11.1 build includes the maintained backports for CVE-2025-15661,
+CVE-2026-55199, and CVE-2026-55200, followed by the existing WebAuthn signature
+patch. Both platform build recipes apply the same checked-in patch files. See
+`docs/native-dependency-audit-2026-10-06.md` for provenance and validation.

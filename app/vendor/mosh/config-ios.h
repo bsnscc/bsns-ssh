@@ -20,7 +20,8 @@
 // PRNG reads /dev/urandom (accessible from the iOS sandbox).
 #define HAVE_URANDOM 1
 #define HAVE_CFMAKERAW 1
-#define HAVE_MACH_ABSOLUTE_TIME 1
+// Supported OS versions have clock_gettime; omit the legacy boot-time fallback.
+#define HAVE_MACH_ABSOLUTE_TIME 0
 #define HAVE_OSX_SWAP 1
 #define HAVE_DECL___BUILTIN_BSWAP64 1
 #define HAVE_DECL___BUILTIN_CTZ 1

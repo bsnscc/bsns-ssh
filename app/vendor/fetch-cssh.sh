@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # DEPRECATED. We no longer fetch a prebuilt xcframework — that one linked
 # OpenSSL 1.1.1w (EOL). The CSSH xcframework is now built from source by
-# build-cssh.sh (libssh2 1.11.0 on OpenSSL 3.5.1, pinned + sha256-verified).
+# build-cssh.sh (pinned, checksum-verified libssh2 + OpenSSL with security patches).
 #
 # Run instead:
 #   vendor/build-cssh.sh

@@ -5,10 +5,10 @@
 # stack across both platforms. Output: android/jni/prebuilt/arm64-v8a/{include,lib}.
 set -euo pipefail
 
-OSSL_VER=3.5.1
-SSH2_VER=1.11.0
-OSSL_SHA=529043b15cffa5f36077a4d0af83f3de399807181d607441d734196d889b641f
-SSH2_SHA=3736161e41e2693324deb38c26cfdc3efe6209d634ba4258db1cecff6a5ad461
+OSSL_VER=3.5.9
+SSH2_VER=1.11.1
+OSSL_SHA=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+SSH2_SHA=d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7
 API=26
 
 NDK="${ANDROID_NDK_ROOT:-/opt/homebrew/share/android-commandlinetools/ndk/27.1.12297006}"
@@ -27,12 +27,18 @@ curl -fsSL "https://github.com/libssh2/libssh2/releases/download/libssh2-$SSH2_V
 # a complete signature blob), the same FIDO2/sk path the iOS build uses. Without
 # it the sk userauth packet is framed in a way OpenSSH rejects as "invalid
 # format". Shared with the iOS build (app/vendor/build-cssh.sh applies the same).
+for fix in CVE-2025-15661 CVE-2026-55199 CVE-2026-55200 sftp-status-followup; do
+  patch -p1 -d "libssh2-$SSH2_VER" < "$HERE/../../app/vendor/patches/libssh2-$fix.patch"
+done
 echo "==> applying webauthn-sk patch"
 ( cd "libssh2-$SSH2_VER" && patch -p1 < "$HERE/../../app/vendor/patches/libssh2-1.11.0-webauthn-sk.patch" )
 
 export ANDROID_NDK_ROOT="$NDK"
 export PATH="$TC/bin:$PATH"
-rm -rf "$OUT"; mkdir -p "$OUT"
+# Preserve the separately built mosh archive and header in this shared prefix.
+rm -rf "$OUT/include/openssl"
+rm -f "$OUT/lib/libcrypto.a" "$OUT/lib/libssl.a" "$OUT/lib/libssh2.a"
+mkdir -p "$OUT"
 
 echo "==> building OpenSSL (android-arm64, API $API)"
 ( cd "openssl-$OSSL_VER"

@@ -12,8 +12,8 @@ pinned versions we ship, so the obligations are auditable without chasing links.
 | mosh — App Store exception | 1.4.0 | (GPLv3 grant) | [`mosh-1.4.0-COPYING.iOS.txt`](mosh-1.4.0-COPYING.iOS.txt) |
 | Termux terminal-emulator / terminal-view | (forked) | GPL-3.0-only | [`termux-terminal-LICENSE.md`](termux-terminal-LICENSE.md) |
 | └ incorporates Android Terminal Emulator | — | Apache-2.0 | [`Apache-2.0.txt`](Apache-2.0.txt) |
-| libssh2 | 1.11.0 | BSD-3-Clause | [`libssh2-1.11.0-COPYING.txt`](libssh2-1.11.0-COPYING.txt) |
-| OpenSSL | 3.5.1 | Apache-2.0 | [`openssl-3.5.1-LICENSE.txt`](openssl-3.5.1-LICENSE.txt) |
+| libssh2 | 1.11.1 | BSD-3-Clause | [`libssh2-1.11.1-COPYING.txt`](libssh2-1.11.1-COPYING.txt) |
+| OpenSSL | 3.5.9 | Apache-2.0 | [`openssl-3.5.9-LICENSE.txt`](openssl-3.5.9-LICENSE.txt) |
 | Protocol Buffers (lite) | 3.20.3 | BSD-3-Clause | [`protobuf-3.20.3-LICENSE.txt`](protobuf-3.20.3-LICENSE.txt) |
 | Bouncy Castle (bcprov-jdk18on) | 1.78.1 | MIT-style (BC) | [`bouncycastle-1.78.1-LICENSE.txt`](bouncycastle-1.78.1-LICENSE.txt) |
 | SwiftTerm | 1.13.0 | MIT | [`../app/vendor/SwiftTerm/LICENSE`](../app/vendor/SwiftTerm/LICENSE) |
