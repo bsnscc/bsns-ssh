@@ -133,6 +133,40 @@ enum MacDevHooks {
             }
             return
         }
+        // BSNS_DEV_ECDSA_OUT=<file> with BSNS_DEV_HOST/_PORT/_USER: make an
+        // in-memory ECDSA P-256 key, write its authorized_keys line to the file,
+        // then (once the test has installed it) log in with it through the
+        // agent's signing callback — the path a Secure Enclave key takes, minus
+        // the Touch ID prompt. Also runs a command, to prove the session works.
+        if let out = env["BSNS_DEV_ECDSA_OUT"], let host = env["BSNS_DEV_HOST"], let user = env["BSNS_DEV_USER"] {
+            let port = UInt16(env["BSNS_DEV_PORT"] ?? "22") ?? 22
+            for algorithm in [KeyAlgorithm.ecdsaP256, .ed25519] {
+                guard let key = try? FileKey.generate(algorithm: algorithm, comment: "callback test") else { continue }
+                try? (authorizedKeysLine(key.publicKey) + "\n").write(toFile: out, atomically: true, encoding: .utf8)
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                let agent = Agent()
+                await agent.add(key)
+                var known = KnownHosts()
+                let probe = SSHExecSession()
+                do {
+                    try await probe.connect(host: host, port: port, user: user, agent: agent, knownHosts: known, keyBlob: nil)
+                } catch SSHShellError.unknownHostKey(let hostKey) {
+                    known.trust(host: host, port: port, key: hostKey)
+                } catch { print("dev callback: \(algorithm.rawValue) probe error \(error)") }
+                probe.close()
+                let session = SSHExecSession()
+                do {
+                    try await session.connect(host: host, port: port, user: user, agent: agent, knownHosts: known, keyBlob: key.publicKey.blob)
+                    let result = try await session.run("echo signed-in-with-\(algorithm.rawValue)")
+                    print("dev callback: \(algorithm.rawValue) OK → \(result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines))")
+                } catch {
+                    print("dev callback: \(algorithm.rawValue) FAILED \(error)")
+                }
+                session.close()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            return
+        }
         // BSNS_DEV_WORKSPACE="name|path|status command": add that workspace (the
         // test removes workspaces.json afterwards).
         if let fields = env["BSNS_DEV_WORKSPACE"]?.split(separator: "|", omittingEmptySubsequences: false), fields.count >= 2 {

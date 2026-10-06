@@ -15,7 +15,7 @@ final class TmuxOverviewTests: XCTestCase {
         let output = """
         Last login: banner noise
         w\(f)main\(f)0\(f)1\(f)0\(f)1800000090\(f)2\(f)editor\(f)nvim
-        w\(f)main\(f)1\(f)0\(f)1\(f)1800000000\(f)2\(f)odd \(f) name\(f)claude
+        w\(f)main\(f)1\(f)0\(f)1\(f)1800000000\(f)2\(f)odd \(f) name\(f)deploy
         w\(f)build\(f)3\(f)1\(f)0\(f)1799990000\(f)0\(f)\(f)zsh
         now\(f)1800000100
         load\(f) 52.31 48.02 40.77 
@@ -29,7 +29,7 @@ final class TmuxOverviewTests: XCTestCase {
         XCTAssertEqual(overview.windows.map(\.id), ["main:0", "main:1", "build:3"])
         XCTAssertEqual(overview.windows[1].name, "odd \(f) name")
         XCTAssertTrue(overview.windows[1].bell)
-        XCTAssertEqual(overview.windows[1].command, "claude")
+        XCTAssertEqual(overview.windows[1].command, "deploy")
         XCTAssertEqual(overview.windows[2].attached, 0)
     }
 
@@ -47,7 +47,7 @@ final class TmuxOverviewTests: XCTestCase {
 final class AttentionTrackerTests: XCTestCase {
     private func overview(now: Int, activity: Int, bell: Bool = false) -> TmuxOverview {
         TmuxOverview(now: now, windows: [.init(session: "main", index: 0, isActive: true, bell: bell,
-                                               lastActivity: activity, attached: 1, name: "w", command: "claude")],
+                                               lastActivity: activity, attached: 1, name: "w", command: "deploy")],
                      load: [], cpus: nil)
     }
 
