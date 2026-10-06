@@ -11,6 +11,7 @@ let package = Package(
     platforms: [.macOS(.v11), .iOS(.v14), .tvOS(.v14)],
     products: [.library(name: "SwiftTerm", targets: ["SwiftTerm"])],
     targets: [
-        .target(name: "SwiftTerm", path: "Sources/SwiftTerm", exclude: ["Mac/README.md"])
+        .target(name: "SwiftTerm", path: "Sources/SwiftTerm", exclude: ["Mac/README.md"],
+                resources: [.copy("PrivacyInfo.xcprivacy")])
     ]
 )

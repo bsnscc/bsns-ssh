@@ -273,3 +273,9 @@ multiplexer in mouse mode, a pager — there is nothing local to scroll, and the
 program never heard the wheel. The wheel is now reported to the remote in that
 case (button 4/5 at the pointer's cell, trackpad deltas accumulated into whole
 steps), and scrolls locally otherwise or with Shift held.
+
+## Privacy manifest
+
+Bundle `PrivacyInfo.xcprivacy` as a SwiftPM resource. It documents this fork's
+predictive-input preference and in-container image file-metadata access; see
+`docs/privacy-manifest-audit.md` at the repository root for release checks.

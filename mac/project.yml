@@ -42,6 +42,8 @@ targets:
       # Shared with the iOS app: the agent and key storage, the session layer and
       # both transports. Listed file by file so that anything touch-specific
       # stays out, and so that adding to this list is a deliberate act.
+      - path: ../app/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: ../app/Sources/AgentStore.swift
         group: Shared
       - path: ../app/Sources/DiagLog.swift

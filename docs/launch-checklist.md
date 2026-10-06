@@ -1,86 +1,75 @@
-# Launch checklist — bsns.SSH first public release
+# First public App Store release — 2026-10-06
 
-The ordered gates from "review passed" to "live on both stores." Engineering is
-essentially done; most of what's left needs a device or a store-console account.
-Check items off in order — each phase assumes the previous one passed.
+This checklist supersedes the June checklist. Do not carry old checked boxes
+forward as evidence for a new build. The repository is public; the candidate
+commit, version, archive, and device results must identify the same artifact.
+Android and native Mac distribution have separate release checks.
 
-Current version: **1.0** (iOS build `46` / `CURRENT_PROJECT_VERSION`, Android
-`versionName 1.0` / `versionCode 15`). The repo is already public and pushed
-(HEAD ~`c97d46e`); the remaining open items are device/store gates, not code.
+## Completed preparation
 
-Detail docs this references:
-- Android build/console steps → [`android-play-release.md`](android-play-release.md)
-- No-telemetry proof → [`no-telemetry-verification.md`](no-telemetry-verification.md)
-- Store copy + shot-list → [`store-listing.md`](store-listing.md)
-- Licenses / disclosure → [`../THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md), [`../SECURITY.md`](../SECURITY.md)
+- [x] Correct the repository privacy policy for CloudKit/push, relay metadata,
+      encrypted software-key export, diagnostics, and voluntary support reports.
+- [x] Replace obsolete store copy and prepare SSH-on-443 review notes.
+- [x] Add first-connection and shared-workspace documentation.
+- [x] Add app, notification-extension, and vendored terminal privacy manifests.
+- [x] Remove the unsupported assumption that standard encryption proves exemption;
+      record the classification decision still needed in `export-compliance.md`.
 
----
+## Required before submission
 
-## Phase 0 — Code freeze & verify
+- [ ] Freeze a reviewed candidate commit, including all intended source and host
+      helper files. Keep unrelated concurrent work out of the release artifact.
+- [ ] Record the version/build and exact source commit in the release record.
+- [ ] Pass core tests and signed Release archive validation for that candidate.
+- [ ] Inspect bundled manifests and complete `privacy-manifest-audit.md`.
+- [ ] Resolve encryption classification and align the plist/store answers.
+- [ ] Publish the updated privacy policy at the listing's URL; verify its contents.
+- [ ] Reconcile App Store privacy answers with the release's actual data flows.
+- [x] Review SSH/crypto advisories and update pinned build inputs; see
+      `native-dependency-audit-2026-10-06.md`.
+- [ ] Ensure corresponding source and dependency license texts are available for
+      the exact distributed artifact; verify the mosh App Store exception applies.
 
-- [x] All review findings closed; branch green.
-- [x] iOS: `swift test` + `xcodebuild … build` pass.
-- [x] Android: `:core:test`, `:app:testDebugUnitTest`, `:app:lintRelease`,
-      `:app:bundleRelease` pass (native prereqs built per `android/README.md`).
-- [x] Branch pushed; repo is public (`bsnscc/bsns-ssh`) at HEAD ~`c97d46e`.
+## Review environment
 
-## Phase 1 — Trust gates (do not ship the marketing claims without these)
+- [ ] Provision the dedicated VM and expose real SSH on TCP 443, with no VPN,
+      VPN, or source-IP allowlist required for review.
+- [ ] Use an unprivileged review account; no production credentials/data or sudo.
+      Give it sample files, tmux, and a harmless local service for forwarding.
+- [ ] Set credentials privately in App Store Connect. Record the expected host-key
+      fingerprint there. Keep the account available through review and follow-up.
+- [ ] Verify password SSH and SFTP from outside the developer's network.
+- [ ] Test optional key installation and mosh separately; document UDP requirements.
+- [ ] Complete the placeholders in `store-listing.md` and attach a demonstration
+      video matching the submitted build. Confirm every claim against the VM.
 
-- [ ] **No-telemetry capture on a release build**, on a real iOS device
-      (`rvictl` + `tcpdump`) and a clean Android emulator. Exercise launch →
-      idle → connect → SFTP → background → foreground. Confirm PASS criteria in
-      `no-telemetry-verification.md`; commit the destination summary next to
-      `no-telemetry-evidence-2026-06-16.md`.
-- [ ] **Privacy policy** published at `https://tools.bsns.cc/open-source/privacy`
-      (mirror of the repo's [`../PRIVACY.md`](../PRIVACY.md)) and linked from both
-      listings. Keep it distinct from the SaaS `bsns.cc/privacy`; confirm it
-      matches the "Data Not Collected" label.
-- [x] Repo flipped public (`gh repo edit bsnscc/bsns-ssh --visibility public`).
-- [ ] **GPLv3 source availability**: confirm the public repo matches exactly what
-      ships (the App Store/Play binary's corresponding source) at the tagged
-      release commit.
-- [ ] `SECURITY.md` disclosure path works (GitHub "Report a vulnerability"
-      enabled on the repo settings).
+## Clean-device acceptance
 
-## Phase 2 — Store assets
+Use a clean physical iPhone and an iPad, not only an existing configured install.
+Record build, OS, steps, actual result, and any limitation for each item.
 
-- [ ] Screenshots on real devices, dark mode, per the shot-list in
-      `store-listing.md` — **live-terminal hero first**. Sizes: iPhone 6.9"+6.5",
-      iPad 13", Android phone + tablet. No real hostnames/keys/tokens on screen.
-- [ ] Verify the **app icon is legible at launcher size** on a real home
-      screen / launcher before using it for store assets.
-- [ ] Listing copy pasted from `store-listing.md` (name, subtitle/short desc,
-      keywords, description, what's-new) into both consoles.
+- [ ] First launch, password SSH on 443, host trust, key setup, and reconnect.
+- [ ] Changed-host-key refusal and wrong-credential errors.
+- [ ] SFTP upload/download, local forwarding, and supported jump-host behavior.
+- [ ] Keyboard show/hide, search, rotation, hardware keyboard, and readable layouts.
+- [ ] Background/foreground, Wi-Fi/cellular changes, and optional mosh recovery.
+- [ ] Import older configuration, encrypted sync between current devices, and
+      hardware-key non-exportability. Finish the new workspace sync exercise.
+- [ ] Cloud relay on a production entitlement/schema, extension delivery while
+      backgrounded, notification denial, offline expiry, and iCloud unavailable.
+- [ ] Optional hardware-key features demonstrated on real hardware.
+- [ ] Redacted network-capture evidence for optional features and baseline launch.
+- [ ] Screenshots and accessibility claims match demonstrated release behavior.
 
-## Phase 3 — Legal / account prerequisites
+## Store and support
 
-- [ ] App Store Connect: app record created; privacy labels = Data Not Collected;
-      encryption set to exempt (`ITSAppUsesNonExemptEncryption: false` is already
-      in `project.yml`).
-- [ ] Play Console: Data safety form = no data collected/shared; GPLv3 handling
-      per `android-play-release.md` § Licensing; content rating, target audience,
-      and the remaining manual console steps in that doc.
+- [ ] Verify privacy/support URLs, review contact, price, availability, age rating,
+      and any applicable account/trader requirements in App Store Connect.
+- [x] Enable and verify the private vulnerability-reporting route in `SECURITY.md`.
+- [ ] Create a tagged source release with build instructions and known limitations.
+- [x] Set manual release for the staged iOS version; see
+      `app-store-draft-2026-10-06.md` for the verified draft state.
+- [ ] Submit the verified build. Record approval and release separately.
 
-## Phase 4 — Build & submit
-
-- [x] Version set to **1.0**: `MARKETING_VERSION 1.0` + `CURRENT_PROJECT_VERSION 46`
-      in `app/project.yml`; `versionName 1.0` + `versionCode 15` in
-      `android/app/build.gradle.kts`.
-- [ ] iOS: archive the **Release** config, upload to App Store Connect, submit
-      for review (TestFlight first if you want a final on-device pass).
-- [ ] Android: `./gradlew :app:bundleRelease` → upload the signed `.aab`, roll
-      out to internal testing, then production review.
-- [ ] Tag the release commit `v1.0` once both artifacts are uploaded.
-
-## Phase 5 — After approval
-
-- [ ] Confirm repo is public and source matches the approved builds.
-- [ ] Announce (operator-founder voice; the app is a bsns.cc brand vehicle —
-      lead with privacy/hardware-keys/no-telemetry, not a feature list).
-- [ ] Watch the `SECURITY.md` advisory inbox and store reviews for the first
-      days.
-
----
-
-_First impression is one-shot: Phase 2's hero screenshot and the icon's
-launcher legibility carry the listing — don't ship them rushed._
+Current blockers are deliberately unchecked. A successful upload or simulator
+build is not evidence that physical-device, policy, or review-access gates passed.

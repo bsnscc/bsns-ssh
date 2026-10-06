@@ -33,9 +33,9 @@ GitHub profile that owns this repository.
 
 ## Scope
 
-In scope: the iOS and Android apps and the shared transport/crypto code in this
+In scope: the iOS, iPadOS, macOS, and Android apps and the shared transport/crypto code in this
 repository — key handling, host-key verification, the SSH/mosh transports,
-ProxyJump, config import/sync, and the agent.
+ProxyJump, config import/sync, paired-device messages, and the agent.
 
 Out of scope: vulnerabilities in your own servers, in third-party SSH servers,
 or in the upstream dependencies themselves (report those upstream — though we
@@ -72,8 +72,9 @@ So you know the baseline a report would be measured against:
   refused, not silently accepted. ProxyJump verifies the bastion's own key
   before authenticating to it, and the bastion is key/agent-authenticated only.
 - **No telemetry.** The app makes no analytics, crash-reporting, or
-  phone-home connections. It talks only to the SSH/mosh hosts (and any ProxyJump
-  bastion) you configure. See [`docs/no-telemetry-verification.md`](docs/no-telemetry-verification.md).
+  phone-home collection connections. Network features include configured hosts,
+  optional encrypted sync, direct paired-device signing, and optional encrypted
+  CloudKit message relay with Apple push delivery. See [`docs/no-telemetry-verification.md`](docs/no-telemetry-verification.md).
 - **Current, pinned crypto, built reproducibly.** OpenSSL 3.5 + libssh2 1.11,
   compiled from pinned, sha256-verified source on both platforms; dependencies
   are version-locked.

@@ -13,7 +13,7 @@ packages:
     path: vendor/SwiftTerm
   CSSH:
     # Vendored locally (vendor/CSSH/CSSH.xcframework), built from source by
-    # vendor/build-cssh.sh — libssh2 1.11.0 on OpenSSL 3.5.1, pinned + sha256-
+    # vendor/build-cssh.sh — libssh2 1.11.1 on OpenSSL 3.5.9, pinned + sha256-
     # verified. Referenced by path; the xcframework itself is gitignored.
     path: vendor/CSSH
   YubiKit:
@@ -70,6 +70,8 @@ targets:
     platform: iOS
     sources:
       - Sources
+      - path: PrivacyInfo.xcprivacy
+        buildPhase: resources
     dependencies:
       - target: BsnsNotify
       - package: bsns-ssh
@@ -125,8 +127,8 @@ targets:
           - A0000006472F0001
           - A0000005272101
           - A000000308
-        # Ships only standard/exempt encryption (SSH via OpenSSL) — declare it
-        # so App Store Connect never re-asks the encryption questionnaire.
+        # Existing declaration: verify the classification before public release.
+        # See docs/export-compliance.md; standard algorithms alone do not prove exemption.
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:

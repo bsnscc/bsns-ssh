@@ -2,7 +2,8 @@
 
 bsns.SSH claims it makes **no network connection except the ones you ask for** —
 your SSH/mosh sessions, the sync folder you choose, and (if you enable it) the
-local-network link between your own paired devices. This document states that
+local-network link between your own paired devices, and the optional private
+iCloud relay for questions and notices. This document states that
 claim precisely, explains why you don't have to take our word for it, and gives
 the exact steps to confirm it yourself.
 
@@ -23,10 +24,15 @@ the exact steps to confirm it yourself.
 >    device-to-device wireless link, or an address you gave on a private network
 >    of your own. In a capture this appears as mDNS for `_bsns-key._tcp` and a
 >    TCP flow between your two devices' addresses (port 47822 when reached by
->    address); nothing goes to a server of ours or anyone else's.
+>    address); signing requests use the direct link.
+> 5. Apple CloudKit and push services for the optional paired-device message
+>    relay. Expect encrypted message records plus routing metadata as described
+>    in [PRIVACY.md](../PRIVACY.md); do not misclassify these as telemetry.
+> 6. Websites you explicitly open from terminal links.
 >
 > It opens **no** connection to any analytics, crash-reporting, attribution, ad,
-> or "home" endpoint of ours. There is no account system and no server we operate.
+> or "home" endpoint of ours. There is no app account system or automatic developer-operated collection endpoint.
+> A user-entered review/demo SSH host is still an SSH destination.
 
 We deliberately scope the claim to *network connections*, because that's what's
 objectively checkable. "We never learn anything about you" is broader than a
@@ -63,9 +69,8 @@ basis for trust is, in order:
    ```
 
    For a TLS-aware view, point the app at **mitmproxy** (Settings → Wi-Fi proxy on
-   the device/emulator) and watch the flow list. Expectation: SYNs only to your
-   SSH host:port (and your sync provider's domain if you enabled sync). No
-   connections to any other host.
+   the device/emulator) and watch the flow list. Match observed destinations to the enabled feature inventory above; an HTTP
+   proxy alone does not observe SSH or mosh.
 
 ### iOS (simulator or device)
 
@@ -74,7 +79,8 @@ basis for trust is, in order:
 2. Exercise the app — connect to your host, SFTP, enable sync, background/foreground.
 3. Watch the flow list. SSH/mosh is raw TCP/UDP (won't show as HTTP), so also run
    **Wireshark** on the interface and filter to the app's traffic. Expectation:
-   the only destinations are your SSH host and your chosen sync provider.
+   destinations match the enabled feature inventory above, including Apple
+   services when relay is enabled.
 
 > Note: SSH and mosh are not HTTP, so an HTTP proxy alone won't show them — use a
 > packet capture (Wireshark/tcpdump) to see *all* destinations, which is the point.
@@ -93,25 +99,25 @@ PID=$(pgrep -f "BsnsSSH.app/BsnsSSH"); lsof -nP -a -p "$PID" -i
 adb shell ss -tunp 2>/dev/null | grep "$(adb shell pm list packages -U cc.bsns.ssh)"
 ```
 
-Pass = **zero** sockets while idle; sockets appear only after you tap Connect, and
-only to your host. A recorded run of this check is in
+For a clean configuration with no saved hosts, sync, discovery, or relay enabled,
+expect no app-initiated session traffic. Saved-host route probes and enabled
+background features can legitimately create idle traffic. Historical evidence is in
 [`no-telemetry-evidence-2026-06-16.md`](no-telemetry-evidence-2026-06-16.md).
 
 ## The pre-publish gate (what the maintainer runs)
 
 Before the "no telemetry" claim ships in store copy, run the capture above against
-a release build and confirm the only egress is the SSH host + sync provider. This
+a release build and match egress to the enabled feature inventory. This
 is a release checklist item, not a one-time thing — re-run it whenever a
 dependency is added (a new SDK is the usual way telemetry sneaks in).
 
 **Pass/fail criteria (release build, on device / clean emulator):**
 
-- ✅ PASS: every captured destination is (a) a host/port you typed, (b) a
-  ProxyJump bastion you configured, or (c) your chosen sync provider's domain.
-  Idle (pre-connect) egress is zero.
-- ❌ FAIL: any SYN/UDP to a domain or IP you didn't configure — analytics,
-  crash/attribution SDKs, a CDN, or any "home" endpoint — at any point including
-  launch, background, and foreground.
+- PASS: each destination is explained by a configured host, provider, paired
+  device, Apple relay/push/associated-domain service, or explicit browser action.
+- FAIL: unexplained app-initiated egress, especially analytics, advertising, or
+  automatic developer-operated collection. Investigate before asserting telemetry
+  is absent. OS-mediated services may not appear as sockets owned by the app.
 
 Capture launch → idle → connect → SFTP → background → foreground, then commit a
 short summary of observed destinations next to the dated evidence file above.
@@ -127,3 +133,14 @@ The durable protection is **not** a screenshot but:
 A fully automated CI tripwire (run the app under a network monitor, fail on an
 unexpected destination) is the ideal next step; it's noted here as a follow-up
 rather than claimed as done.
+
+## Release capture matrix
+
+Capture the exact Release build on a physical device. Record the build number,
+source commit, device/OS, enabled features, destinations, and observed behavior.
+Exercise separately: fresh launch with optional features off; SSH/SFTP; mosh;
+sync push/pull; direct signing; iCloud relay and notification delivery; link opening.
+Distinguish OS/provider traffic from app-initiated traffic. A Wi-Fi HTTP proxy
+does not capture arbitrary SSH or UDP; use an interface packet capture. Never
+commit packet captures containing real credentials, plaintext, or host metadata.
+Publish a redacted destination summary and mark untested paths explicitly.

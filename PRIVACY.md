@@ -1,100 +1,100 @@
-# Privacy Policy — bsns.cc open-source apps
+# Privacy Policy — bsns.SSH
 
-_Effective 2026-06-17._
+_Effective 2026-10-06. Release draft: publish this revision with the corresponding app update._
 
-This policy covers **bsns.SSH** and the other open-source apps published by
-bsns.cc. These apps are deliberately different from the bsns.cc hosted product:
-**they collect nothing.** This is the canonical version; it is also published at
-<https://tools.bsns.cc/open-source/privacy>. The app's source is public
-(GPL-3.0-or-later), so every claim here is auditable — see
-[`docs/no-telemetry-verification.md`](docs/no-telemetry-verification.md).
+This policy covers the bsns.SSH apps for iOS, iPadOS, macOS, and Android.
+The hosted bsns.cc suite is a separate product with its own
+[privacy policy](https://bsns.cc/privacy). Feature availability varies by platform.
 
-> Note: this policy applies **only** to the open-source apps. The bsns.cc hosted
-> suite (accounts, billing, the SaaS apps) is a separate product with its own
-> privacy policy at <https://bsns.cc/privacy>. Nothing here applies to it, and
-> nothing there applies to these apps.
+## What we receive
 
-## The short version
+bsns.SSH has no advertising, tracking, analytics, or automatic crash-reporting
+service operated by us. You do not need a bsns.cc account. Your terminal sessions,
+keys, files, and configuration are not sent to a developer-operated collection
+service. The source is available at <https://github.com/bsnscc/bsns-ssh>.
 
-We do not collect, store, transmit, sell, or share any of your data. There is no
-account, no analytics, no crash reporting, no advertising, no tracking, and no
-server operated by us that the app talks to. We could not hand over your data
-because we never receive it.
+The app does transmit data to servers and services you use for its features.
+Encryption does not hide connection addresses, timing, or all routing metadata
+from those services. The sections below describe these flows.
 
-## Data we collect
+## Connections and services
 
-**None.** The apps contain no analytics, telemetry, attribution, advertising, or
-crash-reporting SDKs. We do not collect personal information, usage data,
-identifiers, diagnostics, or location.
+- **SSH, mosh, SFTP, and forwarding.** The app connects to hosts, jump hosts,
+  addresses, and ports you configure. SSH uses TCP; optional mosh also uses UDP.
+  Saved alternate addresses may be probed to find a reachable route. Servers
+  receive the commands, files, or forwarded traffic you send and may keep their
+  own logs. Their operators control those systems.
+- **Configuration sync and device handoff.** Optional sync uses a folder you
+  select through an OS file provider. Configuration and handoff payloads are
+  encrypted on the device before upload. The provider receives encrypted data
+  and ordinary file/service metadata, and operates under its own terms. Export
+  without a passphrase creates a readable configuration file without private
+  keys; encrypted export can include exportable software private keys.
+- **Phone as a key.** Paired devices communicate directly over a local network,
+  nearby wireless connection, or configured private-network address. Pairing
+  protects signing requests and responses. Hardware private keys are not
+  transferred. Local discovery can generate Bonjour/mDNS traffic.
+- **Questions, notices, and answers between devices.** On supported Apple
+  devices, the optional iCloud relay stores sealed messages in your private
+  CloudKit database. Apple delivers notifications through its push service.
+  Message content is encrypted with pairing keys before leaving the sending
+  device and decrypted on the receiving device. Apple handles ciphertext,
+  destination device identifiers, message type, record identifiers, timestamps,
+  and delivery/account metadata. This is a cloud-mediated feature, not a direct
+  peer connection. We do not receive the plaintext through this service.
+- **Links you open.** Opening a terminal link in a browser contacts that website.
+  Its privacy policy applies.
 
-Because we collect nothing, there is nothing for us to retain, delete on request,
-or disclose to third parties or authorities.
+If you choose a demonstration SSH host operated by us, that server receives the
+connection information and commands/files you send, just like any other SSH
+server. Use it only for testing, never for private files, credentials, or work.
+It is not an automatic telemetry destination.
 
-## Network connections the app makes
+## Notifications and retention
 
-The app opens a network connection **only** to destinations **you** specify:
+A receiving Apple device may decrypt a message in its notification extension so
+that the notification shows the question and answer choices. Your OS notification
+preview settings determine whether someone looking at the screen can see it.
 
-1. the SSH/mosh host (and port) you enter — over SSH (TCP), plus a mosh UDP flow
-   if you enable mosh;
-2. a ProxyJump bastion you configure, to reach that host through it;
-3. the file/sync storage **you** choose for optional config sync (e.g. iCloud
-   Drive, Google Drive, Dropbox, or a file you move yourself) — and only the
-   encrypted bundle, which that provider handles as opaque ciphertext; and
-4. another device of yours that **you** paired for the optional "phone as a key"
-   feature — directly between the two devices (your local network, a
-   nearby wireless link, or a private network of your own), encrypted end to
-   end, never through a server. Only signing requests and signatures cross it; private keys
-   do not.
+The relay attempts to delete question records when they are retracted or expire
+on the sending device, and answer records after the sender processes them.
+Offline devices, interrupted cleanup, or service errors can delay deletion;
+there is no guaranteed server-side expiry. CloudKit and your storage provider's
+retention and backup behavior also apply. Local message history and settings
+remain on your devices until removed there.
 
-It makes **no** connection to any analytics, crash-reporting, attribution, ad, or
-"home" endpoint of ours. We do not operate a server for these apps.
+## Keys and local storage
 
-**FIDO2 security keys / passkeys (iOS).** If you use a FIDO2 security key or a
-passkey to authenticate SSH, the signing ceremony is **local** — between your
-device and the security key (or the Secure Enclave) — and is **not** a network
-call to us or anyone. To allow this, iOS validates that the app is associated with
-the relying-party domain `tools.bsns.cc` by reading a small, public
-`apple-app-site-association` file; that file is fetched by **Apple's CDN** (not by
-the app, and not in a way that identifies you) and contains only the app's
-identifier. The domain is never contacted during SSH authentication. If you enroll
-a **passkey** (rather than an external security key), iOS may back it up via **your
-own iCloud Keychain** — storage you control, the same principle as optional config
-sync; external security keys never leave the token and don't sync.
+Hardware-backed keys remain in the Secure Enclave, a security token, or the
+Android Keystore. Android hardware backing depends on the device; the app shows
+whether backing is hardware or software. Exportable software keys are stored
+locally and can be included in an encrypted backup or sync bundle you request.
+Consequently, encrypted software-key backups can leave the device; hardware
+private keys cannot be exported by the app.
 
-## Where your data lives
+Saved hosts, trusted host keys, settings, workspaces, snippets, and command
+history are stored locally. Optional configuration sync carries supported
+configuration categories; command history is not included. Local diagnostic logs
+can contain connection details or error messages. They are not uploaded
+automatically; review them before sharing a support report.
 
-Everything stays on your device or in storage you control:
+## Apple security-key and passkey services
 
-- **Keys.** Keys are generated in and never leave the Secure Enclave (iOS), the
-  Android Keystore (hardware-backed by StrongBox or the TEE where the device
-  provides it, otherwise software-backed — the app shows which, and the key is
-  non-extractable either way), a FIDO2 security key, or a YubiKey (PIV). Software
-  keys are held locally. Private keys never touch the network.
-- **Config** (saved hosts, known_hosts, snippets, command history). Stored
-  locally. Command history never leaves your device.
-- **Optional sync.** If you turn it on, your config is encrypted on-device
-  (PBKDF2 + AES-256-GCM) before it is written to the storage provider you chose.
-  The provider sees only ciphertext; we are not involved.
+On iOS, security-key/passkey authentication uses Apple's AuthenticationServices.
+Apple validates the app's association with `tools.bsns.cc` using the public
+associated-domain file. That file contains app identifiers, not your SSH
+credentials. Signing does not send SSH credentials to that website. Passkeys may
+sync through your iCloud Keychain according to Apple's settings and policies;
+external security-token credentials stay on their token.
 
-## Third parties
+## Support, children, and changes
 
-The apps use no third-party services that receive your data. They link
-open-source libraries (listed in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)),
-none of which phone home. Any storage provider you pick for sync is governed by
-that provider's own privacy policy, and only ever receives encrypted data.
+Information you voluntarily submit in an issue or private security report is
+received by the maintainers and the service hosting that report. Do not include
+private keys, passwords, or unredacted terminal transcripts. See
+[SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
-## Children
-
-The apps are developer tools, not directed at children, and collect no data from
-anyone.
-
-## Changes
-
-If this policy changes, we will update the effective date above and the published
-version. Because the app is open source, the full history of this document is
-visible in the project's version control.
-
-## Contact
-
-Questions about privacy: through the contact on the GitHub profile that owns the
-[project repository](https://github.com/bsnscc/bsns-ssh), or via bsns.cc.
+The app is a developer tool and is not directed at children. We update the date
+and public version history when this policy changes. Contact us through
+<https://github.com/bsnscc/bsns-ssh/issues> for privacy questions, using the private
+security-reporting route for sensitive information.

@@ -213,12 +213,12 @@ on both platforms but needs a separate enrollment (key pair) per platform.
   callback returns the inner `mpint(r) || mpint(s)` and libssh2 frames the
   rest). Auth runs off the main thread because the biometric prompt blocks the
   callback synchronously.
-- **Crypto backend: OpenSSL 3.5.1 + libssh2 1.11.0, built from source.**
-  `app/vendor/build-cssh.sh` compiles both from pinned, sha256-verified sources
-  into a `CSSH.xcframework` (device + simulator slices), merged into one static
-  library. libssh2 is pinned at 1.11.0 to avoid the 1.11.1 ECDSA regression. The
-  recipe is structured to extend to the Android NDK later. (libssh2's mbedTLS
-  backend lacks ed25519/curve25519, which is why the crypto backend is OpenSSL.)
+- **Crypto backend: OpenSSL 3.5.9 + libssh2 1.11.1 with security backports.**
+  `app/vendor/build-cssh.sh` compiles pinned, SHA-256-verified sources into a
+  static `CSSH.xcframework` for iOS, simulators, and macOS. Android's
+  `android/jni/build-libssh2.sh` uses the same sources and patches. See
+  [the native dependency audit](native-dependency-audit-2026-10-06.md) for
+  patch provenance and validation. OpenSSL supplies Ed25519/Curve25519 support.
 - **Terminal: SwiftTerm**, wrapped for UIKit. Output via `feed(byteArray:)`,
   input via the `send(source:data:)` delegate, resize via `sizeChanged` →
   SSH `window-change`. `TERM=xterm-256color`.
