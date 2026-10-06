@@ -215,8 +215,9 @@ struct WorkspacesView: View {
                 sessions.activate(existing)
                 return
             }
+            let prepare = WorkspaceCommand.prepare(workspace).map { $0 + " && " } ?? ""
             LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store,
-                                    command: "exec " + MoshServerCommand.attachCommand(session, directory: workspace.path(on: nil)),
+                                    command: prepare + "exec " + MoshServerCommand.attachCommand(session, directory: workspace.path(on: nil)),
                                     title: title)
             #endif
         }
@@ -229,9 +230,17 @@ private struct WorkspaceEditor: View {
     let isNew: Bool
     @Environment(\.dismiss) private var dismiss
 
+    private func updateWindow(_ id: UUID, change: (inout WorkspaceWindow) -> Void) {
+        guard let index = workspace.windows?.firstIndex(where: { $0.id == id }),
+              var window = workspace.windows?[index] else { return }
+        change(&window)
+        workspace.windows?[index] = window
+    }
+
     private var valid: Bool {
         workspace.tmuxSession != nil && WorkspaceCommand.quoted(workspace.path) != nil
             && WorkspaceCommand.isUsable(statusCommand: workspace.statusCommand ?? "")
+            && ((workspace.windows ?? []).isEmpty || WorkspaceCommand.prepare(workspace) != nil)
     }
 
     var body: some View {
@@ -240,6 +249,9 @@ private struct WorkspaceEditor: View {
             Form {
                 TextField("Name", text: $workspace.name, prompt: Text("site"))
                 TextField("Path", text: $workspace.path, prompt: Text("~/work/site — the same on every machine"))
+                TextField("Tmux session", text: Binding(get: { workspace.sessionName ?? "" },
+                                                        set: { workspace.sessionName = $0.isEmpty ? nil : $0 }),
+                          prompt: Text("Defaults to the workspace name"))
                 TextField("Repository", text: Binding(get: { workspace.repository ?? "" },
                                                       set: { workspace.repository = $0.isEmpty ? nil : $0 }),
                           prompt: Text("optional — its remote, for reference"))
@@ -247,6 +259,42 @@ private struct WorkspaceEditor: View {
                                                           set: { workspace.statusCommand = $0.isEmpty ? nil : $0 }),
                           prompt: Text("optional — run in the project directory on each machine"))
             }
+            Text("Saved windows").font(.subheadline.weight(.medium))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(workspace.windows ?? []) { window in
+                        VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("\(window.index)").monospacedDigit().frame(width: 24)
+                            TextField("Window name", text: Binding(
+                                get: { workspace.windows?.first(where: { $0.id == window.id })?.name ?? "" },
+                                set: { value in updateWindow(window.id) { $0.name = value } }))
+                            Picker("Agent", selection: Binding(
+                                get: { workspace.windows?.first(where: { $0.id == window.id })?.agent ?? "" },
+                                set: { value in updateWindow(window.id) { $0.agent = value.isEmpty ? nil : value } })) {
+                                    Text("Shell").tag("")
+                                    Text("Claude").tag("claude")
+                                    Text("Codex").tag("codex")
+                                }.labelsHidden()
+                            Button { workspace.windows?.removeAll { $0.id == window.id } } label: {
+                                Image(systemName: "minus.circle")
+                            }.accessibilityLabel("Remove \(window.name) from saved layout")
+                        }
+                        TextField("Directory (defaults to workspace)", text: Binding(
+                            get: { workspace.windows?.first(where: { $0.id == window.id })?.directory ?? "" },
+                            set: { value in updateWindow(window.id) { $0.directory = value.isEmpty ? nil : value } }))
+                            .font(.caption)
+                        }
+                    }
+                    Button("Add Window") {
+                        let index = (workspace.windows?.map(\.index).max() ?? -1) + 1
+                        if workspace.windows == nil { workspace.windows = [] }
+                        workspace.windows?.append(WorkspaceWindow(index: index, name: "shell-\(index)"))
+                    }
+                }
+            }.frame(maxHeight: 180)
+            Text("Names use letters, numbers, hyphens or underscores. Saved windows open full-screen on every device. The host restores missing windows without restarting running work. Agent conversations resume when you run dev resume in that window.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let name = workspace.tmuxSession {
                 Text("Opens the tmux session “\(name)” on whichever machine you choose, creating it in the project directory the first time.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

@@ -52,6 +52,22 @@ struct BsnsSSHApp: App {
                 }
                 .keyboardShortcut("w")
                 .disabled(sessions.active == nil)
+                Button(sessions.pair == nil ? "Split with Next Tab" : "Close Split") {
+                    if sessions.pair != nil { sessions.unsplit(); return }
+                    let all = sessions.sessions
+                    guard let index = all.firstIndex(where: { $0.id == sessions.activeID }), all.count > 1 else { return }
+                    sessions.split(with: all[(index + 1) % all.count])
+                }
+                .keyboardShortcut("d")
+                .disabled(sessions.active == nil || (sessions.pair == nil && sessions.sessions.count < 2))
+                Button("Other Pane") {
+                    if let other = sessions.splitSessions?.first(where: { $0.id != sessions.activeID }) {
+                        sessions.activate(other)
+                        surfaces.focus(other.id)
+                    }
+                }
+                .keyboardShortcut("j")
+                .disabled(sessions.splitSessions == nil)
                 Button("Next Tab") { step(1) }
                     .keyboardShortcut("]", modifiers: [.command, .shift])
                     .disabled(sessions.sessions.count < 2)

@@ -332,4 +332,7 @@ final class TerminalSurfaceCache {
     }
 
     func drop(_ id: UUID) { surfaces[id] = nil }
+
+    /// Give a session's terminal the keyboard, if it is on screen.
+    func focus(_ id: UUID) { _ = surfaces[id]?.view.becomeFirstResponder() }
 }

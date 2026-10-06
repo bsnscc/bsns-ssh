@@ -19,9 +19,12 @@ struct LiveTerminalScreen: View {
     @Environment(TerminalSurfaceCache.self) private var surfaceCache
     @Environment(\.horizontalSizeClass) private var hSize
     @Environment(\.sidebarVisibility) private var sidebarVisibility
+    @Environment(\.paneFocused) private var paneFocused
+    @Environment(\.paneShowsSidebarButton) private var showsSidebarButton
+    @Environment(SessionStore.self) private var sessionStore
     /// A phone held upright: the bar keeps only what is used mid-typing, so the
     /// session name has room; the rest lives in the "more" menu.
-    private var compactBar: Bool { hSize == .compact }
+    private var compactBar: Bool { hSize == .compact || paneFocused != nil }
 
     @AppStorage("terminal.fontSize") private var fontSize: Double = Double(defaultFontSize)
     @AppStorage("terminal.themeId") private var themeId: String = TerminalTheme.bsnsDark.id
@@ -87,7 +90,7 @@ struct LiveTerminalScreen: View {
             // (it replaces the keyboard's built-in accessory row, which is
             // suppressed while the bar is on). With a physical keyboard it
             // collapses to Esc plus multiplexer scroll mode.
-            if showKeyBar {
+            if showKeyBar, paneFocused != false {
                 Divider().overlay(Color(theme.ansi[8].uiColor).opacity(0.5))
                 TerminalKeyBar(session: session, handle: handle, theme: theme,
                                tmuxSequence: tmuxScrollSequence,
@@ -99,6 +102,12 @@ struct LiveTerminalScreen: View {
             .ignoresSafeArea(.container, edges: .bottom)
             .toolbar(.hidden, for: .navigationBar)   // our controlRow replaces the nav bar
             .onAppear {
+                // Touching this terminal makes it the one the keyboard, the
+                // sidebar and the shortcuts refer to.
+                surface.view.onFocus = { [weak sessionStore] in
+                    guard let sessionStore, sessionStore.activeID != session.id else { return }
+                    sessionStore.activate(session)
+                }
                 hwKeyboard.start()
                 keyboardVisible = !hwKeyboard.isConnected && (surface.view.isFirstResponder || findFocused)
                 devFindTest()
@@ -177,14 +186,18 @@ struct LiveTerminalScreen: View {
             if let sidebar = sidebarVisibility {
                 // The sidebar lists the sessions; here, just a way to show or
                 // hide it, and which session this is.
-                Button {
-                    withAnimation { sidebar.wrappedValue = sidebar.wrappedValue == .detailOnly ? .all : .detailOnly }
-                } label: {
-                    Image(systemName: "sidebar.left").frame(width: 34, height: 30)
+                if showsSidebarButton {
+                    Button {
+                        withAnimation { sidebar.wrappedValue = sidebar.wrappedValue == .detailOnly ? .all : .detailOnly }
+                    } label: {
+                        Image(systemName: "sidebar.left").frame(width: 34, height: 30)
+                    }
+                    .accessibilityLabel(sidebar.wrappedValue == .detailOnly ? "Show sidebar" : "Hide sidebar")
+                    .padding(.leading, 6)
                 }
-                .accessibilityLabel(sidebar.wrappedValue == .detailOnly ? "Show sidebar" : "Hide sidebar")
-                .padding(.leading, 6)
-                Text(session.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                Text(session.title)
+                    .padding(.leading, showsSidebarButton ? 0 : 12).font(.subheadline.weight(.medium)).lineLimit(1)
+                    .foregroundStyle(paneFocused == false ? Color.secondary : Color.primary)
                 Spacer(minLength: 8)
             } else {
                 SessionTabBar(activeID: session.id)
@@ -194,6 +207,10 @@ struct LiveTerminalScreen: View {
         }
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
+        // In a split, a line marks the pane the keyboard is in.
+        .overlay(alignment: .top) {
+            if paneFocused == true { Rectangle().fill(Brand.accent).frame(height: 2) }
+        }
     }
 
     private var terminalActions: some View {
@@ -430,6 +447,25 @@ struct LiveTerminalScreen: View {
         Menu {
             Button { handle.paste() } label: { Label("Paste", systemImage: "doc.on.clipboard") }
             Button { handle.selectAll() } label: { Label("Select All", systemImage: "selection.pin.in.out") }
+            // Side by side, where there is a sidebar layout to split.
+            if sidebarVisibility != nil {
+                let others = sessionStore.sessions.filter { $0.id != session.id }
+                if sessionStore.pair != nil {
+                    Button { sessionStore.unsplit() } label: { Label("Close Split", systemImage: "rectangle") }
+                } else if !others.isEmpty {
+                    Menu {
+                        ForEach(others) { other in
+                            Button(other.title) {
+                                sessionStore.activate(session)
+                                sessionStore.split(with: other)
+                                withAnimation { sidebarVisibility?.wrappedValue = .detailOnly }
+                            }
+                        }
+                    } label: {
+                        Label("Split With", systemImage: "rectangle.split.2x1")
+                    }
+                }
+            }
 
             // tmux beside the terminal (over a second SSH connection). Not through
             // a jump host: that connection has no tunnel to ride.
@@ -696,6 +732,15 @@ final class TerminalHandle {
 /// repaint, while normal remote output stays on SwiftTerm's incremental path.
 final class ZoomableTerminalView: TerminalView {
     var onZoomChange: ((CGFloat) -> Void)?
+    /// This terminal took the keyboard.
+    var onFocus: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onFocus?() }
+        return became
+    }
+
     /// Send raw bytes to the remote (set by the surface → session.write).
     var onSendBytes: (([UInt8]) -> Void)?
     /// Called when the cached terminal view is attached to a visible window.

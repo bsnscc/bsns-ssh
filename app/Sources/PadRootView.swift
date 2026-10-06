@@ -7,7 +7,28 @@ private struct SidebarLayoutKey: EnvironmentKey {
     static let defaultValue: Binding<NavigationSplitViewVisibility>? = nil
 }
 
+/// In a split: whether this pane is the one with the keyboard. Nil when the
+/// terminal has the space to itself.
+private struct PaneFocusKey: EnvironmentKey {
+    static let defaultValue: Bool? = nil
+}
+
+private struct PaneSidebarButtonKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
 extension EnvironmentValues {
+    var paneFocused: Bool? {
+        get { self[PaneFocusKey.self] }
+        set { self[PaneFocusKey.self] = newValue }
+    }
+
+    /// False for a pane that leaves the sidebar button to its neighbour.
+    var paneShowsSidebarButton: Bool {
+        get { self[PaneSidebarButtonKey.self] }
+        set { self[PaneSidebarButtonKey.self] = newValue }
+    }
+
     /// Set when a sidebar lists the sessions; lets the terminal show or hide it.
     var sidebarVisibility: Binding<NavigationSplitViewVisibility>? {
         get { self[SidebarLayoutKey.self] }
@@ -55,6 +76,14 @@ struct PadRootView: View {
                             }
                             .contentShape(Rectangle())
                             .onTapGesture { sessions.activate(session) }
+                            .contextMenu {
+                                if sessions.active != nil, sessions.activeID != session.id {
+                                    Button { showBeside(session) } label: { Label("Open Beside", systemImage: "rectangle.split.2x1") }
+                                }
+                                if sessions.pair != nil {
+                                    Button { sessions.unsplit() } label: { Label("Close Split", systemImage: "rectangle") }
+                                }
+                            }
                             .listRowBackground(sessions.activeID == session.id ? Brand.accent.opacity(0.18) : Color.clear)
                         }
                     }
@@ -63,7 +92,22 @@ struct PadRootView: View {
             .listStyle(.sidebar)
             .navigationTitle("bsns.SSH")
         } detail: {
-            if let active = sessions.active {
+            if let both = sessions.splitSessions {
+                // Two sessions side by side; the keyboard goes to whichever
+                // was touched last.
+                HStack(spacing: 0) {
+                    ForEach(both) { session in
+                        NavigationStack {
+                            LiveTerminalScreen(session: session)
+                        }
+                        .id(session.id)
+                        .environment(\.paneFocused, session.id == sessions.activeID)
+                        .environment(\.paneShowsSidebarButton, session.id == both.first?.id)
+                        if session.id == both.first?.id { Divider() }
+                    }
+                }
+                .environment(\.sidebarVisibility, $visibility)
+            } else if let active = sessions.active {
                 NavigationStack {
                     LiveTerminalScreen(session: active)
                         .id(active.id)
@@ -75,6 +119,11 @@ struct PadRootView: View {
         }
         // Side by side in portrait too, rather than the sidebar covering the work.
         .navigationSplitViewStyle(.balanced)
+        // Two terminals need the width: the sidebar tucks away when a split
+        // starts, however it was started. Its button brings it back.
+        .onChange(of: sessions.pair) { _, pair in
+            if pair != nil { withAnimation { visibility = .detailOnly } }
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -92,6 +141,12 @@ struct PadRootView: View {
                     .environment(\.horizontalSizeClass, area.size.width < 760 ? .compact : .regular)
             }
         }
+    }
+
+    /// Split, and give the two terminals the width by tucking the sidebar away.
+    private func showBeside(_ session: TerminalSession) {
+        sessions.split(with: session)
+        withAnimation { visibility = .detailOnly }
     }
 
     private func row(_ title: String, _ symbol: String, _ tag: String) -> some View {

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import BsnsSSHCore
 
 /// A snapshot of a live session sufficient to re-create and reconnect it after the
 /// app is terminated in the background (which iOS does within minutes — the whole
@@ -19,6 +20,7 @@ struct RestorableSession: Codable, Identifiable, Equatable {
     var keyBlob: Data?
     var tmuxSession: String?
     var tmuxDirectory: String?
+    var workspace: Workspace? = nil
 }
 
 /// Persists the set of open sessions to a JSON file so they can be reconnected on

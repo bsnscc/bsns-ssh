@@ -16,14 +16,43 @@ final class SessionStore {
 
     var active: TerminalSession? { sessions.first { $0.id == activeID } }
 
+    /// Two sessions shown side by side on a wide screen: left, then right. The
+    /// active one is whichever has the keyboard. Nil when one session fills
+    /// the space.
+    private(set) var pair: [TerminalSession.ID]?
+
+    /// The two sessions to show side by side right now, if a split is set up
+    /// and the active session is part of it.
+    var splitSessions: [TerminalSession]? {
+        guard let pair, let activeID, pair.contains(activeID) else { return nil }
+        let both = pair.compactMap { id in sessions.first { $0.id == id } }
+        return both.count == 2 ? both : nil
+    }
+
+    /// Show `other` beside the active session (which stays on the left).
+    func split(with other: TerminalSession) {
+        guard let activeID, activeID != other.id else { return }
+        pair = [activeID, other.id]
+    }
+
+    func unsplit() { pair = nil }
+
     /// Add a session and bring it on screen.
     func add(_ session: TerminalSession) {
         sessions.append(session)
-        activeID = session.id
+        activate(session)
         if let r = session.restorable { restore?.remember(r) }
     }
 
-    func activate(_ session: TerminalSession) { activeID = session.id }
+    /// Bring a session to the keyboard. In a split, one that isn't showing
+    /// takes the place of the pane being looked at; the other pane stays.
+    func activate(_ session: TerminalSession) {
+        if var current = pair, !current.contains(session.id), let activeID, let slot = current.firstIndex(of: activeID) {
+            current[slot] = session.id
+            pair = current
+        }
+        activeID = session.id
+    }
 
     /// Leave the terminal for the Connect / Keys tabs without closing anything.
     func goHome() { activeID = nil }
@@ -32,6 +61,12 @@ final class SessionStore {
         session.disconnect()
         restore?.forget(session.id)
         sessions.removeAll { $0.id == session.id }
+        // Closing one side of a split leaves the other filling the space.
+        if let pair, pair.contains(session.id) {
+            let remaining = pair.first { $0 != session.id }
+            self.pair = nil
+            if activeID == session.id { activeID = remaining; return }
+        }
         if activeID == session.id { activeID = sessions.last?.id }
     }
 }

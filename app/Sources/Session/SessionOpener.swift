@@ -26,7 +26,7 @@ enum SessionOpener {
     /// switched to instead. Nil for hosts reached through a jump host, which
     /// only the connect form can open.
     @discardableResult
-    static func open(_ host: SavedHost, tmux: String?, directory: String? = nil, title: String? = nil,
+    static func open(_ host: SavedHost, tmux: String?, directory: String? = nil, title: String? = nil, workspace: Workspace? = nil,
                      sessions: SessionStore, store: AgentStore, knownHosts: KnownHostsStore) -> TerminalSession? {
         guard (host.jump ?? "").isEmpty else { return nil }
         let session = MoshServerCommand.sanitizedTmuxName(tmux)
@@ -41,12 +41,12 @@ enum SessionOpener {
         let spec = TerminalSession.Spec(host: host.host, port: port, user: host.user, agent: store.agent,
                                         knownHosts: knownHosts.knownHosts, useMosh: useMosh,
                                         keyBlob: key(for: host, store: store), tmuxSession: session,
-                                        tmuxDirectory: directory)
+                                        tmuxDirectory: directory, workspace: workspace)
         let name = title ?? (host.label.isEmpty ? "\(host.user)@\(host.host)" : host.label) + (session.map { " · \($0)" } ?? "")
         let opened = TerminalSession(spec: spec, title: name)
         opened.restorable = RestorableSession(id: opened.id, title: name, host: host.host, port: port, user: host.user,
                                               useMosh: useMosh, keyBlob: spec.keyBlob, tmuxSession: session,
-                                              tmuxDirectory: directory)
+                                              tmuxDirectory: directory, workspace: workspace)
         sessions.add(opened)
         opened.start()
         return opened
@@ -86,7 +86,7 @@ enum SessionOpener {
     static func open(_ workspace: Workspace, on host: SavedHost, sessions: SessionStore, store: AgentStore,
                      knownHosts: KnownHostsStore) -> TerminalSession? {
         open(host, tmux: workspace.tmuxSession, directory: workspace.path(on: host.host),
-             title: "\(workspace.name) · \(host.label.isEmpty ? host.host : host.label)",
+             title: "\(workspace.name) · \(host.label.isEmpty ? host.host : host.label)", workspace: workspace,
              sessions: sessions, store: store, knownHosts: knownHosts)
     }
 }

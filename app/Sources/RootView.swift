@@ -108,7 +108,7 @@ struct RootView: View {
             let spec = TerminalSession.Spec(host: r.host, port: r.port, user: r.user,
                                             agent: store.agent, knownHosts: knownHosts.knownHosts,
                                             useMosh: r.useMosh, keyBlob: r.keyBlob,
-                                            tmuxSession: r.tmuxSession, tmuxDirectory: r.tmuxDirectory)
+                                            tmuxSession: r.tmuxSession, tmuxDirectory: r.tmuxDirectory, workspace: r.workspace)
             let s = TerminalSession(id: r.id, spec: spec, title: r.title)
             s.restorable = r
             sessions.add(s)
@@ -369,6 +369,22 @@ extension RootView {
             if let command = env["BSNS_DEV_RUN"], !command.isEmpty {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)   // let the prompt appear
                 session.runCommand(command)
+            }
+            // BSNS_DEV_SPLIT=<command>: open a second session to the same host,
+            // type that command into it, and show the two side by side.
+            if let second = env["BSNS_DEV_SPLIT"] {
+                let other = TerminalSession(spec: session.spec, title: "dev · second")
+                sessions.add(other)
+                other.start()
+                for _ in 0..<150 where other.status != .connected {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if !second.isEmpty { other.runCommand(second) }
+                sessions.activate(session)
+                sessions.split(with: other)
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                print("dev split: showing \(sessions.splitSessions?.map(\.title) ?? []) active=\(sessions.active?.title ?? "-")")
             }
             if let after = env["BSNS_DEV_RECONNECT_AFTER"].flatMap(Double.init) {
                 try? await Task.sleep(nanoseconds: UInt64(after * 1_000_000_000))

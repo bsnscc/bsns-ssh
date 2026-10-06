@@ -19,6 +19,8 @@ final class WorkspaceStore {
     }
 
     func upsert(_ workspace: Workspace) {
+        var workspace = workspace
+        workspace.modifiedAt = Date()
         if let i = workspaces.firstIndex(where: { $0.id == workspace.id }) { workspaces[i] = workspace }
         else { workspaces.append(workspace) }
         save()
@@ -36,6 +38,7 @@ final class WorkspaceStore {
     func merge(_ incoming: [Workspace]) {
         for var workspace in incoming {
             let existing = workspaces.first { $0.id == workspace.id }
+            if let modified = existing?.modifiedAt, modified >= (workspace.modifiedAt ?? .distantPast) { continue }
             if existing?.statusCommand != workspace.statusCommand { workspace.statusCommand = existing?.statusCommand }
             if let i = workspaces.firstIndex(where: { $0.id == workspace.id }) { workspaces[i] = workspace }
             else { workspaces.append(workspace) }
@@ -45,6 +48,6 @@ final class WorkspaceStore {
 
     private func save() {
         try? FileManager.default.createDirectory(at: AppPaths.support, withIntermediateDirectories: true)
-        try? JSONEncoder().encode(workspaces).write(to: url)
+        try? JSONEncoder().encode(workspaces).write(to: url, options: .atomic)
     }
 }

@@ -61,7 +61,8 @@ enum MoshBootstrap {
         registry.abandon(sessionID: sessionID)
         let reap = registry.reapablePIDs(hostKey: hostKey)
         if !reap.isEmpty { DiagLog.log("mosh", "reaping abandoned mosh-server pids \(reap) on \(hostKey)") }
-        let command = MoshServerCommand.build(tmux: spec.tmuxSession,
+        let prepare = spec.workspace.flatMap { WorkspaceCommand.prepare($0, host: spec.host) }.map { $0 + " && " } ?? ""
+        let command = prepare + MoshServerCommand.build(tmux: spec.tmuxSession,
                                               idleTimeoutSeconds: idleTimeoutSeconds,
                                               reapPIDs: reap,
                                               tmuxClipboard: tmuxClipboardSetup,
