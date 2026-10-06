@@ -24,12 +24,54 @@ packages:
     # Run vendor/mosh/fetch-mosh.sh to populate its source trees.
     path: vendor/mosh
 targets:
+  # Opens a sealed question when its push arrives, so the notification can show
+  # it, with its answers as buttons, instead of a placeholder.
+  BsnsNotify:
+    type: app-extension
+    platform: iOS
+    sources:
+      - NotifyExtension
+      - path: Sources/Link/RelayKeyVault.swift
+    dependencies:
+      - package: bsns-ssh
+        product: BsnsSSHCore
+    info:
+      path: NotifyExtension/Info.plist
+      properties:
+        CFBundleDisplayName: bsns.SSH
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        BsnsKeychainPrefix: $(AppIdentifierPrefix)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    entitlements:
+      path: NotifyExtension/BsnsNotify.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.cc.bsns.ssh
+        com.apple.developer.icloud-services:
+          - CloudKit
+        # Only the message keys the app shares with it — not the app's own keychain.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)cc.bsns.ssh.relay
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cc.bsns.ssh.notify
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "100"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: "4L394FY4WC"
+        CODE_SIGN_STYLE: Automatic
+        SKIP_INSTALL: YES
   BsnsSSH:
     type: application
     platform: iOS
     sources:
       - Sources
     dependencies:
+      - target: BsnsNotify
       - package: bsns-ssh
         product: BsnsSSHCore
       - package: SwiftTerm
@@ -48,6 +90,7 @@ targets:
         CFBundleDisplayName: bsns.SSH
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        BsnsKeychainPrefix: $(AppIdentifierPrefix)
         LSRequiresIPhoneOS: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
@@ -117,3 +160,9 @@ targets:
         com.apple.developer.icloud-services:
           - CloudKit
         aps-environment: development
+        # The app's own group stays FIRST: it is where every existing item lives
+        # and where new ones go by default. The second is shared with the
+        # notification extension and holds only derived message keys.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)cc.bsns.ssh
+          - $(AppIdentifierPrefix)cc.bsns.ssh.relay

@@ -33,6 +33,8 @@ app/vendor/mosh/protobuf/
 app/vendor/mosh/mosh-src/
 app/BsnsSSH.entitlements
 app/Info.plist
+app/NotifyExtension/Info.plist
+app/NotifyExtension/BsnsNotify.entitlements
 mac/Info.plist
 
 # Internal review docs — never publish (history was scrubbed of these)

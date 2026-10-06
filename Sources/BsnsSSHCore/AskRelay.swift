@@ -89,6 +89,19 @@ public struct RelayChannel: Sendable {
         peerID = peer.id
     }
 
+    /// The channel's key, for a helper that must open messages without being
+    /// given the pairing identity itself (a notification extension): with this
+    /// it can read and answer asks from one paired device, and nothing else.
+    public var keyData: Data { key.withUnsafeBytes { Data($0) } }
+
+    /// Rebuild a channel from a key exported with `keyData`.
+    public init(keyData: Data, localID: String, peerID: String) throws {
+        guard keyData.count == 32 else { throw DeviceLink.LinkError.malformed }
+        key = SymmetricKey(data: keyData)
+        self.localID = localID
+        self.peerID = peerID
+    }
+
     private func header(_ kind: Kind, from: String, to: String) -> Data {
         Data([Self.version, kind.rawValue]) + Data(from.utf8) + Data([0]) + Data(to.utf8)
     }

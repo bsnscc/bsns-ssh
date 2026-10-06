@@ -34,6 +34,7 @@ final class PhoneInbox {
         problem = nil
         guard on else {
             await CloudRelay.shared.unsubscribe()
+            RelayKeyVault.store([])
             items = []
             return
         }
@@ -46,20 +47,36 @@ final class PhoneInbox {
         UIApplication.shared.registerForRemoteNotifications()
         do { try await CloudRelay.shared.subscribe() }
         catch { problem = "Couldn't set up delivery: \(error.localizedDescription)" }
+        shareKeys()
         await refresh()
+    }
+
+    /// Give the notification extension the message keys for the computers
+    /// paired right now (and only those).
+    func shareKeys() {
+        guard enabled else { return }
+        let status = RelayKeyVault.store(CloudRelay.shared.relayKeys())
+        if status != errSecSuccess { DiagLog.log("inbox", "couldn't share message keys: \(status)") }
     }
 
     /// At launch: keep the push registration current.
     func resume() {
         guard enabled else { return }
         UIApplication.shared.registerForRemoteNotifications()
-        Task { await refresh() }
+        shareKeys()
+        Task {
+            // Re-saved each launch, so a change to what the push asks for
+            // reaches devices that subscribed with an earlier build.
+            try? await CloudRelay.shared.subscribe()
+            await refresh()
+        }
     }
 
     /// Read what is waiting. A push can arrive a moment before the record is
     /// findable, so an empty result is checked once more.
     func refresh(expectingNew: Bool = false) async {
         guard enabled, !refreshing else { return }
+        shareKeys()   // pairings may have changed since the last look
         refreshing = true
         defer { refreshing = false }
         var found = await CloudRelay.shared.fetchAsks()
@@ -90,8 +107,37 @@ final class PhoneInbox {
     }
 }
 
-/// Receives the push that says something arrived.
-final class PhoneAppDelegate: NSObject, UIApplicationDelegate {
+/// Receives the push that says something arrived, and the tap on a
+/// notification's answer button.
+final class PhoneAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
+    /// A button on the notification — pressed on the phone or on the Watch —
+    /// is the answer. Sent from the background; the app doesn't come forward.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        let info = response.notification.request.content.userInfo
+        let action = response.actionIdentifier
+        guard let id = (info[AskNotification.askID] as? String).flatMap(UUID.init(uuidString:)),
+              let peer = info[AskNotification.peerID] as? String,
+              let options = info[AskNotification.options] as? [String], options.contains(action) else {
+            // A plain tap: the app opens; show what is waiting.
+            await PhoneInbox.shared.refresh()
+            return
+        }
+        do { try await CloudRelay.shared.answer(askID: id, choice: action, toPeerID: peer) }
+        catch { DiagLog.log("inbox", "answer from notification failed: \(error.localizedDescription)") }
+        await PhoneInbox.shared.refresh()
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .sound, .list]
+    }
+
     func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
         await PhoneInbox.shared.refresh(expectingNew: true)
         return .newData
@@ -164,7 +210,7 @@ struct PhoneInboxSettings: View {
         } header: {
             Text("Inbox")
         } footer: {
-            Text("A script on a paired computer can ask you something (\"Deploy to prod?\") or tell you something (\"Build finished\"). It reaches this phone — and your Watch — through your own private iCloud database, sealed with the keys the two devices exchanged when you paired them: Apple delivers it without being able to read it. Your answer goes back the same way and can only be one of the choices offered. The notification itself says only that something is waiting; open the app to read and answer it.")
+            Text("A script on a paired computer can ask you something (\"Deploy to prod?\") or tell you something (\"Build finished\"). It reaches this phone — and your Watch — through your own private iCloud database, sealed with the keys the two devices exchanged when you paired them: Apple delivers it without being able to read it. Your answer goes back the same way and can only be one of the choices offered. The notification shows the question with its answers as buttons, on the phone and on the Watch; answering needs the device unlocked.")
         }
     }
 }

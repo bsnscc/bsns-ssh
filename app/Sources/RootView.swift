@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 import BsnsSSHCore
 
 struct RootView: View {
@@ -187,6 +188,58 @@ struct RootView: View {
                 print("SFTP-DEV FAIL: \(error)")
             }
             client.disconnect()
+            return
+        }
+        // BSNS_DEV_KEYS=make|list: create and save a software key, or just report
+        // how many saved keys this build can see (to check that a change to the
+        // keychain setup hasn't hidden the ones already there).
+        if let mode = env["BSNS_DEV_KEYS"] {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if mode == "make" { await store.generateKey(.ed25519) }
+            print("dev keys: saved keys visible=\(KeyStore.loadAll().count) agent=\(store.identities.count)")
+            return
+        }
+        // BSNS_DEV_NOTIFY=setup: pair with a made-up computer, share its message
+        // key with the notification extension, and print a question sealed by
+        // that computer, for pushing at the simulator. =list: report the
+        // notifications now in Notification Center, as the extension left them.
+        if let mode = env["BSNS_DEV_NOTIFY"] {
+            let center = UNUserNotificationCenter.current()
+            if mode == "setup" {
+                _ = try? await center.requestAuthorization(options: [.alert, .sound, .provisional])
+                center.removeAllDeliveredNotifications()
+                let computer = LinkIdentity()
+                for old in LinkStore.shared.paired { LinkStore.shared.remove(old.id) }
+                LinkStore.shared.add(LinkPeer(publicKey: computer.publicKey, name: "Test Mac"))
+                UserDefaults.standard.set(true, forKey: PhoneInbox.enabledKey)
+                let status = RelayKeyVault.store(CloudRelay.shared.relayKeys())
+                let mine = LinkStore.shared.identity
+                if let channel = try? RelayChannel(identity: computer, peer: LinkPeer(publicKey: mine.publicKey, name: "phone")),
+                   let box = try? channel.seal(Ask(text: "Deploy integration to prod?", options: ["approve", "rollback"],
+                                                   machine: "Test Mac", source: "deploy"), as: .ask) {
+                    print("dev notify: vault status=\(status) entries=\(RelayKeyVault.load().count) box64=\(box.base64EncodedString())")
+                    // The extension's own step, run here: placeholder in, question out.
+                    let content = UNMutableNotificationContent()
+                    content.body = "Something on one of your machines needs you."
+                    let ask = AskNotification.fill(content, from: box)
+                    if let ask { await AskNotification.register(options: ask.options) }
+                    let registered = await center.notificationCategories().first { $0.identifier == content.categoryIdentifier }
+                    print("dev notify: filled title=\(content.title) | body=\(content.body) | buttons=\(registered?.actions.map(\.title) ?? []) | unlock needed=\(registered?.actions.allSatisfy { $0.options.contains(.authenticationRequired) } ?? false)")
+                    var tampered = box
+                    tampered[tampered.count - 5] ^= 1
+                    let untouched = UNMutableNotificationContent()
+                    untouched.body = "placeholder"
+                    print("dev notify: a tampered message changes the notification: \(AskNotification.fill(untouched, from: tampered) != nil || untouched.body != "placeholder")")
+                }
+            } else {
+                let delivered = await center.deliveredNotifications()
+                let categories = await center.notificationCategories()
+                print("dev notify: delivered=\(delivered.count) categories=\(categories.map { "\($0.identifier.replacingOccurrences(of: "\u{1f}", with: "+")) [\($0.actions.map(\.title).joined(separator: ","))]" })")
+                for item in delivered {
+                    let c = item.request.content
+                    print("dev notify: title=\(c.title) | body=\(c.body) | category=\(c.categoryIdentifier.replacingOccurrences(of: "\u{1f}", with: "+")) | ask=\(c.userInfo[AskNotification.askID] != nil)")
+                }
+            }
             return
         }
         // BSNS_DEV_HOLD_KEY=1: just hold BSNS_DEV_KEY in the agent, for a run

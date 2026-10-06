@@ -78,6 +78,9 @@ struct LiveTerminalScreen: View {
                                 scrolledBack: $scrolledBack,
                                 tappedLink: $tappedLink,
                                 pendingPaste: $pendingPaste)
+                // Beside a sidebar, text shouldn't start hard against its edge.
+                .padding(.leading, sidebarVisibility == nil ? 0 : 8)
+                .background(Color(uiColor: TerminalTheme.named(themeId).background.uiColor))
                 .overlay(alignment: .top) { transferBanner }
                 .overlay(alignment: .bottomTrailing) { jumpToLatestButton }
             // The shortcut bar stays put whether the soft keyboard is up or down

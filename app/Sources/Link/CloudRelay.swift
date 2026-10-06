@@ -90,6 +90,9 @@ final class CloudRelay {
         info.alertBody = "Something on one of your machines needs you."
         info.soundName = "default"
         info.shouldSendContentAvailable = true
+        // Lets the notification extension replace this text with the real
+        // question, and add its answers as buttons, before anything is shown.
+        info.shouldSendMutableContent = true
         subscription.notificationInfo = info
         _ = try await database.save(subscription)
     }
@@ -127,6 +130,26 @@ final class CloudRelay {
         let box = try channel.seal(AskAnswer(askID: ask.id, choice: choice), as: .answer)
         _ = try await database.save(record(.answer, askID: ask.id, to: peer, box: box))
         await dismiss(ask)
+    }
+
+    /// Answer from a notification button, where only the question's id and
+    /// its sender are known. The computer checks the choice against what it
+    /// actually asked, so nothing here needs to.
+    func answer(askID: UUID, choice: String, toPeerID peerID: String) async throws {
+        guard let peer = links.paired.first(where: { $0.id == peerID })?.peer, let channel = channel(with: peer) else { return }
+        let box = try channel.seal(AskAnswer(askID: askID, choice: choice), as: .answer)
+        _ = try await database.save(record(.answer, askID: askID, to: peer, box: box))
+        _ = try? await database.deleteRecord(
+            withID: CKRecord.ID(recordName: RelayChannel.recordName(.ask, askID: askID, to: links.identity.deviceID)))
+    }
+
+    /// The message key for each paired computer, for the notification extension.
+    func relayKeys() -> [RelayKeyVault.Entry] {
+        links.paired.compactMap { device in
+            guard let channel = channel(with: device.peer) else { return nil }
+            return RelayKeyVault.Entry(peerID: device.peer.id, peerName: device.peer.name,
+                                       localID: links.identity.deviceID, key: channel.keyData)
+        }
     }
 
     /// Remove a notice (or a question the user doesn't want) from the queue.

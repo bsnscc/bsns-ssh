@@ -19,6 +19,17 @@ final class AskRelayTests: XCTestCase {
         XCTAssertTrue(ask.accepts(back))
     }
 
+    func testAChannelRebuiltFromItsKeyInterworks() throws {
+        let (mac, phone, _) = try pair()
+        let helper = try RelayChannel(keyData: phone.keyData, localID: phone.localID, peerID: phone.peerID)
+        let ask = Ask(text: "Deploy?", options: ["approve"], machine: "studio")
+        let read: Ask = try helper.open(try mac.seal(ask, as: .ask), as: .ask)
+        XCTAssertEqual(read, ask)
+        let back: AskAnswer = try mac.open(try helper.seal(AskAnswer(askID: ask.id, choice: "approve"), as: .answer), as: .answer)
+        XCTAssertTrue(ask.accepts(back))
+        XCTAssertThrowsError(try RelayChannel(keyData: Data([1, 2, 3]), localID: "a", peerID: "b"))
+    }
+
     func testOnlyThePairedDeviceCanReadOrAnswer() throws {
         let (mac, _, stranger) = try pair()
         let sealed = try mac.seal(Ask(text: "x", options: ["y"], machine: "m"), as: .ask)
