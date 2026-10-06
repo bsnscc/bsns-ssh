@@ -110,7 +110,7 @@ final class WorkspaceTests: XCTestCase {
 
 final class DeepLinkTests: XCTestCase {
     func testSessionAndWorkspaceLinksRoundTrip() throws {
-        let session = DeepLink.session(host: "studio", user: "graham", tmux: "main")
+        let session = DeepLink.session(host: "studio", user: "dev", tmux: "main")
         XCTAssertEqual(DeepLink(try XCTUnwrap(session.url)), session)
         let workspace = DeepLink.workspace(name: "Site Rebuild", host: "laptop.local")
         XCTAssertEqual(DeepLink(try XCTUnwrap(workspace.url)), workspace)

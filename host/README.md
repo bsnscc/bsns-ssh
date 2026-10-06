@@ -8,7 +8,7 @@ Each execution host needs tmux, Python 3, and this helper:
 python3 host/install-workspaces.py
 ```
 
-Install on the Mac Studio and laptop separately. This installs `~/.local/bin/bsns-workspace`,
+Install on each host separately. This installs `~/.local/bin/bsns-workspace`,
 a `dev` shortcut, tmux defaults, and a LaunchAgent that restores cached workspaces
 at login. It backs up replaced files. It never starts a window's tool automatically.
 

@@ -34,7 +34,7 @@ pipeline notes). bsns-ssh is a **new app** under that same account.
 1. **Create the app** in Play Console (first time is manual): name, default
    language, app/game = app, free/paid = free. Enable **Play App Signing**.
 2. **Internal testing track** → upload `app-release.aab`. Either drag it into
-   the console, or use the API submit script (same mechanism as bsns-mobile —
+   the console, or use the API submit script (
    gcloud **application-default credentials**, no service-account JSON):
 
    ```sh
@@ -42,8 +42,8 @@ pipeline notes). bsns-ssh is a **new app** under that same account.
    android/scripts/submit-play.sh                 # uploads to the internal track
    ```
 
-   `submit-play.sh` authenticates with graham@bsns.cc's ADC (quota project
-   `bsns-mobile`, which is already linked to the Play account) and drives the
+   `submit-play.sh` authenticates with your own ADC (quota project
+   `$ANDROID_QUOTA_PROJECT`, which must be linked to the Play account) and drives the
    Play Developer API directly (create edit → upload bundle → assign track →
    commit). Prerequisites:
    - **ADC with the androidpublisher scope** (one-time, opens a browser):

@@ -1,0 +1,11 @@
+// Signing identity for device and distribution builds.
+//
+// The team is not kept in the repository. Put yours in a file named
+// Local.xcconfig beside this one (it is ignored by git):
+//
+//     DEVELOPMENT_TEAM = ABCDE12345
+//
+// Building under your own team also means using your own bundle identifiers and
+// iCloud container; see "Building under your own team" in docs/ARCHITECTURE.md.
+DEVELOPMENT_TEAM =
+#include? "Local.xcconfig"

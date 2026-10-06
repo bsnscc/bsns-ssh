@@ -173,7 +173,7 @@ iOS.
 7. Sync (SAF) — cross-platform bundle verified against iOS.
 8. mosh (NDK).
 
-## Open questions for Graham
+## Open questions
 
 1. ~~sshj vs libssh2-NDK~~ — **decided: libssh2-NDK** (stack uniformity +
    verifiability; 2026-06-15).

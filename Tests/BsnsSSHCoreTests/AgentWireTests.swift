@@ -58,9 +58,9 @@ final class AgentWireTests: XCTestCase {
 
     func testParsesUserAuthRequests() {
         let sid = Data(repeating: 7, count: 32)
-        let parsed = AgentWire.userAuthRequest(signedData: userAuthData(sessionID: sid, user: "graham"))
+        let parsed = AgentWire.userAuthRequest(signedData: userAuthData(sessionID: sid, user: "dev"))
         XCTAssertEqual(parsed?.sessionID, sid)
-        XCTAssertEqual(parsed?.user, "graham")
+        XCTAssertEqual(parsed?.user, "dev")
         // A signature request that isn't a login (an SSH signature over a file).
         XCTAssertNil(AgentWire.userAuthRequest(signedData: Data("SSHSIG...".utf8)))
     }
@@ -80,11 +80,11 @@ final class AgentWireTests: XCTestCase {
         XCTAssertEqual(bound, Data([SSHAgentMessageType.success.rawValue]))
 
         let response = await connection.respond(to: signRequest(key: key.publicKey.blob,
-                                                                data: userAuthData(sessionID: sid, user: "graham")))
+                                                                data: userAuthData(sessionID: sid, user: "dev")))
         XCTAssertEqual(response.first, SSHAgentMessageType.signResponse.rawValue)
         XCTAssertEqual(events.all.count, 1)
         XCTAssertEqual(events.all.first?.host, "build-box")
-        XCTAssertEqual(events.all.first?.user, "graham")
+        XCTAssertEqual(events.all.first?.user, "dev")
         XCTAssertEqual(events.all.first?.requester, "ssh")
         XCTAssertEqual(events.all.first?.outcome, .signed)
         XCTAssertEqual(events.all.first?.keyFingerprint, key.id.rawValue)

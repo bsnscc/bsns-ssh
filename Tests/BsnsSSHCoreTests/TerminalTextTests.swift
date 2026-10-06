@@ -90,13 +90,13 @@ final class PromptScanTests: XCTestCase {
     private func lines(_ text: String) -> [Substring] { text.split(separator: "\n", omittingEmptySubsequences: false) }
 
     func testDefaultPatternMatchesCommonPrompts() {
-        XCTAssertTrue(scan.isPrompt("graham@Mac-Studio-2 ~ % ls -la"))
-        XCTAssertTrue(scan.isPrompt("graham@Mac-Studio-2 ~ %"))
+        XCTAssertTrue(scan.isPrompt("dev@build-box ~ % ls -la"))
+        XCTAssertTrue(scan.isPrompt("dev@build-box ~ %"))
         XCTAssertTrue(scan.isPrompt("deploy@web-1:~/app$ git status"))
         XCTAssertTrue(scan.isPrompt("root@db:/var/log# tail syslog"))
         XCTAssertFalse(scan.isPrompt("total 48"))
-        XCTAssertFalse(scan.isPrompt("  graham@host ~ % indented, so not a prompt"))
-        XCTAssertFalse(scan.isPrompt("drwxr-xr-x  5 graham staff 160 Oct  4 08:00 src"))
+        XCTAssertFalse(scan.isPrompt("  dev@host ~ % indented, so not a prompt"))
+        XCTAssertFalse(scan.isPrompt("drwxr-xr-x  5 dev staff 160 Oct  4 08:00 src"))
     }
 
     func testLastOutputIsBetweenTheLastTwoPromptsWithContent() {

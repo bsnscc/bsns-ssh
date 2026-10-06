@@ -99,7 +99,7 @@ public enum AgentWire {
 /// One outside program's connection to the agent. Holds what that program has
 /// said so far (which server its session is with) and answers its requests
 /// with the right context attached — so a prompt can say "ssh wants to sign in
-/// to graham@build-box" rather than just asking for a fingerprint.
+/// to dev@build-box" rather than just asking for a fingerprint.
 public actor AgentClientConnection {
     private let agent: Agent
     private let requester: String?

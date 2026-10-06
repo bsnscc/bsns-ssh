@@ -80,11 +80,16 @@ if args.definition:
     existing = [w for w in existing if w['id'] != data['id']]
     existing.append(data)
     write(app_file, json.dumps(existing, indent=2) + '\n')
+# launchd starts with a minimal PATH. Give the login job the one in use right now,
+# so the tools this user can run from a shell are the ones it finds.
+login_path = ':'.join(dict.fromkeys(
+    [str(bin_dir)] + [p for p in os.environ.get('PATH', '').split(':') if p]
+    + ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']))
 logdir = home / 'Library/Logs/bsns-ssh'
 logdir.mkdir(parents=True, exist_ok=True)
 agent = home / 'Library/LaunchAgents/cc.bsns.ssh.workspaces.plist'
 plist = dict(Label='cc.bsns.ssh.workspaces', ProgramArguments=[str(helper), 'up'], RunAtLoad=True,
-             EnvironmentVariables={'PATH': str(bin_dir) + ':/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'},
+             EnvironmentVariables={'PATH': login_path},
              StandardOutPath=str(logdir / 'workspaces.log'), StandardErrorPath=str(logdir / 'workspaces-error.log'))
 write(agent, plistlib.dumps(plist))
 domain = 'gui/' + str(os.getuid())

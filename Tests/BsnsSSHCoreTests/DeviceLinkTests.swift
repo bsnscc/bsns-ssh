@@ -196,7 +196,7 @@ final class RemoteAgentKeyTests: XCTestCase {
         XCTAssertTrue(remote.requiresUserPresence)
 
         let data = Data("challenge".utf8)
-        let context = SignContext(host: "build-box", purpose: .remoteAgent, requester: "ssh", user: "graham")
+        let context = SignContext(host: "build-box", purpose: .remoteAgent, requester: "ssh", user: "dev")
         let viaLink = try await macAgent.sign(keyID: remote.id, data: data, context: context)
         // The signature that came back over the link verifies under the phone's key.
         var signature = SSHDecoder(viaLink.blob)
@@ -208,7 +208,7 @@ final class RemoteAgentKeyTests: XCTestCase {
         XCTAssertTrue(verifier.isValidSignature(raw, for: data))
         XCTAssertEqual(seen.value?.host, "build-box")
         XCTAssertEqual(seen.value?.requester, "ssh")
-        XCTAssertEqual(seen.value?.user, "graham")
+        XCTAssertEqual(seen.value?.user, "dev")
     }
 
     func testADeclineOnTheOtherDeviceIsACancel() async {

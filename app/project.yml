@@ -27,6 +27,9 @@ targets:
   # Opens a sealed question when its push arrives, so the notification can show
   # it, with its answers as buttons, instead of a placeholder.
   BsnsNotify:
+    configFiles:
+      Debug: ../Signing.xcconfig
+      Release: ../Signing.xcconfig
     type: app-extension
     platform: iOS
     sources:
@@ -62,10 +65,12 @@ targets:
         CURRENT_PROJECT_VERSION: "100"
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
-        DEVELOPMENT_TEAM: "4L394FY4WC"
         CODE_SIGN_STYLE: Automatic
         SKIP_INSTALL: YES
   BsnsSSH:
+    configFiles:
+      Debug: ../Signing.xcconfig
+      Release: ../Signing.xcconfig
     type: application
     platform: iOS
     sources:
@@ -140,8 +145,8 @@ targets:
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        # Signing for device + TestFlight (Graham Saathoff's team).
-        DEVELOPMENT_TEAM: "4L394FY4WC"
+        # Signing for device and distribution builds; the team comes from
+        # Signing.xcconfig → Local.xcconfig (not committed).
         CODE_SIGN_STYLE: Automatic
     entitlements:
       path: BsnsSSH.entitlements

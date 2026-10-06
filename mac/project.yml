@@ -20,6 +20,9 @@ targets:
   # `bsns ask` / `bsns notify`: the command-line way in for scripts. Shipped
   # inside the app, beside its main executable.
   bsns:
+    configFiles:
+      Debug: ../Signing.xcconfig
+      Release: ../Signing.xcconfig
     type: tool
     platform: macOS
     sources:
@@ -30,11 +33,13 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: cc.bsns.ssh.mac.cli
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: 4L394FY4WC
         CODE_SIGN_IDENTITY: "Apple Development"
         ENABLE_HARDENED_RUNTIME: YES
         SKIP_INSTALL: YES
   BsnsSSHMac:
+    configFiles:
+      Debug: ../Signing.xcconfig
+      Release: ../Signing.xcconfig
     type: application
     platform: macOS
     sources:
@@ -149,7 +154,6 @@ targets:
         # same from one build to the next. Distribution outside the team still
         # needs a Developer ID build and notarization; the App Store, the sandbox.
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: 4L394FY4WC
         CODE_SIGN_IDENTITY: "Apple Development"
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_ENTITLEMENTS: BsnsSSHMac.entitlements

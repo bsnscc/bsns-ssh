@@ -271,6 +271,21 @@ populate the native dependencies. Xcode needs the Metal toolchain once
 (`xcodebuild -downloadComponent MetalToolchain`) — SwiftTerm compiles Metal
 shaders. The app target is Swift 5 language mode; the core is Swift 6.
 
+### Building under your own team
+
+Nothing about the signing identity is kept in the repository. To build for a
+device or for distribution:
+
+- put your team in `Local.xcconfig` at the repository root
+  (`DEVELOPMENT_TEAM = ABCDE12345`); it is read through `Signing.xcconfig` and
+  ignored by git;
+- use your own bundle identifiers (`PRODUCT_BUNDLE_IDENTIFIER` in
+  `app/project.yml` and `mac/project.yml`) — an identifier belongs to one team;
+- if you want notifications from your computers, create your own iCloud
+  container and use its name in the entitlements and in `CloudRelay`.
+
+Simulator builds and `swift test` need none of this.
+
 ## License
 
 GPLv3 (see `LICENSE`). Because the app links mosh (GPL-3.0), the combined work

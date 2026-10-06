@@ -97,7 +97,7 @@ platform-specific feature description.
 > need a bsns.cc account. If this is how you work too, I'd like to hear what
 > works for you and what doesn't.
 
-Use this as an introduction Graham can edit, not a fabricated customer quote.
+Use this as an introduction the maintainer can edit, not a fabricated customer quote.
 Pair it with a working download and source link when publishing.
 
 ## Demonstration and screenshots
@@ -147,7 +147,7 @@ Resolve broken first-use flows before spending effort on reach.
 
 For launch, publish the working download page, matching source tag and release
 notes, screenshots, and video together. Make a founder post with the concrete
-example above. Then consider a Show HN submission while Graham is available to
+example above. Then consider a Show HN submission while the maintainer is available to
 answer questions. Its [guidelines](https://news.ycombinator.com/showhn.html) call
 for something people can try, not a waitlist or an announcement page. Suggested
 title: “Show HN: bsns.SSH, a free open-source SSH and mosh client.”
@@ -186,7 +186,7 @@ than inventing a conversion forecast now.
 ## Editorial rules
 
 Write like someone explaining a tool they use. Prefer specific actions and
-examples. Use first person only for Graham's own experience. Read public copy
+examples. Use first person only for the maintainer's own experience. Read public copy
 aloud and remove wording that would sound strange in a conversation.
 
 Do not use invented testimonials, inflated security promises, generic superlatives,

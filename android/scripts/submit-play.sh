@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Submit the release .aab to the Play internal track via the Google Play
 # Developer API, authenticated through gcloud application-default credentials.
-# Mirrors the bsns-mobile pipeline: no service-account JSON, uses graham@bsns.cc's
-# ADC (already-linked Play account; quota project bsns-mobile).
+# No service-account JSON: uses the uploader's own Application Default Credentials
+# and a Google Cloud project linked to the Play account (ANDROID_QUOTA_PROJECT).
 #
 # One-time setup (opens a browser once, then headless forever):
 #   gcloud auth application-default login \
 #     --scopes=https://www.googleapis.com/auth/androidpublisher
-#   gcloud services enable androidpublisher.googleapis.com --project=bsns-mobile
-#   gcloud auth application-default set-quota-project bsns-mobile
+#   gcloud services enable androidpublisher.googleapis.com --project="$ANDROID_QUOTA_PROJECT"
+#   gcloud auth application-default set-quota-project "$ANDROID_QUOTA_PROJECT"
 #
 # The cc.bsns.ssh app must already exist in the Play Console (the API can't
 # create a listing). Build the .aab first: ./gradlew :app:bundleRelease
@@ -26,7 +26,7 @@ AAB_PATH="${1:-$ANDROID_DIR/app/build/outputs/bundle/release/app-release.aab}"
 PACKAGE_NAME="cc.bsns.ssh"
 TRACK="${ANDROID_SUBMIT_TRACK:-internal}"
 RELEASE_STATUS="${ANDROID_SUBMIT_STATUS:-completed}"   # draft = stage in console instead
-QUOTA_PROJECT="${ANDROID_QUOTA_PROJECT:-bsns-mobile}"  # linked Play project (shared)
+QUOTA_PROJECT="${ANDROID_QUOTA_PROJECT:?set ANDROID_QUOTA_PROJECT to the Google Cloud project linked to your Play account}"
 
 API_BASE="https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME"
 UPLOAD_BASE="https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/$PACKAGE_NAME"

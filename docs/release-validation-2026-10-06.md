@@ -29,21 +29,11 @@ from the preceding setup. Freeze and review the intended source before tagging.
   `mach_absolute_time` import; `stat`/`fstat` remain for the documented audit.
 - Recipe syntax, manifest plist validation, and `git diff --check` passed.
 
-## Local artifact record
+## Artifacts
 
-Source base: `e436cce89c4ec202d0837115ef6bc3f5e7762146` plus the working-tree
-changes described above. This is not an immutable release-source reference.
-
-- iOS archive: `/private/tmp/bsns-release-readiness-patched.xcarchive`
-- iOS executable SHA-256:
-  `03c742e103940884f6ad73396ee3f0c38c7fa981cc254bd8faa67206c54b65da`
-- Android bundle: `android/app/build/outputs/bundle/release/app-release.aab`
-- Android bundle SHA-256:
-  `f76a080423c9a2ff5df49bc896eaafb97df951d9b11a6c8aa9f4c60540cf6517`
-
-Build/test logs are in `/private/tmp/bsns-release-*.log` on the build host.
-Temporary artifacts are preparation evidence; make a durable release record
-when freezing and submitting the candidate.
+The archive, bundle and logs from this pass are local preparation evidence and
+are not recorded here. Make a durable record — source commit, artifact hashes,
+where the logs are kept — when a candidate is frozen and submitted.
 
 ## External and device checks still pending
 

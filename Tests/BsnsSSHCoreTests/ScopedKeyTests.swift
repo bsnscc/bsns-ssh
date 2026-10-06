@@ -45,7 +45,7 @@ final class ScopedKeyTests: XCTestCase {
         func signRequest(method: String, hostKey: Data?) -> Data {
             let signed = SSHEncoder.build {
                 $0.writeString(session); $0.writeByte(50)
-                $0.writeString(Data("graham".utf8)); $0.writeString(Data("ssh-connection".utf8))
+                $0.writeString(Data("dev".utf8)); $0.writeString(Data("ssh-connection".utf8))
                 $0.writeString(Data(method.utf8)); $0.writeByte(1)
                 $0.writeString(Data("ssh-ed25519".utf8)); $0.writeString(key.publicKey.blob)
                 if let hostKey { $0.writeString(hostKey) }

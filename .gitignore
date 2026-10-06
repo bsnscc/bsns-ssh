@@ -40,3 +40,6 @@ mac/Info.plist
 # Internal review docs — never publish (history was scrubbed of these)
 docs/*review*
 docs/*-pre-public*
+
+# Per-developer signing team (see Signing.xcconfig)
+Local.xcconfig

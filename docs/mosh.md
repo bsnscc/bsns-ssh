@@ -91,7 +91,7 @@ gets roaming + resilience over UDP); fold in `terminaloverlay` afterwards.
 6. Predictive echo (`terminaloverlay`) as a follow-up.
 
 Only steps 1 (done) and 3 (link) are verifiable off-device; the live session needs
-a real `mosh-server` + network, so 4–5 validate on Graham's device.
+a real `mosh-server` + network, so 4–5 are validated on a real device.
 
 Testing needs a real server running `mosh-server` and network roaming, so this
 lands and is validated on-device, not in the simulator.
