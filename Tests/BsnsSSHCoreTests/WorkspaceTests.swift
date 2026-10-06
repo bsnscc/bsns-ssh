@@ -4,6 +4,35 @@ import XCTest
 final class WorkspaceTests: XCTestCase {
     private let f = TmuxCommand.fieldSeparator
 
+    func testOldWorkspaceDecodesWithoutLayout() throws {
+        let json = "{\"id\":\"E612E670-3FE1-487F-8127-C702929FA89E\",\"name\":\"Site\",\"path\":\"~/site\",\"hosts\":[]}"
+        let workspace = try JSONDecoder().decode(Workspace.self, from: Data(json.utf8))
+        XCTAssertNil(workspace.windows)
+        XCTAssertNil(WorkspaceCommand.prepare(workspace))
+        XCTAssertEqual(workspace.tmuxSession, "Site")
+    }
+
+    func testLayoutResolvesHostPathAndContainsOnlyEncodedData() throws {
+        let w = Workspace(name: "Development", path: "~/workspace", pathOverrides: ["laptop": "~/code"],
+                          sessionName: "0", windows: [WorkspaceWindow(index: 0, name: "review", tool: "review")])
+        XCTAssertEqual(w.tmuxSession, "0")
+        let command = try XCTUnwrap(WorkspaceCommand.prepare(w, host: "laptop"))
+        XCTAssertEqual(command.filter { $0 == "'" }.count, 2)
+        let encoded = try XCTUnwrap(command.components(separatedBy: " apply ").last).dropLast()
+        let data = try XCTUnwrap(Data(base64Encoded: String(encoded)))
+        let decoded = try JSONDecoder().decode(Workspace.self, from: data)
+        XCTAssertEqual(decoded.path, "~/code")
+        XCTAssertEqual(decoded.windows, w.windows)
+        XCTAssertNil(decoded.pathOverrides)
+    }
+
+    func testInvalidAndDuplicateWindowsAreRefused() {
+        var w = Workspace(name: "work", path: "~/workspace", windows: [WorkspaceWindow(index: 0, name: "$(bad)")])
+        XCTAssertNil(WorkspaceCommand.prepare(w))
+        w.windows = [WorkspaceWindow(index: 0, name: "a"), WorkspaceWindow(index: 0, name: "b")]
+        XCTAssertNil(WorkspaceCommand.prepare(w))
+    }
+
     func testSessionNameAndPerHostPaths() {
         let workspace = Workspace(name: "Site Rebuild!", path: "/Users/me/work/site",
                                   pathOverrides: ["laptop.local": "~/work/site"], hosts: ["Studio", "laptop.local"])
@@ -60,6 +89,22 @@ final class WorkspaceTests: XCTestCase {
         let suffix = MoshServerCommand.tmuxSuffix("site", clipboard: true, directory: "/Volumes/Dev/site")
         XCTAssertTrue(suffix.contains("new-session -A -s site -c \"/Volumes/Dev/site\""))
         XCTAssertEqual(suffix.filter { $0 == "'" }.count, 2)
+    }
+
+    func testAWindowsToolIsALabelNotACommand() throws {
+        XCTAssertTrue(WorkspaceWindow(index: 1, name: "edit", tool: "editor").isValid)
+        XCTAssertTrue(WorkspaceWindow(index: 1, name: "edit").isValid)
+        for bad in ["", "rm -rf /", "a;b", "$(x)", String(repeating: "x", count: 33)] {
+            XCTAssertFalse(WorkspaceWindow(index: 1, name: "edit", tool: bad).isValid, bad)
+        }
+        // Saved under the field's earlier name: still read, written back as `tool`.
+        let id = UUID()
+        let legacy = Data("{\"id\":\"\(id.uuidString)\",\"index\":2,\"name\":\"review\",\"agent\":\"review\"}".utf8)
+        let window = try JSONDecoder().decode(WorkspaceWindow.self, from: legacy)
+        XCTAssertEqual(window.tool, "review")
+        let written = String(decoding: try JSONEncoder().encode(window), as: UTF8.self)
+        XCTAssertTrue(written.contains("\"tool\":\"review\""))
+        XCTAssertFalse(written.contains("agent"))
     }
 }
 

@@ -20,16 +20,22 @@ public struct Workspace: Codable, Identifiable, Equatable, Sendable {
     /// A command run in the project directory to describe its state on a
     /// machine — how fresh a mirror is, say. Its first lines are shown as is.
     public var statusCommand: String?
+    /// An explicit session preserves existing host connections when adopting a layout.
+    public var sessionName: String?
+    /// Named full-screen windows, shared by every device. No executable commands.
+    public var windows: [WorkspaceWindow]?
+    public var modifiedAt: Date? = nil
 
     public init(id: UUID = UUID(), name: String, path: String, pathOverrides: [String: String]? = nil,
-                repository: String? = nil, hosts: [String] = [], statusCommand: String? = nil) {
+                repository: String? = nil, hosts: [String] = [], statusCommand: String? = nil, sessionName: String? = nil, windows: [WorkspaceWindow]? = nil) {
         self.id = id; self.name = name; self.path = path; self.pathOverrides = pathOverrides
         self.repository = repository; self.hosts = hosts; self.statusCommand = statusCommand
+        self.sessionName = sessionName; self.windows = windows
     }
 
     /// The tmux session every machine uses for this workspace. Nil when the
     /// name has nothing tmux can use.
-    public var tmuxSession: String? { MoshServerCommand.sanitizedTmuxName(name.replacingOccurrences(of: " ", with: "-")) }
+    public var tmuxSession: String? { MoshServerCommand.sanitizedTmuxName((sessionName ?? name).replacingOccurrences(of: " ", with: "-")) }
 
     public func path(on host: String?) -> String {
         host.flatMap { pathOverrides?[$0.lowercased()] } ?? path
@@ -37,6 +43,55 @@ public struct Workspace: Codable, Identifiable, Equatable, Sendable {
 
     public func includes(host: String) -> Bool {
         hosts.contains { $0.caseInsensitiveCompare(host) == .orderedSame }
+    }
+}
+
+/// A portable window role. A nil directory uses the workspace path on the chosen host.
+public struct WorkspaceWindow: Codable, Identifiable, Equatable, Sendable {
+    public var id: UUID
+    public var index: Int
+    public var name: String
+    public var directory: String?
+    /// A label for what the window is for — "editor", "review". Only the label
+    /// travels with the workspace: what it runs is defined on each host, so a
+    /// synced definition can never choose a command.
+    public var tool: String?
+
+    public static let maxToolLength = 32
+
+    public init(id: UUID = UUID(), index: Int, name: String, directory: String? = nil, tool: String? = nil) {
+        self.id = id; self.index = index; self.name = name
+        self.directory = directory; self.tool = tool
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, index, name, directory, tool, agent }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        index = try values.decode(Int.self, forKey: .index)
+        name = try values.decode(String.self, forKey: .name)
+        directory = try values.decodeIfPresent(String.self, forKey: .directory)
+        // `agent` is the field's earlier name; definitions saved then still load.
+        tool = try values.decodeIfPresent(String.self, forKey: .tool)
+            ?? values.decodeIfPresent(String.self, forKey: .agent)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(index, forKey: .index)
+        try values.encode(name, forKey: .name)
+        try values.encodeIfPresent(directory, forKey: .directory)
+        try values.encodeIfPresent(tool, forKey: .tool)
+    }
+
+    public var isValid: Bool {
+        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+        return (0...999).contains(index) && !name.isEmpty && name.count <= 80
+            && name.allSatisfy { allowed.contains($0) }
+            && (directory == nil || WorkspaceCommand.quoted(directory!) != nil)
+            && (tool == nil || (!tool!.isEmpty && tool!.count <= Self.maxToolLength && tool!.allSatisfy { allowed.contains($0) }))
     }
 }
 
@@ -66,6 +121,23 @@ public struct WorkspaceStatus: Equatable, Sendable {
 }
 
 public enum WorkspaceCommand {
+    /// Update the selected host's cached definition and restore missing windows.
+    /// The helper accepts structured data only; synced workspaces cannot run commands.
+    public static func prepare(_ workspace: Workspace, host: String? = nil) -> String? {
+        guard let windows = workspace.windows, !windows.isEmpty else { return nil }
+        guard windows.count <= 50, windows.allSatisfy(\.isValid),
+              Set(windows.map(\.id)).count == windows.count,
+              Set(windows.map(\.name)).count == windows.count,
+              Set(windows.map(\.index)).count == windows.count,
+              let session = workspace.tmuxSession, !session.isEmpty else { return nil }
+        var resolved = workspace
+        resolved.path = workspace.path(on: host)
+        resolved.pathOverrides = nil
+        resolved.sessionName = session
+        guard quoted(resolved.path) != nil, let data = try? JSONEncoder().encode(resolved) else { return nil }
+        return TmuxCommand.script("\"$HOME/.local/bin/bsns-workspace\" apply \(data.base64EncodedString())")
+    }
+
     static let marker = "ws"
     public static let maxStatusLines = 4
 

@@ -269,13 +269,16 @@ private struct WorkspaceEditor: View {
                             TextField("Window name", text: Binding(
                                 get: { workspace.windows?.first(where: { $0.id == window.id })?.name ?? "" },
                                 set: { value in updateWindow(window.id) { $0.name = value } }))
-                            Picker("Agent", selection: Binding(
-                                get: { workspace.windows?.first(where: { $0.id == window.id })?.agent ?? "" },
-                                set: { value in updateWindow(window.id) { $0.agent = value.isEmpty ? nil : value } })) {
-                                    Text("Shell").tag("")
-                                    Text("Claude").tag("claude")
-                                    Text("Codex").tag("codex")
-                                }.labelsHidden()
+                            // A label only — what it runs is defined on each host.
+                            TextField("Tool", text: Binding(
+                                get: { workspace.windows?.first(where: { $0.id == window.id })?.tool ?? "" },
+                                set: { value in
+                                    let label = String(value.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+                                        .prefix(WorkspaceWindow.maxToolLength))
+                                    updateWindow(window.id) { $0.tool = label.isEmpty ? nil : label }
+                                }), prompt: Text("shell"))
+                                .frame(maxWidth: 110)
+                                .help("Optional label, such as editor or review. Each host defines what a label runs; a window without one is a plain shell.")
                             Button { workspace.windows?.removeAll { $0.id == window.id } } label: {
                                 Image(systemName: "minus.circle")
                             }.accessibilityLabel("Remove \(window.name) from saved layout")

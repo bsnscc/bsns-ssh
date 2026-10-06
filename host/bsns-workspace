@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Manage a saved tmux workspace without interrupting running work."""
+import argparse, base64, fcntl, json, os, pathlib, re, shutil, subprocess, sys, uuid
+ROOT = pathlib.Path(os.environ.get('BSNS_WORKSPACE_CONFIG', '~/.config/bsns-ssh/workspaces')).expanduser()
+# What each tool label means ON THIS HOST. A synced definition only ever names a
+# label; the command behind it is written here, by whoever owns the machine.
+TOOLS = pathlib.Path(os.environ.get('BSNS_WORKSPACE_TOOLS', str(ROOT.parent / 'tools.json'))).expanduser()
+def tool_of(window):
+    # 'agent' is the field's earlier name; cached definitions may still use it.
+    return window.get('tool') or window.get('agent')
+def load_tools():
+    if not TOOLS.exists():
+        return {}
+    tools = json.loads(TOOLS.read_text())
+    if not isinstance(tools, dict):
+        raise ValueError(str(TOOLS) + ' must be an object of label: {"resume": [command, ...]}')
+    for label, spec in tools.items():
+        command = spec.get('resume') if isinstance(spec, dict) else None
+        if not re.fullmatch('[A-Za-z0-9_-]{1,32}', label) or not isinstance(command, list) or not command \
+                or not all(isinstance(part, str) and part for part in command):
+            raise ValueError('Tool ' + label + ' needs "resume": a non-empty list of strings')
+    return tools
+TMUX = [shutil.which('tmux') or '/opt/homebrew/bin/tmux']
+if os.environ.get('BSNS_WORKSPACE_SOCKET'):
+    TMUX += ['-L', os.environ['BSNS_WORKSPACE_SOCKET']]
+def tm(*args, check=True):
+    return subprocess.run(TMUX + list(args), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=check).stdout.strip()
+def validate(data):
+    uuid.UUID(data['id'])
+    session = data.get('sessionName') or re.sub('[^A-Za-z0-9_-]', '', data['name'].replace(' ', '-'))
+    if not re.fullmatch('[A-Za-z0-9_-]{1,100}', session):
+        raise ValueError('Invalid tmux session name')
+    data['sessionName'] = session
+    windows = data.get('windows') or []
+    if not 1 <= len(windows) <= 50:
+        raise ValueError('A saved layout needs 1–50 windows')
+    for field in ('id', 'name', 'index'):
+        values = [w[field] for w in windows]
+        if len(set(values)) != len(values):
+            raise ValueError('Duplicate window ' + field)
+    for w in windows:
+        if not re.fullmatch('[A-Za-z0-9_-]{1,80}', w['name']):
+            raise ValueError('Window names must use letters, numbers, underscores or hyphens')
+        uuid.UUID(w['id'])
+        if type(w['index']) is not int or not 0 <= w['index'] <= 999:
+            raise ValueError('Invalid window index')
+        label = tool_of(w)
+        if label is not None and not (isinstance(label, str) and re.fullmatch('[A-Za-z0-9_-]{1,32}', label)):
+            raise ValueError('Tool labels must use letters, numbers, underscores or hyphens')
+        w.pop('agent', None)
+        if label is not None:
+            w['tool'] = label
+        directory = w.get('directory') or data['path']
+        if not isinstance(directory, str) or not directory.startswith(('/', '~/')) or '\x00' in directory:
+            raise ValueError('Directory must be absolute or start with ~/')
+    return data
+
+def read(name=None):
+    candidates = [validate(json.loads(p.read_text())) for p in ROOT.glob('*.json')]
+    if name:
+        candidates = [d for d in candidates if name in (d['name'], d['sessionName'], d['id'])]
+    if len(candidates) != 1:
+        raise ValueError('Choose a workspace: ' + ', '.join(d['name'] for d in candidates))
+    return candidates[0]
+
+def save(data):
+    validate(data)
+    dest = ROOT / (data['id'] + '.json')
+    temp = dest.with_suffix('.tmp')
+    temp.write_text(json.dumps(data, indent=2) + '\n')
+    temp.replace(dest)
+
+def directory(data, window):
+    return str(pathlib.Path(window.get('directory') or data['path']).expanduser())
+
+def listing(session):
+    out = tm('list-windows', '-t', '=' + session, '-F', '#{window_id}\t#{window_index}\t#{window_name}\t#{@bsns_workspace_id}', check=False)
+    return [line.split('\t') for line in out.splitlines() if line]
+def up(data):
+    session = data['sessionName']
+    existing = listing(session)
+    created = not existing
+    for w in data['windows']:
+        path = pathlib.Path(directory(data, w))
+        if not path.is_dir():
+            raise ValueError('Missing directory: ' + str(path))
+    for w in data['windows']:
+        match = next((r for r in existing if len(r) == 4 and r[3] == w['id']), None)
+        if match:
+            tm('rename-window', '-t', match[0], w['name'])
+            tm('set-option', '-w', '-t', match[0], 'automatic-rename', 'off')
+            continue
+        adopted = next((r for r in existing if r[1] == str(w['index']) and r[2] == w['name'] and (len(r) < 4 or not r[3])), None)
+        if adopted:
+            tm('set-option', '-w', '-t', adopted[0], '@bsns_workspace_id', w['id'])
+            tm('set-option', '-w', '-t', adopted[0], 'automatic-rename', 'off')
+            continue
+        if any(r[1] == str(w['index']) or r[2] == w['name'] for r in existing):
+            raise ValueError('Unmanaged window conflicts with ' + w['name'] + '; left untouched')
+        args = ['-d', '-P', '-F', '#{window_id}', '-n', w['name'], '-c', directory(data, w)]
+        if not existing:
+            wid = tm('new-session', '-s', session, *args)
+            actual = tm('display-message', '-p', '-t', wid, '#{window_index}')
+            if actual != str(w['index']):
+                tm('move-window', '-s', wid, '-t', session + ':' + str(w['index']))
+        else:
+            wid = tm('new-window', '-t', session + ':' + str(w['index']), *args)
+        tm('set-option', '-w', '-t', wid, '@bsns_workspace_id', w['id'])
+        tm('set-option', '-w', '-t', wid, 'automatic-rename', 'off')
+        tm('set-option', '-w', '-t', wid, 'allow-rename', 'off')
+        existing = listing(session)
+        print('Created ' + w['name'])
+    if created:
+        tm('select-window', '-t', session + ':' + str(data['windows'][0]['index']))
+    tm('set-option', '-t', session, 'renumber-windows', 'off')
+    for row in listing(session):
+        tm('set-option', '-w', '-t', row[0], 'window-size', 'latest')
+    print('Workspace ready: ' + session)
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('command', choices=['apply','up','open','list','doctor','resume'])
+    p.add_argument('values', nargs='*')
+    args = p.parse_args()
+    ROOT.mkdir(parents=True, exist_ok=True)
+    with (ROOT / '.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if args.command == 'apply':
+            if len(args.values) != 1 or len(args.values[0]) > 100000:
+                raise ValueError('apply requires one base64 workspace definition')
+            data = validate(json.loads(base64.b64decode(args.values[0], validate=True)))
+            for path in ROOT.glob('*.json'):
+                old = validate(json.loads(path.read_text()))
+                if old['id'] == data['id'] and old.get('modifiedAt', 0) > data.get('modifiedAt', 0):
+                    up(old)
+                    print('Kept the newer host definition; sync this device before editing.')
+                    return
+                if old['id'] != data['id'] and old['sessionName'] == data['sessionName']:
+                    raise ValueError('Another workspace already owns session ' + data['sessionName'])
+            up(data)
+            save(data)
+            return
+        if args.command == 'up' and not args.values:
+            failures = []
+            for path in ROOT.glob('*.json'):
+                try:
+                    up(validate(json.loads(path.read_text())))
+                except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as e:
+                    failures.append(str(e))
+            if failures:
+                raise ValueError('; '.join(failures))
+            return
+        name = args.values[0] if args.command in ('open','list','doctor') and args.values else None
+        if args.command in ('resume',) and os.environ.get('TMUX_PANE'):
+            name = tm('display-message','-p','-t',os.environ['TMUX_PANE'],'#{session_name}')
+        data = read(name)
+        if args.command in ('up','open'):
+            up(data)
+        elif args.command in ('list','doctor'):
+            for w in data['windows']:
+                print(f"{w['index']:2} {w['name']:18} {tool_of(w) or 'shell':12} {directory(data, w)}")
+            if args.command == 'doctor':
+                missing = [directory(data, w) for w in data['windows'] if not pathlib.Path(directory(data, w)).is_dir()]
+                if not shutil.which('tmux'):
+                    missing.append('tmux')
+                tools = load_tools()
+                for label in sorted({tool_of(w) for w in data['windows'] if tool_of(w)}):
+                    if label not in tools:
+                        missing.append('tool "' + label + '" (define it in ' + str(TOOLS) + ')')
+                    elif not shutil.which(tools[label]['resume'][0]):
+                        missing.append(tools[label]['resume'][0] + ' (for tool "' + label + '")')
+                if missing:
+                    raise ValueError('Missing: ' + ', '.join(missing))
+                print('Directories and tools OK. Login startup restores shells; tools start only on request.')
+        else:
+            if not os.environ.get('TMUX_PANE'):
+                raise ValueError('Run this command inside the window you want to manage')
+            pane = os.environ['TMUX_PANE']
+            wid = tm('display-message','-p','-t',pane,'#{window_id}')
+            key = tm('show-option','-wv','-t',wid,'@bsns_workspace_id',check=False)
+            w = next((w for w in data['windows'] if w['id'] == key), None)
+            if not w:
+                raise ValueError('This window is not in the saved layout')
+            if args.command == 'resume':
+                label = tool_of(w)
+                if not label:
+                    raise ValueError('This is a plain shell window; it has no tool to resume')
+                spec = load_tools().get(label)
+                if not spec:
+                    raise ValueError('No tool named "' + label + '" is defined on this host. Add it to ' + str(TOOLS))
+                os.chdir(directory(data, w))
+                command = list(spec['resume'])
+                if args.values:
+                    command += [args.values[0]]
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                os.execvp(command[0], command)
+    if args.command == 'open':
+        command = 'switch-client' if os.environ.get('TMUX') else 'attach-session'
+        os.execv(TMUX[0], TMUX + [command, '-t', '=' + data['sessionName']])
+if __name__ == '__main__':
+    try:
+        main()
+    except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as e:
+        print('bsns-workspace: ' + str(e), file=sys.stderr)
+        sys.exit(1)
