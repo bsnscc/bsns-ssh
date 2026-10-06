@@ -1,15 +1,23 @@
 import SwiftUI
 import UserNotifications
 import BsnsSSHCore
+#if os(macOS)
+import AppKit
+/// The cache of terminal views, which closing or opening a tab has to tell.
+typealias PlatformSurfaceCache = MacSurfaceCache
+#else
+import UIKit
+typealias PlatformSurfaceCache = TerminalSurfaceCache
+#endif
 
 /// Every tmux window on every machine, with what each is doing — and which
 /// ones are waiting for you.
-struct MacMachinesView: View {
+struct MachinesView: View {
     @Environment(MachineBoard.self) private var board
     @Environment(AgentStore.self) private var store
     @Environment(KnownHostsStore.self) private var knownHosts
     @Environment(SessionStore.self) private var sessions
-    @Environment(MacSurfaceCache.self) private var surfaces
+    @Environment(PlatformSurfaceCache.self) private var surfaces
 
     var body: some View {
         List {
@@ -130,7 +138,7 @@ enum MachineActions {
     /// Bring a window up in this app: its tmux session attached in a tab, with
     /// that window current.
     static func open(_ window: TmuxOverview.Window, on machine: MachineBoard.Machine, board: MachineBoard,
-                     sessions: SessionStore, surfaces: MacSurfaceCache, store: AgentStore, knownHosts: KnownHostsStore) {
+                     sessions: SessionStore, surfaces: PlatformSurfaceCache, store: AgentStore, knownHosts: KnownHostsStore) {
         guard canOpen(window) else { return }
         board.acknowledge(machine: machine.id, window: window.id)
         Task {
@@ -144,18 +152,20 @@ enum MachineActions {
                 SessionOpener.open(host, tmux: window.session, title: title,
                                    sessions: sessions, store: store, knownHosts: knownHosts)
             } else {
+                #if os(macOS)
                 // This Mac: the tab is tmux itself, not a shell with tmux typed
                 // into it. The name was checked against the shell-safe set above.
                 LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store,
                                         // Quoted: zsh would otherwise read a leading "=" as "the path of this command".
                                         command: "exec tmux attach -t '=\(window.session)'", title: title)
+                #endif
             }
         }
     }
 }
 
 /// Tells the user a window is waiting when they aren't looking at the app: a
-/// system notification (local — nothing is sent anywhere) and a Dock bounce.
+/// system notification (local — nothing is sent anywhere) and, on a Mac, a Dock bounce.
 @MainActor
 final class AttentionNotifier {
     static let shared = AttentionNotifier()
@@ -169,8 +179,12 @@ final class AttentionNotifier {
     }
 
     func announce(_ window: TmuxOverview.Window, on machine: MachineBoard.Machine) {
+        #if os(macOS)
         guard !NSApp.isActive else { return }
         NSApp.requestUserAttention(.informationalRequest)
+        #else
+        guard UIApplication.shared.applicationState != .active else { return }
+        #endif
         let content = UNMutableNotificationContent()
         content.title = "\(machine.name): \(window.session) is waiting"
         content.body = window.name.isEmpty ? window.command : "\(window.name) — \(window.command)"

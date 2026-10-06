@@ -11,13 +11,19 @@ struct RootView: View {
     @Environment(SessionRestoreStore.self) private var sessionRestore
     @Environment(SessionHandoffStore.self) private var handoff
     @State private var linkProblem: String?
+    @Environment(\.horizontalSizeClass) private var hSize
+    @Environment(MachineBoard.self) private var machines
     @Environment(\.scenePhase) private var scenePhase
     @State private var homeTab = ProcessInfo.processInfo.environment["BSNS_DEV_TAB"] ?? "connect"
     @State private var didRestore = false
 
     var body: some View {
         Group {
-            if let active = sessions.active {
+            if hSize == .regular {
+                // A wide screen: sessions and everything that needs attention
+                // down the side, the work beside it.
+                PadRootView(place: $homeTab)
+            } else if let active = sessions.active {
                 // LiveTerminalScreen renders its own control row (tabs + actions), so
                 // no separate nav bar / tab row here.
                 NavigationStack {
@@ -42,6 +48,9 @@ struct RootView: View {
             context.store = store; context.hosts = hosts; context.knownHosts = knownHosts; context.sessions = sessions
             PhoneKeyServer.shared.configure(agent: store.agent)
             PhoneInbox.shared.resume()
+            // Machines: nothing runs on this device itself, so only saved hosts.
+            machines.onAttention = { machine, window in AttentionNotifier.shared.announce(window, on: machine) }
+            machines.sync(hosts: hosts.hosts, localName: nil)
             await maybeDevAutoConnect()
         }
         // Auto-sync: pull + merge the user's folder on launch; push when backgrounded.
@@ -63,6 +72,7 @@ struct RootView: View {
         } message: {
             Text(linkProblem ?? "")
         }
+        .onChange(of: hosts.hosts) { _, saved in machines.sync(hosts: saved, localName: nil) }
         .onChange(of: sessionRestore.sessions) { _, open in
             handoff.publish(open, sync: sync)
         }
@@ -185,6 +195,13 @@ struct RootView: View {
            let key = try? FileKey.from(algorithm: .ed25519, privateKeyMaterial: material) {
             await store.agent.add(key)
             print("dev hold: key ready")
+            // BSNS_DEV_WATCH=1: watch every saved machine, as tapping Watch would.
+            if env["BSNS_DEV_WATCH"] == "1" {
+                machines.sync(hosts: hosts.hosts, localName: nil)
+                for machine in machines.machines {
+                    machines.watch(machine.id, agent: store.agent, knownHosts: knownHosts.knownHosts, keyBlob: nil)
+                }
+            }
             // BSNS_DEV_FOLLOW_URL: follow this link as if it had been opened
             // (the system's own "Open in…?" confirmation can't be scripted).
             if let url = env["BSNS_DEV_FOLLOW_URL"].flatMap(URL.init(string:)) {

@@ -66,6 +66,9 @@ targets:
         group: Shared/Session
       - path: ../app/Sources/Session/MachineBoard.swift
         group: Shared/Session
+      # Machines and Workspaces: the same screens on the Mac and on an iPad.
+      - path: ../app/Sources/Machines
+        group: Shared
       - path: ../app/Sources/Session/SessionOpener.swift
         group: Shared/Session
       - path: ../app/Sources/Session/WorkspaceStore.swift

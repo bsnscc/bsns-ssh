@@ -82,9 +82,9 @@ struct MacRootView: View {
             } else if place == .keys {
                 MacKeysView()
             } else if place == .machines {
-                MacMachinesView()
+                MachinesView()
             } else if place == .workspaces {
-                MacWorkspacesView()
+                WorkspacesView()
             } else if place == .inbox {
                 MacInboxView()
             } else {

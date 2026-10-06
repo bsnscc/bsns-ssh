@@ -11,6 +11,7 @@ struct BsnsSSHApp: App {
     @State private var snippets = SnippetStore()
     @State private var sessionRestore = SessionRestoreStore()
     @State private var handoff = SessionHandoffStore()
+    @State private var machines = MachineBoard()
     @UIApplicationDelegateAdaptor(PhoneAppDelegate.self) private var appDelegate
 
     init() {
@@ -37,7 +38,38 @@ struct BsnsSSHApp: App {
                     .environment(snippets)
                     .environment(sessionRestore)
                     .environment(handoff)
+                    .environment(machines)
             }
         }
+        // With a keyboard attached (and in the iPad's menu bar): the same tab
+        // shortcuts as on the Mac.
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Connection") { sessions.goHome() }
+                    .keyboardShortcut("t")
+                Button("Close Tab") {
+                    if let active = sessions.active { surfaces.drop(active.id); sessions.close(active) }
+                }
+                .keyboardShortcut("w")
+                .disabled(sessions.active == nil)
+                Button("Next Tab") { step(1) }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                    .disabled(sessions.sessions.count < 2)
+                Button("Previous Tab") { step(-1) }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                    .disabled(sessions.sessions.count < 2)
+                ForEach(Array(sessions.sessions.prefix(9).enumerated()), id: \.element.id) { index, session in
+                    Button(session.title) { sessions.activate(session) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")))
+                }
+            }
+        }
+    }
+
+    private func step(_ by: Int) {
+        let all = sessions.sessions
+        guard !all.isEmpty else { return }
+        let current = all.firstIndex { $0.id == sessions.activeID } ?? (by > 0 ? -1 : 0)
+        sessions.activate(all[(current + by + all.count) % all.count])
     }
 }

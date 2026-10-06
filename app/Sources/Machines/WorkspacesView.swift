@@ -1,17 +1,21 @@
 import SwiftUI
-import AppKit
 import BsnsSSHCore
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// The user's projects, and for each the machines that have it: how busy each
 /// machine is, what state the project is in there, and a button to open it —
 /// on a chosen machine, or on whichever has the most room.
-struct MacWorkspacesView: View {
+struct WorkspacesView: View {
     @Environment(MachineBoard.self) private var board
     @Environment(HostStore.self) private var hosts
     @Environment(AgentStore.self) private var store
     @Environment(KnownHostsStore.self) private var knownHosts
     @Environment(SessionStore.self) private var sessions
-    @Environment(MacSurfaceCache.self) private var surfaces
+    @Environment(PlatformSurfaceCache.self) private var surfaces
     @State private var workspaces = WorkspaceStore.shared
     @State private var statuses: [String: WorkspaceStatus] = [:]
     @State private var editing: Workspace?
@@ -35,7 +39,7 @@ struct MacWorkspacesView: View {
                 Section {
                     let places = places(of: workspace)
                     if places.isEmpty {
-                        Text("Not on this Mac, and none of its hosts are saved here. Edit the workspace to choose where it lives.")
+                        Text("None of its machines are saved on this device. Edit the workspace to choose where it lives.")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     ForEach(places) { place in row(workspace, at: place.machine) }
@@ -83,8 +87,12 @@ struct MacWorkspacesView: View {
             }
             Button(copied == workspace.id ? "Copied" : "Copy Link") {
                 guard let url = DeepLink.workspace(name: workspace.name, host: nil).url else { return }
+                #if os(macOS)
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                #else
+                UIPasteboard.general.string = url.absoluteString
+                #endif
                 copied = workspace.id
             }
             .controlSize(.small)
@@ -150,20 +158,28 @@ struct MacWorkspacesView: View {
     }
 
     private func existsHere(_ workspace: Workspace) -> Bool {
+        #if !os(macOS)
+        return false   // nothing runs on a phone or tablet itself
+        #else
         var isDirectory: ObjCBool = false
         let path = (workspace.path(on: nil) as NSString).expandingTildeInPath
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+        #endif
     }
 
     /// A saved host that is this very Mac (a workspace synced from the other
     /// machine lists it) is shown once, as the local row.
     private func isThisMac(_ host: SavedHost) -> Bool {
+        #if !os(macOS)
+        return false
+        #else
         let mine = ProcessInfo.processInfo.hostName.lowercased()
         let short = mine.split(separator: ".").first.map(String.init) ?? mine
         return ([host.host] + (host.routes ?? [])).contains { name in
             let name = name.lowercased()
             return name == mine || name == short || name == short + ".local"
         }
+        #endif
     }
 
     private func leastBusy(for workspace: Workspace) -> MachineBoard.Machine? {
@@ -193,6 +209,7 @@ struct MacWorkspacesView: View {
         if let host = machine.host {
             SessionOpener.open(workspace, on: host, sessions: sessions, store: store, knownHosts: knownHosts)
         } else {
+            #if os(macOS)
             let title = "\(workspace.name) · This Mac"
             if let existing = sessions.sessions.first(where: { $0.title == title }) {
                 sessions.activate(existing)
@@ -201,6 +218,7 @@ struct MacWorkspacesView: View {
             LocalShellLauncher.open(sessions: sessions, surfaces: surfaces, store: store,
                                     command: "exec " + MoshServerCommand.attachCommand(session, directory: workspace.path(on: nil)),
                                     title: title)
+            #endif
         }
     }
 }
@@ -271,6 +289,8 @@ private struct WorkspaceEditor: View {
             }
         }
         .padding(22)
+        #if os(macOS)
         .frame(width: 520)
+        #endif
     }
 }

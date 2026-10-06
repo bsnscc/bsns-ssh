@@ -18,6 +18,7 @@ struct LiveTerminalScreen: View {
 
     @Environment(TerminalSurfaceCache.self) private var surfaceCache
     @Environment(\.horizontalSizeClass) private var hSize
+    @Environment(\.sidebarVisibility) private var sidebarVisibility
     /// A phone held upright: the bar keeps only what is used mid-typing, so the
     /// session name has room; the rest lives in the "more" menu.
     private var compactBar: Bool { hSize == .compact }
@@ -45,6 +46,7 @@ struct LiveTerminalScreen: View {
     @State private var hwKeyboard = HardwareKeyboardMonitor()
     @State private var showFind = false
     @State private var findQuery = ""
+    @State private var keyboardVisible = false
     @State private var showForwards = false
     @State private var showSnippets = false
     @State private var showHistory = false
@@ -93,7 +95,12 @@ struct LiveTerminalScreen: View {
         }
             .ignoresSafeArea(.container, edges: .bottom)
             .toolbar(.hidden, for: .navigationBar)   // our controlRow replaces the nav bar
-            .onAppear { hwKeyboard.start(); devFindTest(); UIApplication.shared.isIdleTimerDisabled = keepAwake }
+            .onAppear {
+                hwKeyboard.start()
+                keyboardVisible = !hwKeyboard.isConnected && (surface.view.isFirstResponder || findFocused)
+                devFindTest()
+                UIApplication.shared.isIdleTimerDisabled = keepAwake
+            }
             // Leaving the terminal (e.g. switching tabs) must NOT disconnect —
             // the session lives in the store until explicitly closed.
             .onDisappear {
@@ -103,6 +110,12 @@ struct LiveTerminalScreen: View {
                 handle.setRemoteScrollMode(false)
             }
             .onChange(of: keepAwake) { _, v in UIApplication.shared.isIdleTimerDisabled = v }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                keyboardVisible = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardVisible = false
+            }
             .onChange(of: muxScrollActive) { _, active in handle.setRemoteScrollMode(active) }
             .sheet(isPresented: $showForwards) { PortForwardsView(session: session) }
             .sheet(isPresented: $showSnippets) {
@@ -158,7 +171,21 @@ struct LiveTerminalScreen: View {
     /// (right) — replaces the otherwise half-empty nav bar + its own tab row.
     private var controlRow: some View {
         HStack(spacing: 2) {
-            SessionTabBar(activeID: session.id)
+            if let sidebar = sidebarVisibility {
+                // The sidebar lists the sessions; here, just a way to show or
+                // hide it, and which session this is.
+                Button {
+                    withAnimation { sidebar.wrappedValue = sidebar.wrappedValue == .detailOnly ? .all : .detailOnly }
+                } label: {
+                    Image(systemName: "sidebar.left").frame(width: 34, height: 30)
+                }
+                .accessibilityLabel(sidebar.wrappedValue == .detailOnly ? "Show sidebar" : "Hide sidebar")
+                .padding(.leading, 6)
+                Text(session.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                Spacer(minLength: 8)
+            } else {
+                SessionTabBar(activeID: session.id)
+            }
             terminalActions
                 .padding(.trailing, 6)
         }
@@ -168,6 +195,11 @@ struct LiveTerminalScreen: View {
 
     private var terminalActions: some View {
         HStack(spacing: 2) {
+            Button { toggleKeyboard() } label: {
+                Image(systemName: keyboardVisible ? "keyboard.chevron.compact.down" : "keyboard")
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .accessibilityLabel(keyboardVisible ? "Hide keyboard" : "Show keyboard")
             Button { toggleFind() } label: { Image(systemName: "magnifyingglass") }
                 .accessibilityLabel("Find")
             if !compactBar {
@@ -334,6 +366,18 @@ struct LiveTerminalScreen: View {
 
     private func toggleFind() {
         if showFind { closeFind() } else { showFind = true; findFocused = true }
+    }
+
+    private func toggleKeyboard() {
+        let shouldHide = keyboardVisible || surface.view.isFirstResponder || findFocused
+        findFocused = false
+        if shouldHide {
+            // End editing in this window so Find is dismissed too, while its
+            // query and results stay available with more terminal space.
+            surface.view.window?.endEditing(true)
+        } else {
+            _ = surface.view.becomeFirstResponder()
+        }
     }
 
     private func closeFind() {
