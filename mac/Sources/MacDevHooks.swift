@@ -408,6 +408,12 @@ enum DevRelayLoop {
             let predicate = NSPredicate(format: "to == %@ AND kind == %d", phonePeer.id, Int(RelayChannel.Kind.ask.rawValue))
             let (results, _) = try await database.records(matching: CKQuery(recordType: CloudRelay.recordType, predicate: predicate), resultsLimit: 10)
             print("dev relay: query for the phone's asks found \(results.count)")
+            for wait in [3, 6] where results.isEmpty {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                let (later, _) = try await database.records(matching: CKQuery(recordType: CloudRelay.recordType, predicate: predicate), resultsLimit: 10)
+                print("dev relay: the same query \(wait)s later found \(later.count)")
+                if !later.isEmpty { break }
+            }
             let subscription = CKQuerySubscription(recordType: CloudRelay.recordType, predicate: predicate,
                                                    subscriptionID: "dev-probe", options: [.firesOnRecordCreation])
             let info = CKSubscription.NotificationInfo()

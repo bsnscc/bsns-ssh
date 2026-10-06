@@ -63,8 +63,11 @@ final class PhoneInbox {
         refreshing = true
         defer { refreshing = false }
         var found = await CloudRelay.shared.fetchAsks()
-        if expectingNew, found.count <= items.count {
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
+        // Measured: a new record is findable about three seconds after it is
+        // written, so look again a couple of times before concluding there is
+        // nothing new.
+        for pause in [3.0, 4.0] where expectingNew && found.count <= items.count {
+            try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
             found = await CloudRelay.shared.fetchAsks()
         }
         items = found.map { Item(ask: $0.ask, from: $0.from) }
