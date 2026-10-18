@@ -1,42 +1,55 @@
-# Store listing — release draft, 2026-10-06
+# Store listings — 2026-10-18
 
-Use this copy only for features verified on the submitted platform and build.
-Review privacy answers separately using `privacy-manifest-audit.md`.
+The copy as published. Use it only for features verified on the platform and
+build being submitted, and review privacy answers separately using
+`privacy-manifest-audit.md`.
 
-## App Store
+## App Store (iPhone and iPad)
 
 **Name:** bsns.SSH
 
-**Subtitle:** SSH, mosh & secure keys
+**Subtitle:** SSH keys that can't leak
 
-**Promotional text:** SSH, mosh, and SFTP for your own servers. Free and open source, with no ads or subscription. Built by bsns.cc.
+**Promotional text:** Your SSH key lives in the Secure Enclave and never leaves it. Mosh, SFTP, and tmux built in. Encrypted sync to storage you own. No account, no tracking, no cost.
 
-**Keywords:** terminal,sftp,tmux,server,console,shell,sysadmin,devops,port forwarding,remote
+**Keywords:** terminal,mosh,sftp,tmux,secure enclave,security key,fido2,piv,shell,server,sysadmin,devops,remote
 
 **Description:**
 
 ```text
-SSH from your iPhone or iPad, with keys and settings you control. bsns.SSH is free and open source. There are no ads, subscriptions, or bsns.cc accounts to create.
+The SSH client whose keys can't be stolen — because they can't be copied. bsns.SSH generates your key inside the Secure Enclave and asks for Face ID or Touch ID when it signs. Free, open source, and private by design: no account, no ads, no analytics.
 
-GET BACK TO YOUR TERMINAL
-Open multiple terminal sessions, search output, browse files with SFTP, and forward local ports. Use optional mosh for roaming connections and tmux on your host to keep work running while you switch devices. Show or hide the phone keyboard when you need more room to read.
+KEYS THAT NEVER LEAVE THE HARDWARE
+• Secure Enclave keys: created on the chip, unlocked with Face ID or Touch ID, impossible to export.
+• FIDO2 security keys over USB-C, NFC, or Lightning, and PIV smart cards — the private key stays on the token.
+• Software Ed25519 and ECDSA keys when you want a portable key, protected in encrypted backups.
+• Every connection signs through a built-in SSH agent, so the network code never sees a private key.
 
-CHOOSE HOW YOU SIGN IN
-Generate a Secure Enclave key on your device, use a supported security token, or import a software key. Hardware private keys stay in hardware. Software keys can be included in encrypted backups you choose to create.
+SEE EVERY MACHINE AT A GLANCE
+The Machines view lists every tmux window on every host you use, shows what each one is doing, and flags the ones waiting for you — with a local notification when you're elsewhere. Tap one to jump straight into that window.
 
-KEEP YOUR SETUP WITH YOU
-Save encrypted configuration to a folder you choose. On supported Apple devices, shared workspaces organize your hosts, directories, and terminal windows. Restoring saved tmux windows uses a helper installed on the host; the setup guide walks you through it.
+PICK UP WHERE YOU LEFT OFF
+• Open sessions follow you: start on your iPad, continue on your iPhone in the same tmux session.
+• Workspaces save each project's hosts, folders, and windows, and restore them on the host after a reboot.
+• Mosh keeps sessions alive through network changes and sleep, and reconnects when you return.
+• The tmux panel shows a session's windows and full scrollback as native text you can search and select — even over mosh.
 
-Pair your devices to request signatures from your phone or send questions and notices. Signing uses a direct encrypted connection. Background questions and notices use encrypted messages in your private iCloud database and Apple push notifications.
+MADE FOR IPAD
+A sidebar keeps Connect, your Inbox, Machines, Workspaces, and every live session one tap away, each with its status. Open two sessions side by side, drive everything from a hardware keyboard with a full set of shortcuts, use a trackpad or mouse, and work in Split View and Stage Manager.
 
-NO ADS OR ANALYTICS
-No ads, tracking SDKs, or automatic diagnostic uploads. The privacy policy explains connections to your servers, optional storage and cloud services, and the metadata those services handle.
+EVERYTHING YOU NEED ON THE ROAD
+Tabs for multiple sessions, find in output, SFTP file browsing, local port forwarding, jump hosts, snippets, a shortcut key bar, and Shortcuts/Siri actions to open a host or workspace. Import your existing ~/.ssh config, known_hosts, and keys in one step.
 
-OPEN SOURCE
-Read the source, report issues, or build it yourself:
-https://github.com/bsnscc/bsns-ssh
+YOUR SETUP, ON YOUR STORAGE
+Sync hosts, keys, and workspaces across devices through a folder you choose — iCloud Drive or any Files provider. Everything is encrypted on the device first; your storage only ever sees ciphertext. There is no bsns server and no account.
 
-We use bsns.SSH while building bsns.cc, our software for running a small business. The SSH client is a separate, free tool. You do not need to use bsns.cc to use it.
+PRIVATE BY CONSTRUCTION
+The app talks only to your servers and the storage you pick — plus, if you pair your devices, encrypted messages in your private iCloud database and Apple push notifications. No analytics, no tracking SDKs, no crash reports sent anywhere. It's open source, so you can verify that yourself.
+
+OPEN SOURCE, GPLv3
+Read the code, report issues, or build it yourself: https://github.com/bsnscc/bsns-ssh
+
+Made by bsns.cc. We build software for running a small business, and we use this client every day to run our own servers. It's free, with nothing to sign up for — if it earns your trust, the rest of our work is at bsns.cc.
 ```
 
 **Support URL:** https://github.com/bsnscc/bsns-ssh/issues
@@ -74,7 +87,7 @@ FIRST CONNECTION
 3. Tap Connect. Compare the first-connection host-key fingerprint with the value above, then trust this test host.
 4. Run whoami, pwd, and ls. The home directory contains sample files for SFTP.
 5. Use the keyboard button to hide and restore the phone keyboard. Find searches terminal output.
-6. Browse files (SFTP) uses this same endpoint. Upload or download a sample file.
+6. Optional, SFTP: file browsing uses key authentication. In the Key section tap "Generate an Ed25519 key", keep the password entered, tap "Install my key (ssh-copy-id)", then tap "Browse files (SFTP)".
 
 The account will remain available throughout review and any follow-up. It has no production data or administrator privileges.
 
@@ -96,29 +109,77 @@ Confirm every claim about the review VM above before pasting the notes.
 
 **Title:** bsns.SSH
 
-**Short description:** Free SSH and mosh client with secure keys, SFTP, and encrypted config sync.
+**Short description:** SSH & mosh with keys locked in your phone's hardware. No account, no tracking.
 
-Use platform-specific copy: Android Keystore backing varies by device. Do not
-claim Apple-only workspace, CloudKit, passkey, or notification features on Android.
-Confirm the actual Android release and Data safety answers separately.
+Android ships a smaller set than iOS: no Machines view, Workspaces, session
+handoff, tmux panel, phone-as-key, notifications, or Shortcuts-style actions.
+Don't claim them on Play. Keystore backing varies by device; the app shows it.
 
-## What's new
+**Full description:**
 
-First public store release. Include only features in the selected release binary.
+```text
+The SSH client whose key can't be copied off your phone. bsns.SSH creates your key inside the Android Keystore — in StrongBox or the secure environment where your phone has one — and shows you exactly how it's protected. Free, open source, and private by design: no account, no ads, no analytics.
 
-## Screenshot shot-list
+KEYS THAT STAY IN HARDWARE
+• A device key generated in the Android Keystore that can never be exported.
+• An optional second key that needs your fingerprint or face for every signature.
+• FIDO2 security keys and PIV smart cards over NFC or USB-C — the private key never leaves the token, and the same token works on Android and iOS.
+• Software Ed25519, ECDSA, and RSA keys when you need a portable key.
+• Every login signs through a built-in SSH agent, so the network code never sees a private key.
+• Log in with a password once, tap "Install my key", and switch to your hardware key for good.
 
-Use current captures from the release candidate, with harmless demo hosts and
-files. Keep terminal output large enough to read in the store preview. The
-[launch plan](launch-plan.md) supplies the recording sequence and full captions.
+BUILT FOR TABLETS TOO
+On tablets, Chromebooks, and foldables, a sidebar keeps every session one tap away with live status, two servers sit side by side, and Ctrl+Shift keyboard shortcuts switch, split, close, and zoom sessions.
 
-1. Connected terminal with the phone keyboard hidden: “More room to read.”
-2. Named sessions or workspaces: “Keep your hosts organized.”
-3. Key list with the actual key type visible: “Choose where your keys live.”
-4. SFTP sample files: “Move a file without leaving the app.”
-5. Encrypted configuration sync: “Keep your setup with you.”
+STAY CONNECTED
+• Mosh keeps sessions alive as you move between Wi-Fi and mobile data.
+• Multiple sessions in tabs, each with a live status dot.
+• Reconnect in place when a connection drops — your scrollback stays.
+• Jump hosts (ProxyJump) with verified host keys at every hop.
 
-Capture iPhone and iPad layouts separately at the sizes requested by App Store
-Connect. Make Android assets from the Android app. Do not reuse a platform's
-feature claim on another platform without verifying it there. Check the icon
-on a real home screen before approving the final assets.
+A REAL TERMINAL
+Full color and mouse support for vim, htop, and tmux; a shortcut bar for Esc, Ctrl, Tab, and arrows; pinch to zoom; one-tap tmux and screen scrollback; find in output; snippets; and local command history that never leaves the device.
+
+FILES AND TUNNELS
+Browse, upload, and download files over SFTP, and forward local ports to services on your servers.
+
+BRING YOUR SETUP
+Import your ~/.ssh config, known_hosts, and keys. Sync hosts and keys across devices — including your iPhone and iPad — through a folder you choose with Android's file picker: Google Drive, Dropbox, Nextcloud, or a network share. Everything is encrypted on the device first; the storage only ever sees ciphertext. There is no bsns server and no account.
+
+PRIVATE BY CONSTRUCTION
+The app talks only to your servers and the storage you pick. No analytics, no tracking SDKs, no crash reports sent anywhere. Optional app lock and screenshot protection. Open source, so you can verify it yourself.
+
+OPEN SOURCE, GPLv3
+https://github.com/bsnscc/bsns-ssh
+
+Made by bsns.cc. We build software for running a small business, and we use this client every day to run our own servers. It's free, with nothing to sign up for — if it earns your trust, the rest of our work is at bsns.cc.
+```
+
+**Release notes (1.1):**
+
+```text
+• Redesigned: bottom tabs, grouped forms, a cleaner terminal header, and a tidier Keys screen
+• Tablets, Chromebooks and foldables: sidebar, two sessions side by side, keyboard shortcuts
+• Log in with a password (and install your key in one tap)
+• Pinch to zoom the terminal
+• Updated for Android 16
+```
+
+## Screenshots
+
+Captioned frames on the brand near-black with the accent green, one headline
+of five words or fewer plus a short benefit line, unique features first. The
+two stores share one frame style. Capture with harmless demo hosts
+(`web-1.example`, `db-1.example`) and a 9:41 status bar.
+
+- **iPhone:** Machines view, Secure Enclave keys, terminal with the key bar,
+  tmux panel, SFTP, encrypted sync.
+- **iPad:** sidebar with live sessions, two terminals side by side, keyboard
+  shortcuts, two-pane Connect.
+- **Android phone:** terminal (tmux + htop), saved hosts in folders, SFTP,
+  privacy, settings. Add a Keys frame captured on a physical phone; an emulator
+  reports a software key.
+- **Android tablet:** two sessions side by side, sidebar, two-pane Connect.
+
+Play caps the aspect ratio at 2:1, so phone frames are 1080×1920 and tablet
+frames 2560×1600. App Store frames are 1320×2868 (iPhone) and 2064×2752 (iPad).

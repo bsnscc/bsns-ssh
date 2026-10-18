@@ -16,6 +16,22 @@ No bsns.cc registration is needed.
 5. Save the host for future connections. You can open additional sessions without
    closing the first one.
 
+## Switch to a key that can't be copied
+
+A password works, but the point of bsns.SSH is a key that never leaves your
+device's hardware. Moving to one takes a minute:
+
+1. On **Keys**, pick or create a Secure Enclave key (iPhone, iPad, Mac), or use
+   the Android Keystore device key, which is always there. You can also add a
+   FIDO2 security key or a PIV smart card.
+2. Back on **Connect**, enter the server and your password once, and tap
+   **Install my key (ssh-copy-id)**. The app adds the public key to the server's
+   `~/.ssh/authorized_keys`. The password is not stored.
+3. Clear the password and connect. From now on you sign in with the key, which
+   asks for Face ID, Touch ID, or your fingerprint when its policy requires it.
+
+Once the key works, consider turning off password logins on the server.
+
 ## Working across devices
 
 Use tmux on the execution host to preserve work through a network disconnect.

@@ -1,9 +1,12 @@
 # Android ↔ iOS parity
 
-> **Historical (2026-06):** parity is REACHED — Android has the full feature set
-> (terminal, keys incl. YubiKey, known-hosts/TOFU, SFTP, port forwarding, mosh,
-> ProxyJump, snippets, command history, import, encrypted sync). Any "pending"
-> notes below are superseded; this is the audit/plan record, not current status.
+> **Status (2026-10):** Android has the core feature set — terminal, keys incl.
+> FIDO2 and PIV, known-hosts/TOFU, key or password login, SFTP, port forwarding,
+> mosh, ProxyJump, snippets, command history, import, and encrypted sync — plus a
+> tablet layout (sidebar, two sessions side by side, keyboard shortcuts). Not yet
+> on Android: the Machines view, session handoff, Workspaces, the tmux panel,
+> phone-as-key, notifications, and Shortcuts-style app actions. The tables below
+> are the original 2026-06 audit record, not current status.
 > ProxyJump here means single-hop, interactive-shell-only with a key-authenticated,
 > host-key-verified bastion (mosh/SFTP/forwarding/key-install are disabled through
 > a jump host); both platforms gate this identically.
