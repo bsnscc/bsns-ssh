@@ -105,6 +105,9 @@ struct BsnsSSHMacApp: App {
                 }
         }
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About bsns.SSH") { NSApp.orderFrontStandardAboutPanel(nil) }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Connection") { sessions.goHome() }
                     .keyboardShortcut("n")

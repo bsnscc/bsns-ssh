@@ -275,6 +275,7 @@ struct MacConnectView: View {
                     let mosh = MoshSession()
                     mosh.serverPID = connect.pid
                     if let failure = mosh.open(host: RouteBook.shared.address(for: host), port: connect.port, key: connect.key, cols: 80, rows: 24) {
+                        connect.transfer.disconnect()
                         if let pid = connect.pid {
                             MoshServerRegistry.shared.abandon(
                                 pid: pid, hostKey: MoshServerRegistry.hostKey(host: host, port: portValue, user: user))
@@ -282,7 +283,7 @@ struct MacConnectView: View {
                         throw MoshBootstrap.Failure.noConnectLine(failure)
                     }
                     session = TerminalSession(id: id, spec: spec, title: "\(user)@\(host) · mosh")
-                    session.adopt(mosh)
+                    session.adopt(mosh, transfer: connect.transfer)
                 } else {
                     let shell = SSHShell()
                     try await shell.connect(host: host, port: portValue, user: user, agent: agent,

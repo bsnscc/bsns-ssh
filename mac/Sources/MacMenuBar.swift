@@ -49,6 +49,7 @@ struct MacMenuBarContent: View {
         }
         Divider()
         Button("Open bsns.SSH") { bringForward() }
+        Button("About bsns.SSH") { NSApp.orderFrontStandardAboutPanel(nil) }
         Button("Quit") { NSApp.terminate(nil) }
     }
 

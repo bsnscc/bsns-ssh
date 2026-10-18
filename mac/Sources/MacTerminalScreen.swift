@@ -108,8 +108,11 @@ final class MacTerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
 
     init(session: TerminalSession) {
         self.session = session
-        self.view = TerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
+        let terminal = MacTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
+        self.view = terminal
         super.init()
+        terminal.onImagePasted = { [weak self] data, ext in self?.pasteImage(data, ext: ext) }
+        terminal.onFilesReceived = { [weak self] files in self?.receiveFiles(files) }
         view.terminalDelegate = self
         let scrollback = UserDefaults.standard.integer(forKey: SettingsKey.scrollback)
         if scrollback > 0 { view.getTerminal().changeScrollback(scrollback) }
@@ -124,6 +127,62 @@ final class MacTerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
             }
         }
         session.refreshDisplay()
+    }
+
+    private func pasteImage(_ data: Data, ext: String) {
+        guard session.status == .connected else {
+            session.flash("Reconnect before pasting an image", symbol: "exclamationmark.triangle")
+            return
+        }
+        guard session.isLocal else {
+            // SFTP cannot yet use the shell's jump-host tunnel.
+            guard session.spec.jump == nil else {
+                session.flash("Image paste isn't available through a jump host yet", symbol: "exclamationmark.triangle")
+                return
+            }
+            session.uploadImage(data, ext: ext)
+            return
+        }
+        let directory = UserDefaults.standard.string(forKey: SettingsKey.uploadDir) ?? "~/.bsns-ssh-drops"
+        let session = session
+        Task {
+            do {
+                let file = try await Task.detached {
+                    try MacClipboardImage(data: data, ext: ext).saveLocally(directory: directory)
+                }.value
+                guard session.status == .connected, let path = WorkspaceCommand.quoted(file.path) else { return }
+                session.write(Array((path + " ").utf8)[...])
+                session.flash("Saved → \(file.lastPathComponent)", symbol: "photo.on.rectangle.angled")
+            } catch {
+                session.flash("Image paste failed: \(error.localizedDescription)", symbol: "exclamationmark.triangle")
+            }
+        }
+    }
+
+    private func receiveFiles(_ files: [URL]) {
+        guard session.status == .connected else {
+            session.flash("Reconnect before adding files", symbol: "exclamationmark.triangle")
+            return
+        }
+        guard files.allSatisfy({ (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }) else {
+            session.flash("Only regular files can be added", symbol: "exclamationmark.triangle")
+            return
+        }
+        if session.isLocal {
+            for file in files {
+                session.write(Array((Self.shellQuoted(file.path) + " ").utf8)[...])
+            }
+            return
+        }
+        guard session.spec.jump == nil else {
+            session.flash("File upload isn't available through a jump host yet", symbol: "exclamationmark.triangle")
+            return
+        }
+        session.uploadFiles(files)
+    }
+
+    private static func shellQuoted(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private func scheduleFlush() {
@@ -156,8 +215,12 @@ final class MacTerminalSurface: NSObject, @preconcurrency TerminalViewDelegate {
     // A window drag fires a resize per frame, and each one makes a mosh session
     // repaint in full: send only the size the drag settles on.
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        guard newCols > 0, newRows > 0, (newCols, newRows) != lastSent else { return }
+        guard newCols > 0, newRows > 0 else { return }
         pendingResize?.cancel()
+        pendingResize = nil
+        // Returning to the last sent size must also cancel an intermediate
+        // resize, or tmux ends up drawing for dimensions the view no longer has.
+        guard (newCols, newRows) != lastSent else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pendingResize = nil

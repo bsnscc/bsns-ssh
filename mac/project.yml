@@ -17,6 +17,22 @@ packages:
   CMosh:
     path: ../app/vendor/mosh
 targets:
+  MacImagePasteTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+      - Sources/MacImagePaste.swift
+    dependencies:
+      - package: bsns-ssh
+        product: BsnsSSHCore
+      - package: SwiftTerm
+        product: SwiftTerm
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        CODE_SIGNING_ALLOWED: NO
   # `bsns ask` / `bsns notify`: the command-line way in for scripts. Shipped
   # inside the app, beside its main executable.
   bsns:
@@ -147,7 +163,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: cc.bsns.ssh.mac
         PRODUCT_NAME: bsns.SSH
         MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "1"
+        CURRENT_PROJECT_VERSION: "2"
         SWIFT_VERSION: "5.0"
         # Signed with the team's development identity, so the signature — and
         # with it the keychain items and privacy grants tied to it — stays the
@@ -157,3 +173,11 @@ targets:
         CODE_SIGN_IDENTITY: "Apple Development"
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_ENTITLEMENTS: BsnsSSHMac.entitlements
+schemes:
+  MacImagePasteTests:
+    build:
+      targets:
+        MacImagePasteTests: all
+    test:
+      targets:
+        - MacImagePasteTests
