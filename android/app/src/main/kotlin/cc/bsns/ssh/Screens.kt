@@ -4,24 +4,38 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.CreditCard
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Fingerprint
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Usb
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import kotlin.concurrent.thread
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,10 +46,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cc.bsns.ssh.core.KeyAlgorithm
+import kotlin.concurrent.thread
 
 fun copyToClipboard(context: Context, label: String, text: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -43,203 +60,220 @@ fun copyToClipboard(context: Context, label: String, text: String) {
     Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
 }
 
-/** Key management: the hardware Keystore key plus generated software keys. */
+/** Which hardware token a PIN dialog is enrolling. */
+private enum class TokenKind { Fido, Piv }
+
+/** Key management: the keys in the agent, then ways to add one — device-backed
+ *  first, then hardware tokens, then exportable software keys. The long
+ *  explanations sit behind "About key types" so the screen stays scannable. */
 @Composable
-fun KeysScreen(keyManager: KeyManager, onBack: () -> Unit) {
+fun KeysScreen(keyManager: KeyManager, onKeysChanged: () -> Unit) {
     val context = LocalContext.current
     var keys by remember { mutableStateOf(keyManager.keys()) }
     var confirmDelete by remember { mutableStateOf<AppKey?>(null) }
-    var yubiPin by remember { mutableStateOf("") }
-    var yubiStatus by remember { mutableStateOf<String?>(null) }
-    var fidoPin by remember { mutableStateOf("") }
-    var fidoStatus by remember { mutableStateOf<String?>(null) }
-    var protectedStatus by remember { mutableStateOf<String?>(null) }
+    var tokenDialog by remember { mutableStateOf<TokenKind?>(null) }
+    var showAbout by remember { mutableStateOf(false) }
+    // One status line for whichever add/enroll ran last.
+    var status by remember { mutableStateOf<String?>(null) }
     val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
-    fun refresh() { keys = keyManager.keys() }
+    fun refresh() { keys = keyManager.keys(); onKeysChanged() }
+
+    // Run a blocking key operation off the main thread, then report + refresh.
+    fun runKeyOp(working: String, op: () -> String) {
+        status = working
+        thread {
+            val result = runCatching(op)
+            mainHandler.post {
+                status = result.getOrElse { it.message ?: "that didn't work" }
+                refresh()
+            }
+        }
+    }
 
     val softwareTag = Color(0xFFE0A45A)   // amber for exportable software keys (matches iOS)
     Scaffold { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).padding(Spacing.screen).verticalScroll(rememberScrollState()),
+            Modifier.fillMaxSize().padding(pad).padding(horizontal = Spacing.screen).verticalScroll(rememberScrollState())
+                .padding(bottom = Spacing.screen),
             verticalArrangement = Arrangement.spacedBy(Spacing.section),
         ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("Keys", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                TextButton(onClick = onBack) { Text("Done") }
-            }
+            ScreenTitle("Keys")
 
             Section(
                 title = "Keys in the agent",
-                footer = "Your device key stays in the Android Keystore and can't be exported. Software keys are encrypted at rest. Each key shows how it's backed.",
+                footer = "Device keys live in the Android Keystore and can't be exported. Software keys are encrypted at rest.",
             ) {
-                if (keys.isEmpty()) {
-                    Text("No keys yet — generate one below.", fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 10.dp))
-                }
                 keys.forEachIndexed { i, k ->
                     if (i > 0) RowDivider()
-                    Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Text(k.label, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.primary)
-                            CapsuleTag(
-                                when {
-                                    k.fido -> "FIDO2"
-                                    k.yubiKey -> "Smart card"
-                                    k.protectedDeviceKey -> "Biometric"
-                                    k.hardware -> "Hardware"
-                                    else -> "Software · exportable"
-                                },
-                                if (k.hardware) Brand.accent else softwareTag,
-                            )
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = Spacing.rowMinHeight).padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            when {
+                                k.fido || k.yubiKey -> Icons.Outlined.Usb
+                                k.protectedDeviceKey -> Icons.Outlined.Fingerprint
+                                k.hardware -> Icons.Outlined.Memory
+                                else -> Icons.Outlined.Key
+                            },
+                            contentDescription = null,
+                            tint = if (k.hardware) Brand.accent else softwareTag,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                            Text(k.label, fontSize = 15.sp)
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 3.dp)) {
+                                CapsuleTag(
+                                    when {
+                                        k.fido -> "FIDO2"
+                                        k.yubiKey -> "Smart card"
+                                        k.protectedDeviceKey -> "Biometric"
+                                        k.hardware -> "Hardware"
+                                        else -> "Exportable"
+                                    },
+                                    if (k.hardware) Brand.accent else softwareTag,
+                                )
+                            }
+                            Text(k.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 4.dp))
                         }
-                        Text(k.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 4.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
-                            TextButton(onClick = { copyToClipboard(context, "authorized_keys", k.authLine) }) {
-                                Text("Copy public key", fontSize = 13.sp)
-                            }
-                            if (k.yubiKey) {
-                                TextButton(onClick = { keyManager.forgetYubiKey(k.id); refresh() }) { Text("Forget", fontSize = 13.sp) }
-                            } else if (k.fido) {
-                                TextButton(onClick = { keyManager.forgetFido(k.id); refresh() }) { Text("Forget", fontSize = 13.sp) }
-                            } else if (k.protectedDeviceKey) {
-                                TextButton(onClick = { keyManager.removeProtectedDeviceKey(); refresh() }) { Text("Remove", fontSize = 13.sp) }
-                            } else if (!k.builtIn) {
-                                TextButton(onClick = { confirmDelete = k }) { Text("Delete", fontSize = 13.sp) }
-                            }
+                        IconButton(onClick = { copyToClipboard(context, "authorized_keys", k.authLine) }) {
+                            Icon(Icons.Outlined.ContentCopy, "copy public key for ${k.label}",
+                                tint = MaterialTheme.colorScheme.primary)
                         }
-                    }
-                }
-            }
-
-            Section(
-                title = "Generate a software key",
-                footer = "Use RSA only for older gear (some network equipment) that can't accept ed25519 or ecdsa keys.",
-            ) {
-                Row(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val gen = @Composable { label: String, algo: KeyAlgorithm ->
-                        OutlinedButton(
-                            onClick = { keyManager.generateSoftware(algo); refresh() },
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
-                        ) { Text(label, maxLines = 1) }
-                    }
-                    gen("+ ed25519", KeyAlgorithm.ED25519)
-                    gen("+ ecdsa", KeyAlgorithm.ECDSA_P256)
-                    gen("+ rsa", KeyAlgorithm.RSA)
-                }
-            }
-
-            // Opt-in: a separate Keystore key that demands a strong biometric on
-            // every signature. Only offered when a strong biometric is enrolled and
-            // the key doesn't exist yet; once added it appears above with a
-            // "Biometric" tag and a Remove action. The everyday device key is never changed.
-            if (strongBiometricAvailable(context) && !keys.any { it.protectedDeviceKey }) {
-                Section(
-                    title = "Add a biometric-protected device key",
-                    footer = "A second non-extractable device key that requires a strong (class-3) " +
-                        "biometric — fingerprint, face, or iris, depending on your device — for every " +
-                        "signature, so a connection can't be made while the phone is unlocked but " +
-                        "unattended. It's a new key with its own public key: add it to your servers " +
-                        "and pick it per host. Your everyday device key is left as is.",
-                ) {
-                    Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = {
-                            protectedStatus = "generating…"
-                            thread {
-                                val result = runCatching { keyManager.addProtectedDeviceKey() }
-                                mainHandler.post {
-                                    result.onSuccess { protectedStatus = "added"; refresh() }
-                                        .onFailure { protectedStatus = it.message ?: "couldn't create the key" }
-                                }
-                            }
-                        }) { Text("Add protected key") }
-                        protectedStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
-                    }
-                }
-            }
-
-            Section(
-                title = "Add a FIDO2 security key",
-                footer = "Create a portable SSH security-key credential on your YubiKey, or import one " +
-                    "already on the key. The private key never leaves the token. One authorized_keys " +
-                    "line can work on Android and iOS when the phone can talk to the key and the server " +
-                    "supports OpenSSH FIDO2.",
-            ) {
-                Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(fidoPin, { fidoPin = it }, label = { Text("Security-key PIN") },
-                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(enabled = fidoPin.isNotEmpty(), onClick = {
-                            val pin = fidoPin
-                            fidoStatus = "creating…"
-                            thread {
-                                val result = runCatching { keyManager.enrollFido(pin) }
-                                mainHandler.post {
-                                    result.onSuccess { fidoPin = ""; fidoStatus = "created"; refresh() }
-                                        .onFailure { fidoStatus = it.message ?: "couldn't create the security-key credential" }
-                                }
-                            }
-                        }) { Text("Create on key") }
-                        OutlinedButton(enabled = fidoPin.isNotEmpty(), onClick = {
-                            val pin = fidoPin
-                            fidoStatus = "importing…"
-                            thread {
-                                val result = runCatching { keyManager.importFido(pin) }
-                                mainHandler.post {
-                                    result.onSuccess { count ->
-                                        fidoPin = ""
-                                        fidoStatus = if (count == 0) "already added" else "imported"
-                                        refresh()
-                                    }.onFailure { fidoStatus = it.message ?: "couldn't import the security key" }
-                                }
-                            }
-                        }) { Text("Import from key") }
-                    }
-                    fidoStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
-                }
-            }
-
-            Section(
-                title = "Add a smart card (PIV)",
-                footer = "Slot 9A, P-256 over NFC or USB-C — the private key never leaves the card. " +
-                    "Produces a plain ecdsa-sha2-nistp256 key every SSH server accepts, and the same " +
-                    "card works on Android and iOS with a single authorized_keys line.",
-            ) {
-                Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(yubiPin, { yubiPin = it }, label = { Text("PIV PIN") },
-                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                    OutlinedButton(enabled = yubiPin.isNotEmpty(), onClick = {
-                        val pin = yubiPin
-                        yubiStatus = "enrolling…"
-                        thread {
-                            val result = runCatching { keyManager.enrollYubiKey(pin) }
-                            mainHandler.post {
-                                result.onSuccess { yubiPin = ""; yubiStatus = "enrolled"; refresh() }
-                                    .onFailure { yubiStatus = it.message ?: "couldn't read the smart card" }
+                        // The everyday device key can't be removed; everything else can.
+                        if (!k.builtIn) {
+                            IconButton(onClick = { confirmDelete = k }) {
+                                Icon(Icons.Outlined.Delete, "remove ${k.label}",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                    }) { Text("Enroll smart card") }
-                    yubiStatus?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
+                    }
                 }
+            }
+
+            status?.let {
+                Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 6.dp))
+            }
+
+            Section(title = "Add a key") {
+                // Opt-in: a second device key that demands a strong biometric on every
+                // signature. Offered only with a strong biometric enrolled and none yet.
+                if (strongBiometricAvailable(context) && !keys.any { it.protectedDeviceKey }) {
+                    ActionRow("Device key with biometric", Icons.Outlined.Fingerprint, detail = "non-exportable") {
+                        runKeyOp("generating…") { keyManager.addProtectedDeviceKey(); "Added a biometric device key." }
+                    }
+                    RowDivider()
+                }
+                ActionRow("FIDO2 security key", Icons.Outlined.Usb, detail = "NFC · USB-C") { tokenDialog = TokenKind.Fido }
+                RowDivider()
+                ActionRow("Smart card (PIV)", Icons.Outlined.CreditCard, detail = "NFC · USB-C") { tokenDialog = TokenKind.Piv }
+                RowDivider()
+                ActionRow("Software key · Ed25519", Icons.Outlined.Add) {
+                    runKeyOp("generating…") { keyManager.generateSoftware(KeyAlgorithm.ED25519); "Generated an Ed25519 key." }
+                }
+                RowDivider()
+                ActionRow("Software key · ECDSA P-256", Icons.Outlined.Add) {
+                    runKeyOp("generating…") { keyManager.generateSoftware(KeyAlgorithm.ECDSA_P256); "Generated an ECDSA key." }
+                }
+                RowDivider()
+                ActionRow("Software key · RSA", Icons.Outlined.Add, detail = "older servers") {
+                    runKeyOp("generating…") { keyManager.generateSoftware(KeyAlgorithm.RSA); "Generated an RSA key." }
+                }
+                RowDivider()
+                ActionRow("About key types", Icons.Outlined.Info) { showAbout = true }
             }
         }
+    }
+
+    tokenDialog?.let { kind ->
+        var pin by remember(kind) { mutableStateOf("") }
+        val dismiss = { tokenDialog = null }
+        AlertDialog(
+            onDismissRequest = dismiss,
+            title = { Text(if (kind == TokenKind.Fido) "FIDO2 security key" else "Smart card (PIV)") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        if (kind == TokenKind.Fido) "Create an SSH credential on your key, or import one already on it. You'll be asked to tap the key."
+                        else "Enroll slot 9A (P-256). You'll be asked to tap or insert the card.",
+                        fontSize = 14.sp,
+                    )
+                    OutlinedTextField(pin, { pin = it }, singleLine = true,
+                        label = { Text(if (kind == TokenKind.Fido) "Security-key PIN" else "PIV PIN") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword))
+                }
+            },
+            confirmButton = {
+                if (kind == TokenKind.Fido) {
+                    Row {
+                        TextButton(enabled = pin.isNotEmpty(), onClick = {
+                            val p = pin; dismiss()
+                            runKeyOp("importing…") {
+                                if (keyManager.importFido(p) == 0) "Already added." else "Imported from the security key."
+                            }
+                        }) { Text("Import") }
+                        TextButton(enabled = pin.isNotEmpty(), onClick = {
+                            val p = pin; dismiss()
+                            runKeyOp("creating…") { keyManager.enrollFido(p); "Created a FIDO2 key." }
+                        }) { Text("Create") }
+                    }
+                } else {
+                    TextButton(enabled = pin.isNotEmpty(), onClick = {
+                        val p = pin; dismiss()
+                        runKeyOp("enrolling…") { keyManager.enrollYubiKey(p); "Enrolled the smart card." }
+                    }) { Text("Enroll") }
+                }
+            },
+            dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } },
+        )
+    }
+
+    if (showAbout) {
+        AlertDialog(
+            onDismissRequest = { showAbout = false },
+            title = { Text("Key types") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Device key — generated inside the Android Keystore (StrongBox or TEE, as labeled) and never exportable. Always present.", fontSize = 14.sp)
+                    Text("Device key with biometric — a second Keystore key that needs a strong fingerprint, face, or iris check for every signature, so the phone can't connect while unlocked but unattended. Add its public key to your servers and pick it per host.", fontSize = 14.sp)
+                    Text("FIDO2 security key — an OpenSSH security-key credential on your YubiKey. The private key never leaves the token, and one authorized_keys line works on Android and iOS when the server supports OpenSSH FIDO2.", fontSize = 14.sp)
+                    Text("Smart card (PIV) — slot 9A, P-256. Produces a plain ecdsa-sha2-nistp256 key every SSH server accepts; the same card works on Android and iOS.", fontSize = 14.sp)
+                    Text("Software keys — encrypted at rest and exportable in an encrypted backup. Use RSA only for older gear that can't accept Ed25519 or ECDSA.", fontSize = 14.sp)
+                }
+            },
+            confirmButton = { TextButton(onClick = { showAbout = false }) { Text("Close") } },
+        )
     }
 
     confirmDelete?.let { k ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
-            title = { Text("Delete key?") },
-            text = { Text("This software key will be erased from this device permanently.\n\n${k.fingerprint}") },
+            title = { Text(if (k.fido || k.yubiKey) "Forget key?" else "Delete key?") },
+            text = {
+                Text(
+                    when {
+                        k.fido || k.yubiKey -> "The app will stop using this key. It stays on the token.\n\n${k.fingerprint}"
+                        k.protectedDeviceKey -> "This device key will be erased permanently. Servers that only trust it will refuse you.\n\n${k.fingerprint}"
+                        else -> "This software key will be erased from this device permanently.\n\n${k.fingerprint}"
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    keyManager.deleteSoftware(k.id); confirmDelete = null; refresh()
-                }) { Text("Delete") }
+                    when {
+                        k.yubiKey -> keyManager.forgetYubiKey(k.id)
+                        k.fido -> keyManager.forgetFido(k.id)
+                        k.protectedDeviceKey -> keyManager.removeProtectedDeviceKey()
+                        else -> keyManager.deleteSoftware(k.id)
+                    }
+                    confirmDelete = null; refresh()
+                }) { Text(if (k.fido || k.yubiKey) "Forget" else "Delete") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
         )
@@ -256,33 +290,30 @@ fun KnownHostsScreen(onBack: () -> Unit) {
 
     Scaffold { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            Modifier.fillMaxSize().padding(pad).padding(horizontal = Spacing.screen).verticalScroll(rememberScrollState())
+                .padding(bottom = Spacing.screen),
+            verticalArrangement = Arrangement.spacedBy(Spacing.section),
         ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("Known hosts", fontFamily = FontFamily.Monospace, fontSize = 20.sp)
-                TextButton(onClick = onBack) { Text("Done") }
-            }
-            Text("Host keys you've trusted on first connection. Forget one to be re-prompted.",
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-
-            if (hosts.isEmpty()) {
-                Text("No trusted hosts yet.", fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            hosts.forEach { h ->
-                RowDivider()
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.padding(end = 8.dp)) {
-                        Text(h.id, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.primary)
-                        SelectionContainer {
-                            Text(h.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            ScreenTitle("Known hosts") { TextButton(onClick = onBack) { Text("Done") } }
+            Section(footer = "Host keys you've trusted on first connection. Forget one to be asked to verify it again.") {
+                if (hosts.isEmpty()) {
+                    Text("No trusted hosts yet.", fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 12.dp))
+                }
+                hosts.forEachIndexed { i, h ->
+                    if (i > 0) RowDivider()
+                    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(h.id, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.primary)
+                            SelectionContainer {
+                                Text(h.fingerprint, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
+                        TextButton(onClick = { confirmForget = h }) { Text("Forget") }
                     }
-                    TextButton(onClick = { confirmForget = h }) { Text("Forget") }
                 }
             }
         }
@@ -304,23 +335,19 @@ fun KnownHostsScreen(onBack: () -> Unit) {
     }
 }
 
-/** Compact selector for which key authenticates the next connection. */
+/** Which key authenticates the next connection: one radio row per key. */
 @Composable
 fun KeyPicker(keys: List<AppKey>, selectedId: String, onSelect: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text("Key", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        keys.forEach { k ->
-            val sel = k.id == selectedId
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { onSelect(k.id) }) {
-                    Text(
-                        (if (sel) "● " else "○ ") + k.label,
-                        fontFamily = FontFamily.Monospace, fontSize = 13.sp,
-                        color = if (sel) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+    keys.forEachIndexed { i, k ->
+        if (i > 0) RowDivider()
+        val sel = k.id == selectedId
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = Spacing.rowMinHeight).clickable { onSelect(k.id) },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(k.label, fontSize = 15.sp, modifier = Modifier.weight(1f),
+                color = if (sel) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+            RadioButton(selected = sel, onClick = { onSelect(k.id) })
         }
     }
 }

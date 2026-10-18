@@ -51,8 +51,11 @@ class BsnsViewClient(
     private val view: () -> TerminalView,
     private val onEmulatorReady: () -> Unit,
     private val onAlternateBufferScroll: (MotionEvent?, Int) -> Boolean = { _, _ -> false },
+    // Gets the pinch gesture's accumulated scale; returns the value to keep
+    // accumulating from (1f after it has acted on a step).
+    private val onScale: (Float) -> Float = { it },
 ) : TerminalViewClient {
-    override fun onScale(scale: Float): Float = scale
+    override fun onScale(scale: Float): Float = onScale.invoke(scale)
     override fun onSingleTapUp(e: MotionEvent?) {
         val v = view()
         v.requestFocus()

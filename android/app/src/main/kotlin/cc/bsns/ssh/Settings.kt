@@ -1,24 +1,30 @@
 package cc.bsns.ssh
 
 import android.content.Context
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Divider
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.UnfoldMore
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,7 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -83,6 +89,10 @@ fun multiplexerButtons(pref: String): Pair<Boolean, Boolean> = when (pref) {
     else -> true to true
 }
 
+/** Font-size bounds shared by the Settings stepper and pinch-to-zoom. */
+const val MIN_FONT_SP = 8
+const val MAX_FONT_SP = 30
+
 @Composable
 private fun SettingToggle(label: String, value: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     SettingRow(label, enabled) {
@@ -90,16 +100,44 @@ private fun SettingToggle(label: String, value: Boolean, enabled: Boolean = true
     }
 }
 
-/** A row that shows the current value (monospace, brand-tinted) and cycles on tap. */
+/** A row showing the current value; tapping opens a menu of the choices. */
 @Composable
-private fun PickerRow(label: String, value: String, onTap: () -> Unit) {
-    SettingRow(label, onClick = onTap) {
-        Text(value, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.primary)
+private fun <T> ChoiceRow(label: String, value: T, options: List<T>, display: (T) -> String = { it.toString() }, onPick: (T) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    SettingRow(label, onClick = { open = true }) {
+        Box {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(display(value), fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
+                Icon(Icons.Default.UnfoldMore, contentDescription = null, modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                options.forEach { o ->
+                    DropdownMenuItem(
+                        text = { Text(display(o)) },
+                        trailingIcon = { if (o == value) Icon(Icons.Default.Check, contentDescription = "selected") },
+                        onClick = { open = false; onPick(o) },
+                    )
+                }
+            }
+        }
     }
 }
 
-/** Settings: terminal appearance/behaviour + the app-lock toggle. */
+/** A row that opens another screen. */
+@Composable
+private fun NavRow(label: String, detail: String? = null, onClick: () -> Unit) {
+    SettingRow(label, onClick = onClick) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            detail?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Settings: terminal appearance/behaviour, sessions, security, and the tools
+ *  (snippets, backup, help) — grouped like the iOS Settings tab. */
 @Composable
 fun SettingsScreen(
     store: SettingsStore,
@@ -107,7 +145,7 @@ fun SettingsScreen(
     onBackup: () -> Unit,
     onSnippets: () -> Unit,
     onHelp: () -> Unit,
-    onBack: () -> Unit,
+    onKnownHosts: () -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var fontSize by remember { mutableStateOf(store.fontSize) }
@@ -126,103 +164,78 @@ fun SettingsScreen(
     var moshIdleHours by remember { mutableStateOf(store.moshIdleTimeoutHours) }
     val scrollbackOptions = listOf(500, 1000, 2000, 5000, 10000)
     val moshIdleOptions = listOf(0, 1, 4, 12, 24, 72)
-    val themeIds = Appearance.themes.map { it.id }
 
     Scaffold { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).padding(Spacing.screen).verticalScroll(rememberScrollState()),
+            Modifier.fillMaxSize().padding(pad).padding(horizontal = Spacing.screen).verticalScroll(rememberScrollState())
+                .padding(bottom = Spacing.screen),
             verticalArrangement = Arrangement.spacedBy(Spacing.section),
         ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("Settings", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                TextButton(onClick = onBack) { Text("Done") }
-            }
+            ScreenTitle("Settings")
 
-            Section(title = "Terminal", footer = "Changes apply to new sessions.") {
+            Section(title = "Appearance", footer = "Pinch the terminal to zoom; the size you land on becomes the default.") {
+                ChoiceRow("Theme", theme, Appearance.themes.map { it.id }) { theme = it; store.theme = it }
+                RowDivider()
                 SettingRow("Font size") {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = { if (fontSize > 8) { fontSize--; store.fontSize = fontSize } }) { Text("–") }
+                        IconButton(enabled = fontSize > MIN_FONT_SP,
+                            onClick = { fontSize--; store.fontSize = fontSize }) { Icon(Icons.Default.Remove, "smaller") }
                         Text("$fontSize", fontFamily = FontFamily.Monospace, fontSize = 15.sp,
-                            modifier = Modifier.padding(horizontal = 14.dp))
-                        OutlinedButton(onClick = { if (fontSize < 30) { fontSize++; store.fontSize = fontSize } }) { Text("+") }
+                            modifier = Modifier.widthIn(min = 28.dp), textAlign = TextAlign.Center)
+                        IconButton(enabled = fontSize < MAX_FONT_SP,
+                            onClick = { fontSize++; store.fontSize = fontSize }) { Icon(Icons.Default.Add, "larger") }
                     }
                 }
                 RowDivider()
-                PickerRow("Scrollback", "$scrollback lines") {
-                    val next = scrollbackOptions[(scrollbackOptions.indexOf(scrollback).coerceAtLeast(0) + 1) % scrollbackOptions.size]
-                    scrollback = next; store.scrollback = next
-                }
-                RowDivider()
-                PickerRow("Theme", theme) {
-                    val next = themeIds[(themeIds.indexOf(theme).coerceAtLeast(0) + 1) % themeIds.size]
-                    theme = next; store.theme = next
-                }
-                RowDivider()
-                PickerRow("Cursor shape", cursorStyle) {
-                    val next = Appearance.cursorStyles[(Appearance.cursorStyles.indexOf(cursorStyle).coerceAtLeast(0) + 1) % Appearance.cursorStyles.size]
-                    cursorStyle = next; store.cursorStyle = next
-                }
+                ChoiceRow("Cursor", cursorStyle, Appearance.cursorStyles) { cursorStyle = it; store.cursorStyle = it }
                 RowDivider()
                 SettingToggle("Cursor blink", cursorBlink) { cursorBlink = it; store.cursorBlink = it }
+            }
+
+            Section(title = "Terminal", footer = "Changes apply to new sessions.") {
+                ChoiceRow("Scrollback", scrollback, scrollbackOptions, { "$it lines" }) { scrollback = it; store.scrollback = it }
                 RowDivider()
-                SettingToggle("Bell vibrates (haptic)", bellHaptic) { bellHaptic = it; store.bellHaptic = it }
+                SettingToggle("Shortcut bar", showKeyBar) { showKeyBar = it; store.showKeyBar = it }
                 RowDivider()
-                SettingToggle("Keep screen awake while connected", keepAwake) { keepAwake = it; store.keepAwake = it }
+                SettingToggle("Vibrate on bell", bellHaptic) { bellHaptic = it; store.bellHaptic = it }
                 RowDivider()
-                SettingToggle("Show terminal shortcut bar", showKeyBar) { showKeyBar = it; store.showKeyBar = it }
+                SettingToggle("Keep screen awake", keepAwake) { keepAwake = it; store.keepAwake = it }
             }
 
             Section(
                 title = "Sessions",
-                footer = "A mosh session lives on the host and keeps running while you're away — that's what lets it resume. One the app can no longer reach (after a relaunch, or a resume that failed) is asked to quit on your next connect; this is the backstop for the ones that get missed, so they don't pile up holding terminals.",
+                footer = "A mosh session keeps running on the host while you're away — that's what lets it resume. " +
+                    "This is the backstop for ones the app can no longer reach, so they don't pile up.",
             ) {
-                PickerRow("Expire idle mosh sessions",
+                ChoiceRow("Expire idle mosh sessions", moshIdleHours, moshIdleOptions, {
                     when {
-                        moshIdleHours == 0 -> "never"
-                        moshIdleHours < 24 -> "${moshIdleHours}h"
-                        else -> "${moshIdleHours / 24}d"
-                    }) {
-                    val next = moshIdleOptions[(moshIdleOptions.indexOf(moshIdleHours).coerceAtLeast(0) + 1) % moshIdleOptions.size]
-                    moshIdleHours = next; store.moshIdleTimeoutHours = next
-                }
+                        it == 0 -> "never"
+                        it < 24 -> "${it}h"
+                        else -> "${it / 24}d"
+                    }
+                }) { moshIdleHours = it; store.moshIdleTimeoutHours = it }
             }
 
             Section(
                 title = "Multiplexer scroll",
-                footer = "Which copy/scrollback buttons appear on the terminal. Pick tmux or screen to hide the other. The sequences enter copy mode inside an already-running session — e.g. C-b [, C-a [, C-] [, Esc [. Tokens can be C-x, Ctrl-x, Esc, Tab, Enter, Space, 0x1b, or literal text.",
+                footer = "The keys that enter copy mode in a running session — e.g. C-b [, C-a [, Esc [. " +
+                    "Tokens can be C-x, Ctrl-x, Esc, Tab, Enter, Space, 0x1b, or literal text.",
             ) {
-                PickerRow("Show buttons for", multiplexer) {
-                    val next = multiplexerOptions[(multiplexerOptions.indexOf(multiplexer).coerceAtLeast(0) + 1) % multiplexerOptions.size]
-                    multiplexer = next; store.multiplexer = next
-                }
+                ChoiceRow("Show buttons for", multiplexer, multiplexerOptions) { multiplexer = it; store.multiplexer = it }
                 RowDivider()
-                SettingRow("tmux sequence") {
-                    OutlinedTextField(
-                        value = tmuxScrollSequence,
-                        onValueChange = { tmuxScrollSequence = it; store.tmuxScrollSequence = it },
-                        singleLine = true,
-                        modifier = Modifier.widthIn(min = 110.dp, max = 180.dp),
-                    )
-                }
+                FormField("tmux", tmuxScrollSequence, { tmuxScrollSequence = it; store.tmuxScrollSequence = it },
+                    placeholder = "C-b [", description = "tmux copy-mode sequence")
                 RowDivider()
-                SettingRow("screen sequence") {
-                    OutlinedTextField(
-                        value = screenScrollSequence,
-                        onValueChange = { screenScrollSequence = it; store.screenScrollSequence = it },
-                        singleLine = true,
-                        modifier = Modifier.widthIn(min = 110.dp, max = 180.dp),
-                    )
-                }
+                FormField("screen", screenScrollSequence, { screenScrollSequence = it; store.screenScrollSequence = it },
+                    placeholder = "C-a [", description = "screen copy-mode sequence")
             }
 
             Section(
                 title = "Security",
-                footer = "History stays on this device and is never synced. Type a command with a leading space to keep that one out of history.",
+                footer = "History stays on this device and is never synced. Start a command with a space to keep it out.",
             ) {
                 SettingToggle(
-                    if (biometricAvailable) "Require fingerprint / face to unlock"
-                    else "Require fingerprint / face (none enrolled)",
+                    if (biometricAvailable) "Unlock with fingerprint / face" else "Unlock with biometrics (none enrolled)",
                     appLock, enabled = biometricAvailable,
                 ) {
                     appLock = it; store.appLock = it
@@ -230,27 +243,19 @@ fun SettingsScreen(
                     (context as? android.app.Activity)?.let { a -> applySecureFlag(a.window, it) }
                 }
                 RowDivider()
-                SettingToggle("Record command history (on device)", commandHistory) {
+                SettingToggle("Command history (on device)", commandHistory) {
                     commandHistory = it; store.commandHistory = it
                 }
+                RowDivider()
+                NavRow("Known hosts", onClick = onKnownHosts)
             }
 
-            Section(title = "Snippets") {
-                SettingRow("Snippets", onClick = onSnippets) {
-                    Text("Manage", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
-                }
-            }
-
-            Section(title = "Help") {
-                SettingRow("Terminal Help", onClick = onHelp) {
-                    Text("Open", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
-                }
-            }
-
-            Section(title = "Backup") {
-                SettingRow("Export / import", onClick = onBackup) {
-                    Text("Encrypted", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
-                }
+            Section(title = "Tools") {
+                NavRow("Snippets", onClick = onSnippets)
+                RowDivider()
+                NavRow("Backup & sync", detail = "encrypted", onClick = onBackup)
+                RowDivider()
+                NavRow("Terminal help", onClick = onHelp)
             }
 
             val info = remember {
@@ -262,10 +267,10 @@ fun SettingsScreen(
             } ?: 0L
             Section(
                 title = "About",
-                footer = "No accounts. No analytics. No telemetry. Your keys stay on this device; the device key lives in the Android Keystore and can never be exported (see Keys for whether it's StrongBox- or TEE-backed on your hardware).",
+                footer = "No accounts. No analytics. No telemetry. Your keys stay on this device; the device key lives in the Android Keystore and can never be exported.",
             ) {
                 SettingRow("Version") {
-                    Text("$versionName (build $versionCode)", fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                    Text("$versionName ($versionCode)", fontFamily = FontFamily.Monospace, fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 RowDivider()
