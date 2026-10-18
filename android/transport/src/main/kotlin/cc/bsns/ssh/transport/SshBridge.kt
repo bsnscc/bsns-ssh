@@ -24,7 +24,9 @@ class SshBridge {
     // caller drives it from a single owner thread (libssh2 isn't thread-safe).
     // expectedHostKey (if non-null) must match the server's host key, or open fails.
     // jumpHost (if non-null) routes the connection through that bastion (ProxyJump).
-    external fun nativeOpenShell(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cols: Int, rows: Int, expectedHostKey: ByteArray?, jumpHost: String?, jumpPort: Int, jumpUser: String?, expectedBastionHostKey: ByteArray?): Long
+    // password (if non-empty) logs in to the target with it instead of the key; it
+    // requires expectedHostKey, so it's never sent to an unverified host.
+    external fun nativeOpenShell(host: String, port: Int, user: String, pubBlob: ByteArray, signer: Any, cols: Int, rows: Int, expectedHostKey: ByteArray?, jumpHost: String?, jumpPort: Int, jumpUser: String?, expectedBastionHostKey: ByteArray?, password: String?): Long
 
     // FIDO2 security-key (sk-ecdsa) variants. `privPem` is the OpenSSH-format sk
     // private key (carries the credential handle, not a secret); `signer` exposes

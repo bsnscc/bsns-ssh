@@ -37,6 +37,9 @@ class SshSession(
     // this OpenSSH-format sk private key (the credential handle, not a secret) and
     // `signer.signSk`. sk keys are direct-only (no ProxyJump), so jump* are ignored.
     private val skPrivatePem: String? = null,
+    // Log in to the target with this password instead of the key (iOS parity).
+    // Ignored for sk keys. Held for reconnects, never persisted.
+    private val password: String? = null,
 ) : TerminalTransport {
     // Output that arrives before a consumer attaches `onOutput` is buffered and
     // flushed when it's set, so the initial banner/prompt is never dropped (the
@@ -71,7 +74,7 @@ class SshSession(
             bridge.nativeOpenShellSk(host, port, user, pubBlob, skPrivatePem, signer, cols, rows, expectedHostKey)
         } else {
             bridge.nativeOpenShell(host, port, user, pubBlob, signer, cols, rows, expectedHostKey,
-                jumpHost, jumpPort, jumpUser, expectedBastionHostKey)
+                jumpHost, jumpPort, jumpUser, expectedBastionHostKey, password?.ifEmpty { null })
         }
         if (handle == 0L) {
             lastError = OpenReason.fromCode(bridge.nativeLastOpenReason())

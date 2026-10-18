@@ -748,12 +748,16 @@ JNIEXPORT jlong JNICALL
 Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
     JNIEnv* env, jobject thiz, jstring jhost, jint port, jstring juser,
     jbyteArray jpubblob, jobject signer, jint cols, jint rows, jbyteArray jexpectedHostKey,
-    jstring jjumpHost, jint jumpPort, jstring jjumpUser, jbyteArray jexpectedBastionHostKey) {
+    jstring jjumpHost, jint jumpPort, jstring jjumpUser, jbyteArray jexpectedBastionHostKey,
+    jstring jpassword) {
     (void)thiz;
     g_open_reason = OPEN_UNREACHABLE;   // refined as we get further in
     if (libssh2_init(0)) return 0;
     const char* host = (*env)->GetStringUTFChars(env, jhost, 0);
     const char* user = (*env)->GetStringUTFChars(env, juser, 0);
+    // Optional password login for the target (iOS parity). A bastion still
+    // authenticates with the key; the password is only ever sent to the target.
+    const char* pass = jpassword ? (*env)->GetStringUTFChars(env, jpassword, 0) : NULL;
     jsize bloblen = (*env)->GetArrayLength(env, jpubblob);
     jbyte* blob = (*env)->GetByteArrayElements(env, jpubblob, 0);
     SshClient* client = NULL;
@@ -792,12 +796,24 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
             }
         }
         if (s) {
-            jclass cls = (*env)->GetObjectClass(env, signer);
-            jmethodID sign = (*env)->GetMethodID(env, cls, "sign", "([B)[B");
-            SignCtx ctx = { env, signer, sign };
-            void* abstract = &ctx;
-            int rc = libssh2_userauth_publickey(s, user, (const unsigned char*)blob,
+            int rc;
+            if (pass && pass[0]) {
+                // Never hand a reusable password to a host whose key wasn't pinned
+                // above — the caller always verifies (TOFU) first, so this is a guard.
+                if (jexpectedHostKey == NULL) {
+                    LOG("openShell: password auth without a pinned host key — refusing");
+                    rc = -1;
+                } else {
+                    rc = libssh2_userauth_password(s, user, pass);
+                }
+            } else {
+                jclass cls = (*env)->GetObjectClass(env, signer);
+                jmethodID sign = (*env)->GetMethodID(env, cls, "sign", "([B)[B");
+                SignCtx ctx = { env, signer, sign };
+                void* abstract = &ctx;
+                rc = libssh2_userauth_publickey(s, user, (const unsigned char*)blob,
                                                 (size_t)bloblen, sign_cb, &abstract);
+            }
             if (rc == 0) {
                 LIBSSH2_CHANNEL* ch = libssh2_channel_open_session(s);
                 if (ch &&
@@ -815,13 +831,15 @@ Java_cc_bsns_ssh_transport_SshBridge_nativeOpenShell(
             } else {
                 g_open_reason = OPEN_AUTH;
                 char* msg = NULL; libssh2_session_last_error(s, &msg, NULL, 0);
-                LOG("openShell: pubkey auth failed rc=%d: %s", rc, msg ? msg : "");
+                LOG("openShell: %s auth failed rc=%d: %s", (pass && pass[0]) ? "password" : "pubkey",
+                    rc, msg ? msg : "");
             }
             if (!client) { libssh2_session_disconnect(s, "bye"); libssh2_session_free(s); }
         }
         if (!client) close(fd);
     }
     if (!client && jump) jump_free(jump);   // tear down the bastion tunnel on failure
+    if (pass) (*env)->ReleaseStringUTFChars(env, jpassword, pass);
     (*env)->ReleaseStringUTFChars(env, jhost, host);
     (*env)->ReleaseStringUTFChars(env, juser, user);
     (*env)->ReleaseByteArrayElements(env, jpubblob, blob, JNI_ABORT);
