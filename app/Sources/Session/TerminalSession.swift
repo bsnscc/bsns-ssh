@@ -100,6 +100,9 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     // `lock` (the terminal view reads the transport as it is being created).
     // Only the UI-facing state above is observed, and it is set on the main queue.
     @ObservationIgnored private var transport: TerminalTransport?
+    /// The SSH login used to start mosh stays open for file transfers. A phone
+    /// key then needs approval once per mosh connection, not once per upload.
+    @ObservationIgnored private var transferClient: SFTPClient?
     @ObservationIgnored private var cols: Int32 = 80
     @ObservationIgnored private var rows: Int32 = 24
     @ObservationIgnored private var closed = false
@@ -265,9 +268,9 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
 
     /// Adopt an already-connected transport — the initial connect (and its TOFU
     /// prompt) is handled by ConnectView before the terminal appears.
-    func adopt(_ transport: TerminalTransport) {
+    func adopt(_ transport: TerminalTransport, transfer: SFTPClient? = nil) {
         wire(transport)
-        lock.lock(); self.transport = transport; lock.unlock()
+        lock.lock(); self.transport = transport; self.transferClient = transfer; lock.unlock()
         DispatchQueue.main.async { self.isStale = false }
         setStatus(.connected)
     }
@@ -292,27 +295,22 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// user can reference it in a prompt. Status surfaces via `transferStatus`.
     func uploadImage(_ data: Data, ext: String) {
         let spec = self.spec
+        let retained = lock.withLock { transferClient }
         setTransfer("Uploading image…")
         Task { @Sendable in
-            let client = SFTPClient()
+            let client = retained ?? SFTPClient()
             do {
-                try await client.connect(host: spec.host, port: spec.port, user: spec.user,
-                                         agent: spec.agent, knownHosts: spec.knownHosts, keyBlob: spec.keyBlob)
+                if retained == nil {
+                    try await client.connect(host: spec.host, port: spec.port, user: spec.user,
+                                             agent: spec.agent, knownHosts: spec.knownHosts, keyBlob: spec.keyBlob)
+                } else {
+                    try await client.ensureSFTP()
+                }
 
                 // Resolve the drop dir. Absolute stays as-is; "~"-relative expands
                 // against the SFTP session's home (realpath of "."); anything else is
                 // treated as relative to home too.
-                let configured = (UserDefaults.standard.string(forKey: SettingsKey.uploadDir) ?? "~/.bsns-ssh-drops")
-                    .trimmingCharacters(in: .whitespaces)
-                let raw = configured.isEmpty ? "~/.bsns-ssh-drops" : configured
-                let dir: String
-                if raw.hasPrefix("/") {
-                    dir = raw
-                } else {
-                    let home = try await client.realpath(".")
-                    let rel = raw.hasPrefix("~") ? String(raw.dropFirst()).drop(while: { $0 == "/" }) : raw[...]
-                    dir = rel.isEmpty ? home : home + "/" + rel
-                }
+                let dir = try await Self.remoteDropDirectory(client: client)
                 try await client.mkdir(dir)
 
                 let fmt = DateFormatter()
@@ -325,17 +323,72 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
                 let path = dir + "/" + name
 
                 try await client.upload(data, to: path)
-                client.disconnect()
+                if retained == nil { client.disconnect() }
 
                 await MainActor.run {
-                    self.write(Array((path + " ").utf8)[...])
+                    self.write(Array((Self.shellQuoted(path) + " ").utf8)[...])
                     self.setTransfer("Uploaded → \(name)")
                 }
             } catch {
                 client.disconnect()
+                if retained != nil { self.lock.withLock { if self.transferClient === client { self.transferClient = nil } } }
                 self.setTransfer("Upload failed: \(Self.describe(error))")
             }
         }
+    }
+
+    /// Stream Finder files without loading them into memory. A single SFTP
+    /// connection keeps paths in the same order as the files were dropped.
+    func uploadFiles(_ files: [URL]) {
+        let spec = self.spec
+        let retained = lock.withLock { transferClient }
+        setTransfer("Uploading \(files.count) file\(files.count == 1 ? "" : "s")…")
+        Task { @Sendable in
+            let client = retained ?? SFTPClient()
+            do {
+                if retained == nil {
+                    try await client.connect(host: spec.host, port: spec.port, user: spec.user,
+                                             agent: spec.agent, knownHosts: spec.knownHosts, keyBlob: spec.keyBlob)
+                } else {
+                    try await client.ensureSFTP()
+                }
+                let dir = try await Self.remoteDropDirectory(client: client)
+                try await client.mkdir(dir)
+                for file in files {
+                    // Keep the original extension and a recognizable name while
+                    // avoiding path separators and shell control characters.
+                    let safeName = String(file.lastPathComponent.prefix(160)).map {
+                        $0.isASCII && ($0.isLetter || $0.isNumber || ".-_".contains($0)) ? $0 : "_"
+                    }
+                    let name = "drop-\(UUID().uuidString.lowercased())-\(String(safeName))"
+                    let path = dir + "/" + name
+                    try await client.upload(fromFile: file, to: path)
+                    await MainActor.run {
+                        self.write(Array((Self.shellQuoted(path) + " ").utf8)[...])
+                        self.setTransfer("Uploaded → \(name)")
+                    }
+                }
+                if retained == nil { client.disconnect() }
+            } catch {
+                client.disconnect()
+                if retained != nil { self.lock.withLock { if self.transferClient === client { self.transferClient = nil } } }
+                self.setTransfer("Upload failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    private static func remoteDropDirectory(client: SFTPClient) async throws -> String {
+        let configured = (UserDefaults.standard.string(forKey: SettingsKey.uploadDir) ?? "~/.bsns-ssh-drops")
+            .trimmingCharacters(in: .whitespaces)
+        let raw = configured.isEmpty ? "~/.bsns-ssh-drops" : configured
+        if raw.hasPrefix("/") { return raw }
+        let home = try await client.realpath(".")
+        let rel = raw.hasPrefix("~") ? String(raw.dropFirst()).drop(while: { $0 == "/" }) : raw[...]
+        return rel.isEmpty ? home : home + "/" + rel
+    }
+
+    private static func shellQuoted(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Show a transient message in the terminal's overlay banner. Used for events
@@ -454,10 +507,12 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// installing it, so closing mid-reconnect can't leave a live connection —
     /// or a mosh-server — that nothing owns.
     func disconnect() {
-        lock.lock(); closed = true; let t = transport; let carrier = forwardCarrier; forwardCarrier = nil; lock.unlock()
+        lock.lock(); closed = true; let t = transport; let carrier = forwardCarrier; let transfer = transferClient
+        forwardCarrier = nil; transferClient = nil; lock.unlock()
         t?.disconnect()
         carrier?.onClosed = nil
         carrier?.disconnect()
+        transfer?.disconnect()
     }
 
     var isDisconnected: Bool { if case .disconnected = status { return true } else { return false } }
@@ -475,6 +530,12 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
     /// torn down with its callbacks detached first, so its teardown can't flip
     /// status back to disconnected and race the new connection.
     private func performReconnect(reason: String?) {
+        let oldTransfer = lock.withLock { () -> SFTPClient? in
+            let old = transferClient
+            transferClient = nil
+            return old
+        }
+        oldTransfer?.disconnect()
         if let old = currentTransport {
             old.onOutput = nil
             old.onClosed = nil
@@ -520,9 +581,19 @@ final class TerminalSession: Identifiable, @unchecked Sendable {
                         if let pid = connect.pid {
                             MoshServerRegistry.shared.abandon(pid: pid, hostKey: Self.moshHostKey(spec))
                         }
+                        connect.transfer.disconnect()
                         throw MoshBootstrap.Failure.noConnectLine(err)
                     }
-                    guard self.install(mosh, openedCols: cols, openedRows: rows) else { return }
+                    guard self.install(mosh, openedCols: cols, openedRows: rows) else {
+                        connect.transfer.disconnect()
+                        return
+                    }
+                    let keepTransfer = self.lock.withLock { () -> Bool in
+                        guard !self.closed else { return false }
+                        self.transferClient = connect.transfer
+                        return true
+                    }
+                    if !keepTransfer { connect.transfer.disconnect(); return }
                 } else {
                     let shell = SSHShell()
                     self.wire(shell)

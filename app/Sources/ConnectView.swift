@@ -609,6 +609,7 @@ struct ConnectView: View {
                 let mosh = MoshSession()
                 mosh.serverPID = connect.pid
                 if let err = mosh.open(host: RouteBook.shared.address(for: hostName), port: connect.port, key: connect.key, cols: 80, rows: 24) {
+                    connect.transfer.disconnect()
                     // Started but unreachable — mark it for the next connect to reap.
                     if let pid = connect.pid {
                         MoshServerRegistry.shared.abandon(
@@ -622,7 +623,7 @@ struct ConnectView: View {
                     s.restorable = RestorableSession(id: s.id, title: s.title, host: hostName,
                                                      port: portValue, user: userName, useMosh: true,
                                                      keyBlob: spec.keyBlob, tmuxSession: spec.tmuxSession)
-                    s.adopt(mosh)
+                    s.adopt(mosh, transfer: connect.transfer)
                     sessions.add(s)
                     runStartupSnippets(on: s)
                     password = ""

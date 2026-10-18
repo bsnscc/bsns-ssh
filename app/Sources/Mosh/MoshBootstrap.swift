@@ -9,6 +9,14 @@ import BsnsSSHCore
 /// starts a new one with an idle timeout so anything the reap misses still
 /// expires by itself.
 enum MoshBootstrap {
+    struct Connected {
+        let mosh: MoshConnect
+        let transfer: SFTPClient
+        var port: String { mosh.port }
+        var key: String { mosh.key }
+        var pid: Int32? { mosh.pid }
+    }
+
     enum Failure: Error, LocalizedError {
         case noConnectLine(String)
         case ssh(Error)
@@ -55,7 +63,7 @@ enum MoshBootstrap {
     /// mosh state is server-side, but a *new* client can't resume an old server
     /// (replay protection rejects a sequence that restarts at 0), so that one is
     /// unreachable from here on and should be reaped rather than leaked.
-    static func connect(spec: TerminalSession.Spec, sessionID: UUID) async throws -> MoshConnect {
+    static func connect(spec: TerminalSession.Spec, sessionID: UUID) async throws -> Connected {
         let registry = MoshServerRegistry.shared
         let hostKey = MoshServerRegistry.hostKey(host: spec.host, port: spec.port, user: spec.user)
         registry.abandon(sessionID: sessionID)
@@ -67,26 +75,30 @@ enum MoshBootstrap {
                                               reapPIDs: reap,
                                               tmuxClipboard: tmuxClipboardSetup,
                                               tmuxDirectory: spec.tmuxDirectory)
+        let transfer = SFTPClient()
         let output: String
         do {
-            output = try await SSHShell.execCapturing(
-                host: spec.host, port: spec.port, user: spec.user,
-                agent: spec.agent, password: nil,
-                command: command, knownHosts: spec.knownHosts, keyBlob: spec.keyBlob,
-                // The detached PID we need for the next reap is printed on stderr.
-                includeStderr: true)
+            try await transfer.connect(host: spec.host, port: spec.port, user: spec.user,
+                                       agent: spec.agent, knownHosts: spec.knownHosts,
+                                       keyBlob: spec.keyBlob, initializeSFTP: false)
+            let result = try await transfer.exec(command)
+            // The detached PID is printed on stderr.
+            output = result.combinedString
         } catch let e as SSHShellError {
+            transfer.disconnect()
             throw e
         } catch {
+            transfer.disconnect()
             throw Failure.ssh(error)
         }
         guard let connect = MoshConnect.parse(output) else {
+            transfer.disconnect()
             throw Failure.noConnectLine(output)
         }
         if let pid = connect.pid {
             registry.record(pid: pid, hostKey: hostKey, sessionID: sessionID)
             DiagLog.log("mosh", "mosh-server pid \(pid) on \(hostKey)")
         }
-        return connect
+        return Connected(mosh: connect, transfer: transfer)
     }
 }

@@ -57,7 +57,8 @@ final class SFTPClient: @unchecked Sendable {
     /// Connect, authenticate, and open the SFTP subsystem. Rethrows the SSH
     /// host-key / auth errors so the UI can run its TOFU prompt and retry.
     func connect(host: String, port: UInt16, user: String, agent: Agent,
-                 knownHosts: KnownHosts, keyBlob: Data? = nil) async throws {
+                 knownHosts: KnownHosts, keyBlob: Data? = nil,
+                 initializeSFTP: Bool = true) async throws {
         let identities = SSHShell.restrict(await agent.identities(), to: keyBlob)
         try await run {
             let (fd, session) = try SSHShell.openAuthenticatedSession(
@@ -65,11 +66,30 @@ final class SFTPClient: @unchecked Sendable {
                 identities: identities, password: nil, knownHosts: knownHosts)
             self.fd = fd
             self.session = session
-            guard let sftp = libssh2_sftp_init(session) else {
-                libssh2_session_free(session); close(fd)
-                self.session = nil; self.fd = -1
-                throw SFTPError.initFailed
+            if initializeSFTP {
+                guard let sftp = libssh2_sftp_init(session) else {
+                    self.teardown()
+                    throw SFTPError.initFailed
+                }
+                self.sftp = sftp
             }
+        }
+    }
+
+    /// Mosh bootstrap uses this connection to start its server, then retains
+    /// the same authenticated connection for later SFTP uploads.
+    func exec(_ command: String) async throws -> SSHShell.ExecResult {
+        try await run {
+            guard let session = self.session else { throw SSHShellError.connectFailed }
+            return try SSHShell.exec(command, on: session, fd: self.fd)
+        }
+    }
+
+    func ensureSFTP() async throws {
+        try await run {
+            if self.sftp != nil { return }
+            guard let session = self.session else { throw SSHShellError.connectFailed }
+            guard let sftp = libssh2_sftp_init(session) else { throw SFTPError.initFailed }
             self.sftp = sftp
         }
     }
