@@ -711,7 +711,7 @@ final class TerminalHandle {
     private func cellSize(font: UIFont) -> CGSize {
         let h = ceil(CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font))
         let w = ("W" as NSString).size(withAttributes: [.font: font]).width
-        let scale = terminal?.window?.screen.scale ?? UIScreen.main.scale
+        let scale = terminal?.traitCollection.displayScale ?? 2
         return CGSize(width: ceil(w * scale) / scale, height: ceil(h * scale) / scale)
     }
 

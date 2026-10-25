@@ -148,7 +148,7 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Require Face ID / passcode to unlock", isOn: $appLock)
+                Toggle("Require \(Biometry.orPasscode) to unlock", isOn: $appLock)
                 Toggle("Record command history (on device)", isOn: $commandHistory)
                 Toggle("Let the remote copy to this clipboard", isOn: $remoteClipboard)
                 Toggle("Set tmux up for it over mosh", isOn: $tmuxClipboard)

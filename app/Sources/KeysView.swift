@@ -90,7 +90,7 @@ struct KeysView: View {
                             catch { genError = "Couldn't create the key: \(error.localizedDescription)" }
                         }
                     } label: {
-                        Label("Secure Enclave key (Face ID)", systemImage: "lock.shield.fill")
+                        Label("Secure Enclave key (\(Biometry.name))", systemImage: "lock.shield.fill")
                     }
                 }
                 if let genError {
@@ -123,7 +123,7 @@ struct KeysView: View {
                 Text("Generate")
             } footer: {
                 let enclaveNote = store.enclaveAvailable
-                    ? "A Secure Enclave key never leaves this device and asks for Face ID each time it signs — but it can't be backed up, so if you lose this device you're locked out of any server that only trusts it. Enroll a second key on another device as a backup.\n\n"
+                    ? "A Secure Enclave key never leaves this device and asks for \(Biometry.name) each time it signs — but it can't be backed up, so if you lose this device you're locked out of any server that only trusts it. Enroll a second key on another device as a backup.\n\n"
                     : ""
                 Text(enclaveNote
                     + "Software keys back up + sync across your devices (Settings → Backup) — a good everyday key. iOS security-key handles also sync, so the same YubiKey works on another iPhone or iPad with the same authorized_keys line. Portable OpenSSH FIDO2 keys can share one line with Android when native FIDO2 is available. Secure Enclave is strongest for this device only.\n\nAdvanced — a smart card (PIV) makes a plain ECDSA key every server accepts. Use RSA only for older gear that can't accept Ed25519 or ECDSA.")

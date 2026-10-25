@@ -26,7 +26,7 @@ struct PhoneKeyView: View {
                     }
                 }
             } footer: {
-                Text("A paired computer can ask this phone to sign in to a server with one of its hardware-backed keys. Every request is approved here with Face ID, and the prompt says which program on which computer is asking, and for where. It works directly between the two devices — on the same network, nearby without one, or across a private network of your own — only while this app is open, and only for computers you have paired. The keys themselves never leave the phone.")
+                Text("A paired computer can ask this phone to sign in to a server with one of its hardware-backed keys. Every request is approved here with \(Biometry.name), and the prompt says which program on which computer is asking, and for where. It works directly between the two devices — on the same network, nearby without one, or across a private network of your own — only while this app is open, and only for computers you have paired. The keys themselves never leave the phone.")
             }
             .onChange(of: enabled) { _, _ in server.refresh() }
 

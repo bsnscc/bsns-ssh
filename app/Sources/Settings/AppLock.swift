@@ -1,6 +1,24 @@
 import SwiftUI
 import LocalAuthentication
 
+/// The name of this device's biometric, for text that mentions it: Face ID on
+/// most iPhones, Touch ID on iPhone Duo and many iPads.
+enum Biometry {
+    static let name: String = {
+        let ctx = LAContext()
+        _ = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+        switch ctx.biometryType {
+        case .faceID: return "Face ID"
+        case .touchID: return "Touch ID"
+        case .opticID: return "Optic ID"
+        default: return "your passcode"
+        }
+    }()
+
+    /// "Face ID / passcode", or just "passcode" without a biometric.
+    static var orPasscode: String { name == "your passcode" ? "passcode" : "\(name) / passcode" }
+}
+
 /// Optional Face ID / Touch ID / passcode gate. When enabled, the app content is
 /// covered until the device owner authenticates — including in the app switcher,
 /// since we re-lock on backgrounding.

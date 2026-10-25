@@ -99,7 +99,7 @@ struct TerminalHelpView: View {
                 HelpRow(
                     icon: "lock.shield",
                     title: "How it connects",
-                    text: "The panel opens a second SSH connection to the same host with the same key (one more signature, so one more Face ID prompt for a hardware-backed key) and closes it when you leave. It isn't available through a jump host.")
+                    text: "The panel opens a second SSH connection to the same host with the same key (one more signature, so one more \(Biometry.name) prompt for a hardware-backed key) and closes it when you leave. It isn't available through a jump host.")
             } header: {
                 Text("tmux Panel")
             }

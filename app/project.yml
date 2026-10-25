@@ -62,7 +62,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cc.bsns.ssh.notify
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "111"
+        CURRENT_PROJECT_VERSION: "113"
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_STYLE: Automatic
@@ -139,7 +139,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cc.bsns.ssh
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "111"
+        CURRENT_PROJECT_VERSION: "113"
         # App UI layer stays Swift 5 mode for now; the BsnsSSHCore package is
         # already Swift 6 strict-concurrency clean on its own.
         SWIFT_VERSION: "5.0"
